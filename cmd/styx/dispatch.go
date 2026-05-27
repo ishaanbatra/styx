@@ -102,6 +102,8 @@ func dispatch(verb string, args []string) error {
 		return cmdBuild(a, args)
 	case "review":
 		return cmdReview(a, args)
+	case "intel":
+		return cmdIntel(a, args)
 	case "grunt", "think", "explain", "summarize", "critique":
 		return cmdOneShot(a, verb, args)
 	}

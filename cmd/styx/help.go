@@ -23,6 +23,8 @@ VERBS
   route --explain <verb> "..." Show routing decision for a hypothetical request
   project ls|add|rm|rename  Manage project registry
   migrate-secrets           One-time: move env-var secrets to macOS Keychain
+  intel <p> [--force]       Build/refresh the codebase intel index
+  intel ls                  List cached indexes + freshness state
   help                      Show this menu
 
 CONFIG
