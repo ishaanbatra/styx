@@ -26,6 +26,8 @@ VERBS
   intel <p> [--force]       Build/refresh the codebase intel index
   intel ls                  List cached indexes + freshness state
   context show              Print rendered .claude/context.md for current project
+  auto <goal>               Full autonomous pipeline (research -> ship)
+  auto --resume <run-id>    Resume an interrupted pipeline
   help                      Show this menu
 
 CONFIG
