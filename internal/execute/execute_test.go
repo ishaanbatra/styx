@@ -178,3 +178,41 @@ func itoaShim(n int) string {
 	}
 	return s
 }
+
+func TestShip_PushOnly(t *testing.T) {
+	// Fake git so 'push' succeeds without touching a real remote.
+	gitDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(gitDir, "git"), []byte("#!/bin/sh\necho ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", gitDir+":"+os.Getenv("PATH"))
+	res, err := Ship(context.Background(), ShipOptions{
+		ProjectPath: t.TempDir(),
+		Branch:      "feat/x",
+		NoPR:        true,
+		NoPush:      false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Pushed {
+		t.Error("expected Pushed=true")
+	}
+	if res.PRURL != "" {
+		t.Errorf("expected no PR URL, got %q", res.PRURL)
+	}
+}
+
+func TestShip_NoPushSkipsPushAndPR(t *testing.T) {
+	res, err := Ship(context.Background(), ShipOptions{
+		ProjectPath: t.TempDir(),
+		Branch:      "feat/y",
+		NoPush:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Pushed {
+		t.Error("expected Pushed=false with NoPush=true")
+	}
+}
