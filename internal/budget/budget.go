@@ -182,3 +182,31 @@ func (t *Tracker) cooldownUntil(ctx context.Context, channel string) (time.Time,
 		return time.Time{}, fmt.Errorf("read cooldown for %s: %w", channel, err)
 	}
 }
+
+// MarkCooldown sets a cooldown deadline for a channel. Subsequent State()
+// calls report this until the time passes.
+func (t *Tracker) MarkCooldown(ctx context.Context, channel string, until time.Time) error {
+	_, err := t.db.ExecContext(ctx,
+		`INSERT INTO cooldown (channel, until) VALUES (?, ?)
+		 ON CONFLICT(channel) DO UPDATE SET until = excluded.until`,
+		channel, until.Unix())
+	if err != nil {
+		return fmt.Errorf("mark cooldown for %s: %w", channel, err)
+	}
+	return nil
+}
+
+// ShouldCircuitBreak returns true if `channel` has had >= `threshold`
+// failures within the last `window`. The router uses this to short-circuit
+// thrashing on a broken channel.
+func (t *Tracker) ShouldCircuitBreak(ctx context.Context, channel string, threshold int, window time.Duration) (bool, error) {
+	cutoff := time.Now().Add(-window).Unix()
+	row := t.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage WHERE channel = ? AND ts >= ? AND success = 0`,
+		channel, cutoff)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return false, fmt.Errorf("count failures for %s: %w", channel, err)
+	}
+	return n >= threshold, nil
+}

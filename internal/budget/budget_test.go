@@ -62,3 +62,52 @@ func TestState_UnknownChannelHasZeroUsage(t *testing.T) {
 		t.Errorf("UsedPct for unrecorded channel: got %.2f, want 0", st.UsedPct)
 	}
 }
+
+func TestMarkCooldown_ReflectsInState(t *testing.T) {
+	tr := newTestTracker(t)
+	ctx := context.Background()
+	until := time.Now().Add(15 * time.Minute)
+	if err := tr.MarkCooldown(ctx, "codex", until); err != nil {
+		t.Fatal(err)
+	}
+	st, err := tr.State(ctx, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.CooldownUntil.IsZero() {
+		t.Error("CooldownUntil zero after MarkCooldown")
+	}
+	if d := st.CooldownUntil.Sub(until); d > time.Second || d < -time.Second {
+		t.Errorf("CooldownUntil drift: %v (want within 1s of %v)", st.CooldownUntil, until)
+	}
+}
+
+func TestRecentErrors_TriggersCircuit(t *testing.T) {
+	tr := newTestTracker(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		_ = tr.Record(ctx, Event{Channel: "gemini", Verb: "research", Success: false, ErrorKind: "5xx"})
+	}
+	tripped, err := tr.ShouldCircuitBreak(ctx, "gemini", 5, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tripped {
+		t.Error("circuit should trip after 5 errors in 60s")
+	}
+}
+
+func TestRecentErrors_DoesNotTripBelowThreshold(t *testing.T) {
+	tr := newTestTracker(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		_ = tr.Record(ctx, Event{Channel: "gemini", Verb: "research", Success: false, ErrorKind: "5xx"})
+	}
+	tripped, err := tr.ShouldCircuitBreak(ctx, "gemini", 5, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tripped {
+		t.Error("circuit should not trip with only 3 errors")
+	}
+}
