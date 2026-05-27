@@ -1,0 +1,19 @@
+[budget]
+claude.cap_pct = 80
+codex.cap_pct = 75
+
+[[rule]]
+verb = "plan"
+signals = ["complex"]
+use = "claude:opus-4-7"
+fallback = ["claude:sonnet-4-6"]
+
+[[rule]]
+verb = "plan"
+use = "claude:sonnet-4-6"
+fallback = ["codex:gpt-5", "ollama:qwen2.5-coder:14b"]
+
+[[rule]]
+verb = "review"
+parallel = ["claude:sonnet-4-6", "codex:gpt-5"]
+synthesize_with = "claude:sonnet-4-6"
