@@ -10,7 +10,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/channel/claude"
 	"github.com/ishaanbatra/styx/internal/channel/codex"
-	"github.com/ishaanbatra/styx/internal/channel/gemini"
+	"github.com/ishaanbatra/styx/internal/channel/agy"
 	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/paths"
@@ -45,10 +45,12 @@ func loadApp() (*app, error) {
 }
 
 func defaultChannels() map[string]channel.Channel {
+	a := agy.New()
 	return map[string]channel.Channel{
 		"claude": claude.New(),
 		"codex":  codex.New(),
-		"gemini": gemini.New(),
+		"agy":    a,
+		"gemini": a, // alias for backward-compatible routing rules
 		"ollama": ollama.New(),
 	}
 }
