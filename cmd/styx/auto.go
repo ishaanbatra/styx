@@ -214,6 +214,8 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		if err != nil {
 			return nil, err
 		}
+		// Snapshot HEAD so we can list exactly the commits Apply added.
+		preHead, _ := gitRevParse(proj.Path, "HEAD")
 		_, err = execute.Apply(ctx, execute.Options{
 			PlanContent: string(planContent),
 			ProjectPath: proj.Path,
@@ -221,8 +223,10 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		if err != nil {
 			return nil, err
 		}
-		// Capture commits made in this stage.
-		return gitCommitsSince(proj.Path, "HEAD~10..HEAD"), nil
+		if preHead == "" {
+			return nil, nil
+		}
+		return gitCommitsSince(proj.Path, preHead+"..HEAD"), nil
 	}
 
 	r.RunTest = func(ctx context.Context, rr *pipeline.Runner) (bool, string, error) {
@@ -252,19 +256,16 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 	}
 
 	r.RunReview = func(ctx context.Context, rr *pipeline.Runner) (int, int, string, error) {
-		diff, err := gitDiffMain(proj.Path)
+		diff, err := gitDiffBase(proj.Path)
 		if err != nil {
 			return 0, 0, "", err
 		}
-		prompt := "Review this diff. Identify BLOCKING/IMPORTANT findings only.\n\n" + diff
-		resp, _, err := sendWithFallback(a, ctx,
-			router.Request{Verb: "review", Args: nil},
-			channel.Request{Prompt: prompt, WorkingDir: proj.Path})
+		text, err := runReviewSynthesized(a, ctx, proj.Path, diff)
 		if err != nil {
 			return 0, 0, "", err
 		}
-		c, _ := research.Parse(resp.Text)
-		return len(c.Blocking), len(c.Important), resp.Text, nil
+		c, _ := research.Parse(text)
+		return len(c.Blocking), len(c.Important), text, nil
 	}
 
 	r.RunFixReview = func(ctx context.Context, rr *pipeline.Runner, findings string, attempt int) error {
@@ -353,8 +354,40 @@ func gitCommitsSince(repo, rev string) []string {
 	return shas
 }
 
-func gitDiffMain(repo string) (string, error) {
-	cmd := exec.Command("git", "diff", "main...HEAD")
+func gitRevParse(repo, ref string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", ref)
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// defaultBranch resolves the upstream default branch, falling back through
+// origin/HEAD -> local main -> master -> trunk -> dev.
+func defaultBranch(repo string) string {
+	cmd := exec.Command("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	cmd.Dir = repo
+	if out, err := cmd.Output(); err == nil {
+		s := strings.TrimSpace(string(out))
+		if i := strings.Index(s, "/"); i >= 0 && i < len(s)-1 {
+			return s[i+1:]
+		}
+	}
+	for _, b := range []string{"main", "master", "trunk", "dev"} {
+		c := exec.Command("git", "rev-parse", "--verify", "--quiet", b)
+		c.Dir = repo
+		if err := c.Run(); err == nil {
+			return b
+		}
+	}
+	return "main"
+}
+
+func gitDiffBase(repo string) (string, error) {
+	base := defaultBranch(repo)
+	cmd := exec.Command("git", "diff", base+"...HEAD")
 	cmd.Dir = repo
 	out, err := cmd.Output()
 	if err != nil {

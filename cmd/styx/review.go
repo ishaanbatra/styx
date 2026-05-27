@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 
@@ -19,21 +18,42 @@ func cmdReview(a *app, args []string) error {
 	if err != nil {
 		return err
 	}
-	diff, err := branchDiff(proj.Path)
+	diff, err := gitDiffBase(proj.Path)
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(diff) == "" {
-		return fmt.Errorf("no diff between current branch and main; nothing to review")
+		return fmt.Errorf("no diff between current branch and default branch; nothing to review")
 	}
-
-	ctx := context.Background()
-	dec, err := a.router.Route(ctx, router.Request{Verb: "review", Args: args})
+	text, err := runReviewSynthesized(a, context.Background(), proj.Path, diff)
 	if err != nil {
 		return err
 	}
+	fmt.Println(text)
+	return nil
+}
+
+// runReviewSynthesized runs the routed review (parallel + synthesize, or single-channel)
+// and returns the synthesized text. Shared by cmdReview and auto's review stage.
+func runReviewSynthesized(a *app, ctx context.Context, projectPath, diff string) (string, error) {
+	dec, err := a.router.Route(ctx, router.Request{Verb: "review"})
+	if err != nil {
+		return "", err
+	}
 	if !dec.Parallel {
-		return fmt.Errorf("review verb requires a parallel rule in routing.toml (got Channel=%s)", dec.Channel)
+		// Single-channel fallback: route normally.
+		ch, ok := a.channels[dec.Channel]
+		if !ok {
+			return "", fmt.Errorf("unknown review channel %q", dec.Channel)
+		}
+		prompt := "Review this diff. Identify BLOCKING/IMPORTANT findings only. Be specific (file:line).\n\n--- DIFF ---\n" + diff
+		resp, err := ch.Send(ctx, channel.Request{Model: dec.Model, Prompt: prompt, WorkingDir: projectPath})
+		_ = a.tracker.Record(ctx, budget.Event{
+			Channel: dec.Channel, Verb: "review",
+			TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
+			Success: err == nil, ErrorKind: errorKindOf(err),
+		})
+		return resp.Text, err
 	}
 
 	type result struct {
@@ -54,7 +74,7 @@ func cmdReview(a *app, args []string) error {
 				return
 			}
 			prompt := fmt.Sprintf("You are reviewing a git diff. Identify bugs, security issues, regressions, missing tests, and architectural concerns. Be specific (file:line). Group findings as BLOCKING / IMPORTANT / NIT.\n\n--- DIFF ---\n%s\n", diff)
-			resp, err := ch.Send(ctx, channel.Request{Model: t.Model, Prompt: prompt})
+			resp, err := ch.Send(ctx, channel.Request{Model: t.Model, Prompt: prompt, WorkingDir: projectPath})
 			_ = a.tracker.Record(ctx, budget.Event{
 				Channel:   t.Channel,
 				Verb:      "review",
@@ -77,29 +97,18 @@ func cmdReview(a *app, args []string) error {
 		fmt.Fprintf(&b, "## %s:%s\n\n%s\n\n", r.Target.Channel, r.Target.Model, r.Text)
 	}
 
-	// Synthesize
 	synth, ok := a.channels[dec.SynthesizeWith.Channel]
 	if !ok {
-		return fmt.Errorf("synthesize channel %q not registered", dec.SynthesizeWith.Channel)
+		return "", fmt.Errorf("synthesize channel %q not registered", dec.SynthesizeWith.Channel)
 	}
 	synthResp, err := synth.Send(ctx, channel.Request{
-		Model:  dec.SynthesizeWith.Model,
-		Prompt: "Merge the following independent reviews into a single deduplicated report grouped by severity (BLOCKING / IMPORTANT / NIT). Keep specific file:line citations.\n\n" + b.String(),
+		Model:      dec.SynthesizeWith.Model,
+		Prompt:     "Merge the following independent reviews into a single deduplicated report grouped by severity (BLOCKING / IMPORTANT / NIT). Keep specific file:line citations.\n\n" + b.String(),
+		WorkingDir: projectPath,
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
-	fmt.Println(synthResp.Text)
 	fmt.Fprintf(os.Stderr, "[styx] synthesized by %s:%s\n", dec.SynthesizeWith.Channel, dec.SynthesizeWith.Model)
-	return nil
-}
-
-func branchDiff(projectPath string) (string, error) {
-	cmd := exec.Command("git", "diff", "main...HEAD")
-	cmd.Dir = projectPath
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git diff main...HEAD: %w", err)
-	}
-	return string(out), nil
+	return synthResp.Text, nil
 }
