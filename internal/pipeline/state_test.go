@@ -66,3 +66,37 @@ func TestRunDir_RootsUnderStyxRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLock_AcquireAndRelease(t *testing.T) {
+	proj := t.TempDir()
+	if err := AcquireLock(proj, "run-A"); err != nil {
+		t.Fatal(err)
+	}
+	// Second acquire while held should fail.
+	if err := AcquireLock(proj, "run-B"); err == nil {
+		t.Error("expected second AcquireLock to fail while lock held")
+	}
+	if err := ReleaseLock(proj); err != nil {
+		t.Fatal(err)
+	}
+	// After release, can acquire again.
+	if err := AcquireLock(proj, "run-C"); err != nil {
+		t.Errorf("expected AcquireLock to succeed after release: %v", err)
+	}
+	_ = ReleaseLock(proj)
+}
+
+func TestLock_ReadHolder(t *testing.T) {
+	proj := t.TempDir()
+	if err := AcquireLock(proj, "run-X"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadLockHolder(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "run-X" {
+		t.Errorf("holder = %q, want run-X", got)
+	}
+	_ = ReleaseLock(proj)
+}
