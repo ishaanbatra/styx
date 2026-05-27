@@ -121,3 +121,60 @@ func TestRunTests_NilCommandSkips(t *testing.T) {
 		t.Error("expected Skipped=true for nil command")
 	}
 }
+
+func TestFixLoop_StopsWhenFixerSays_FIXED(t *testing.T) {
+	attempts := 0
+	verify := func(ctx context.Context) (bool, string) {
+		attempts++
+		// Pass on the second attempt.
+		return attempts >= 2, "test output line " + itoaShim(attempts)
+	}
+	fix := func(ctx context.Context, problem string, attempt int) error {
+		return nil
+	}
+	res, err := FixLoop(context.Background(), FixLoopOptions{
+		MaxAttempts: 5,
+		Verify:      verify,
+		Fix:         fix,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Fixed {
+		t.Errorf("expected Fixed=true, got: %+v", res)
+	}
+	if res.Attempts != 2 {
+		t.Errorf("Attempts = %d, want 2", res.Attempts)
+	}
+}
+
+func TestFixLoop_ExhaustsAttempts(t *testing.T) {
+	verify := func(ctx context.Context) (bool, string) { return false, "still broken" }
+	fix := func(ctx context.Context, problem string, attempt int) error { return nil }
+	res, err := FixLoop(context.Background(), FixLoopOptions{
+		MaxAttempts: 3,
+		Verify:      verify,
+		Fix:         fix,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Fixed {
+		t.Error("expected Fixed=false after exhaustion")
+	}
+	if res.Attempts != 3 {
+		t.Errorf("Attempts = %d, want 3", res.Attempts)
+	}
+}
+
+func itoaShim(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	s := ""
+	for n > 0 {
+		s = string(rune('0'+n%10)) + s
+		n /= 10
+	}
+	return s
+}
