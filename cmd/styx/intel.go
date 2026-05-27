@@ -17,8 +17,8 @@ type agyAdapter struct {
 	ch channel.Channel
 }
 
-func (a *agyAdapter) Send(prompt, workingDir string) (string, error) {
-	resp, err := a.ch.Send(context.Background(), channel.Request{
+func (a *agyAdapter) Send(ctx context.Context, prompt, workingDir string) (string, error) {
+	resp, err := a.ch.Send(ctx, channel.Request{
 		Model:      "default",
 		Prompt:     prompt,
 		WorkingDir: workingDir,
@@ -66,7 +66,7 @@ func cmdIntel(a *app, args []string) error {
 	if !ok {
 		return errors.New("agy channel not registered")
 	}
-	idx, err := intel.Build(proj, &agyAdapter{ch: ag})
+	idx, err := intel.Build(context.Background(), proj, &agyAdapter{ch: ag})
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}

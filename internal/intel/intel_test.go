@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,7 +61,7 @@ func TestBuild_AndLoad_RoundTrip(t *testing.T) {
 
 	proj := config.Project{Name: "proj", Path: repo, Language: "go"}
 
-	idx, err := Build(proj, fakeAgyEcho{})
+	idx, err := Build(context.Background(), proj, fakeAgyEcho{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +98,7 @@ func TestIsStale_NewlyBuilt(t *testing.T) {
 	gitCommit(t, repo, "init")
 
 	proj := config.Project{Name: "p2", Path: repo}
-	if _, err := Build(proj, fakeAgyEcho{}); err != nil {
+	if _, err := Build(context.Background(), proj, fakeAgyEcho{}); err != nil {
 		t.Fatal(err)
 	}
 	stale, reason, err := IsStale(proj)
@@ -119,7 +120,7 @@ func TestIsStale_CommitsSinceBuild(t *testing.T) {
 	gitCommit(t, repo, "init")
 
 	proj := config.Project{Name: "p3", Path: repo}
-	if _, err := Build(proj, fakeAgyEcho{}); err != nil {
+	if _, err := Build(context.Background(), proj, fakeAgyEcho{}); err != nil {
 		t.Fatal(err)
 	}
 	// Make 6 commits (cap is 5).
@@ -146,7 +147,7 @@ func TestIsStale_OldByAge(t *testing.T) {
 	gitCommit(t, repo, "init")
 
 	proj := config.Project{Name: "p4", Path: repo}
-	idx, err := Build(proj, fakeAgyEcho{})
+	idx, err := Build(context.Background(), proj, fakeAgyEcho{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +168,7 @@ func TestIsStale_OldByAge(t *testing.T) {
 // fakeAgyEcho is an AgyClient stub that returns canned answers for module/key-symbol prompts.
 type fakeAgyEcho struct{}
 
-func (fakeAgyEcho) Send(prompt string, workingDir string) (string, error) {
+func (fakeAgyEcho) Send(ctx context.Context, prompt string, workingDir string) (string, error) {
 	if strings.Contains(prompt, "key symbols") {
 		return "ChatService (app/services/chat.py) - central streaming chat orchestrator", nil
 	}

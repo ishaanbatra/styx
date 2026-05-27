@@ -1,12 +1,15 @@
 package intel
 
 import (
+	"context"
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +23,13 @@ const SchemaVersion = 1
 const (
 	MaxCommitsBeforeStale = 5
 	MaxAgeBeforeStale     = 7 * 24 * time.Hour
+)
+
+// Per-call timeouts for agy invocations during intel build. Without these,
+// a hung agy call has no way to be cancelled via Ctrl-C.
+const (
+	ModuleSummaryTimeout = 2 * time.Minute
+	KeySymbolsTimeout    = 3 * time.Minute
 )
 
 // Index is the persisted codebase intelligence record.
@@ -72,7 +82,7 @@ type ExternalDeps struct {
 // AgyClient is the narrow interface the intel package needs from agy.
 // Production code passes a real agy.Channel-backed adapter; tests pass a stub.
 type AgyClient interface {
-	Send(prompt, workingDir string) (string, error)
+	Send(ctx context.Context, prompt, workingDir string) (string, error)
 }
 
 // indexDir returns ~/.config/styx/state/intel/<project-name>/
@@ -94,7 +104,7 @@ func indexPath(proj config.Project) (string, error) {
 
 // Build runs the full index build pipeline: walk, sniff, recent commits, todos,
 // external deps, agy module summaries, agy key symbols. Atomic-writes the result.
-func Build(proj config.Project, agy AgyClient) (*Index, error) {
+func Build(ctx context.Context, proj config.Project, agy AgyClient) (*Index, error) {
 	files, err := Walk(proj.Path)
 	if err != nil {
 		return nil, fmt.Errorf("walk: %w", err)
@@ -113,8 +123,8 @@ func Build(proj config.Project, agy AgyClient) (*Index, error) {
 		GitHead:       gitHead(proj.Path),
 	}
 
-	idx.Modules = buildModuleSummaries(proj.Path, agy)
-	idx.KeySymbols = buildKeySymbols(proj.Path, agy)
+	idx.Modules = buildModuleSummaries(ctx, proj.Path, agy)
+	idx.KeySymbols = buildKeySymbols(ctx, proj.Path, agy)
 
 	if err := Save(proj, idx); err != nil {
 		return nil, err
@@ -197,11 +207,12 @@ func commitsSince(repo, sha string) int {
 	cmd.Dir = repo
 	out, err := cmd.Output()
 	if err != nil {
-		return 0
+		// Bias toward "stale" rather than silently "fresh" on git failure.
+		return math.MaxInt32
 	}
-	n := 0
-	for _, c := range strings.TrimSpace(string(out)) {
-		n = n*10 + int(c-'0')
+	n, parseErr := strconv.Atoi(strings.TrimSpace(string(out)))
+	if parseErr != nil {
+		return math.MaxInt32
 	}
 	return n
 }
@@ -281,7 +292,7 @@ func externalDeps(repo string) ExternalDeps {
 	return out
 }
 
-func buildModuleSummaries(repo string, agy AgyClient) []Module {
+func buildModuleSummaries(ctx context.Context, repo string, agy AgyClient) []Module {
 	entries, err := os.ReadDir(repo)
 	if err != nil {
 		return nil
@@ -293,7 +304,9 @@ func buildModuleSummaries(repo string, agy AgyClient) []Module {
 		}
 		modPath := filepath.Join(repo, e.Name())
 		prompt := fmt.Sprintf("Summarize the purpose, entry points, and dependencies of this module in <=120 words. Module dir: %s", e.Name())
-		resp, err := agy.Send(prompt, modPath)
+		cctx, cancel := context.WithTimeout(ctx, ModuleSummaryTimeout)
+		resp, err := agy.Send(cctx, prompt, modPath)
+		cancel()
 		if err != nil {
 			mods = append(mods, Module{Path: e.Name(), Purpose: "(agy unavailable: " + err.Error() + ")"})
 			continue
@@ -303,9 +316,11 @@ func buildModuleSummaries(repo string, agy AgyClient) []Module {
 	return mods
 }
 
-func buildKeySymbols(repo string, agy AgyClient) []KeySymbol {
+func buildKeySymbols(ctx context.Context, repo string, agy AgyClient) []KeySymbol {
 	prompt := "List the 10-15 most central types, functions, or services in this codebase, formatted as: <Name> (<file:line>) - <one-line why this is central>. Return one per line."
-	resp, err := agy.Send(prompt, repo)
+	cctx, cancel := context.WithTimeout(ctx, KeySymbolsTimeout)
+	defer cancel()
+	resp, err := agy.Send(cctx, prompt, repo)
 	if err != nil {
 		return nil
 	}
