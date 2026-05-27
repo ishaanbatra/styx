@@ -130,3 +130,31 @@ func TestRenderBrief_HasAllSections(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractURLs(t *testing.T) {
+	body := `Source: https://example.com/foo and also https://example.org/bar.
+Visit http://nope.test/baz too.
+Duplicate https://example.com/foo should not appear twice.`
+	got := ExtractURLs(body)
+	if len(got) != 3 {
+		t.Errorf("want 3 unique URLs, got %d: %v", len(got), got)
+	}
+}
+
+func TestChaseSources_SummarizesEachURL(t *testing.T) {
+	// fakeSummarizer returns a deterministic summary per URL.
+	fake := func(ctx context.Context, url string) (string, error) {
+		return "summary of " + url, nil
+	}
+	urls := []string{"https://a.test", "https://b.test"}
+	got, err := ChaseSources(context.Background(), urls, fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d sources, want 2", len(got))
+	}
+	if got[0].URL != "https://a.test" || !strings.Contains(got[0].Summary, "summary of") {
+		t.Errorf("source 0 unexpected: %+v", got[0])
+	}
+}
