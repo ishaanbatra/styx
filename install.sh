@@ -18,6 +18,14 @@ cp ./bin/styx "$BIN"
 chmod 755 "$BIN"
 echo "Installed -> $BIN"
 
+if ! command -v agy >/dev/null 2>&1; then
+  echo
+  echo "NOTE: 'agy' (Antigravity CLI) is not installed."
+  echo "      styx v0.2 uses agy for Gemini access (replacing gemini-cli)."
+  echo "      Install with: curl -fsSL https://antigravity.google/cli/install.sh | bash"
+  echo "      Without agy, agy-routed verbs will fall back to ollama via the routing table."
+fi
+
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) echo "NOTE: $BIN_DIR is not in PATH. Add: export PATH=\"\$HOME/bin:\$PATH\"";;
