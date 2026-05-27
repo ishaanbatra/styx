@@ -6,14 +6,14 @@ const defaultRoutingTOML = `# Styx routing rules.  Edit freely; first match wins
 [budget]
 claude.cap_pct       = 80
 codex.cap_pct        = 80
-gemini_free.cap_pct  = 70
-gemini_paid.cap_pct  = 80
+agy.cap_pct          = 80
+ollama.cap_pct       = 0    # local, unlimited
 
 # ── research ──
 [[rule]]
 verb = "research"
-use  = "gemini:flash"
-fallback = ["gemini:pro", "ollama:qwen2.5-coder:14b"]
+use  = "agy:default"
+fallback = ["ollama:qwen2.5-coder:14b"]
 
 [[rule]]
 verb = "research.critic"
@@ -67,7 +67,7 @@ use  = "ollama:qwen2.5-coder:14b"
 [[rule]]
 verb = "explain"
 signals = ["large_context"]
-use  = "gemini:pro"
+use  = "agy:default"
 fallback = ["claude:sonnet-4-6"]
 
 [[rule]]
@@ -76,7 +76,7 @@ use  = "ollama:qwen2.5-coder:14b"
 
 [[rule]]
 verb = "summarize"
-use  = "gemini:pro"
+use  = "agy:default"
 fallback = ["claude:sonnet-4-6", "ollama:qwen2.5-coder:14b"]
 
 [[rule]]

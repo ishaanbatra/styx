@@ -15,7 +15,7 @@ func cmdBudget(args []string) error {
 	}
 	defer tr.Close()
 	ctx := context.Background()
-	for _, ch := range []string{"claude", "codex", "gemini", "gemini_paid", "gemini_free", "ollama"} {
+	for _, ch := range []string{"claude", "codex", "agy", "ollama"} {
 		st, err := tr.State(ctx, ch)
 		if err != nil {
 			fmt.Printf("%-12s  error: %v\n", ch, err)

@@ -17,10 +17,10 @@ type Routing struct {
 
 // BudgetCaps holds the per-channel cap percentages.
 type BudgetCaps struct {
-	Claude     ChannelCap `toml:"claude"`
-	Codex      ChannelCap `toml:"codex"`
-	GeminiFree ChannelCap `toml:"gemini_free"`
-	GeminiPaid ChannelCap `toml:"gemini_paid"`
+	Claude ChannelCap `toml:"claude"`
+	Codex  ChannelCap `toml:"codex"`
+	Agy    ChannelCap `toml:"agy"`
+	Ollama ChannelCap `toml:"ollama"`
 }
 
 // ChannelCap is the maximum percentage of a channel's budget to use before degrading.

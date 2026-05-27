@@ -85,11 +85,10 @@ func New(path string) (*Tracker, error) {
 		db:   db,
 		caps: map[string]int{},
 		wind: map[string]time.Duration{
-			"claude":      30 * 24 * time.Hour,
-			"codex":       30 * 24 * time.Hour,
-			"gemini_paid": 30 * 24 * time.Hour,
-			"gemini_free": 24 * time.Hour,
-			"ollama":      24 * time.Hour, // unlimited but bounded for reporting
+			"claude": 30 * 24 * time.Hour,
+			"codex":  30 * 24 * time.Hour,
+			"agy":    30 * 24 * time.Hour,
+			"ollama": 24 * time.Hour, // unlimited but bounded for reporting
 		},
 	}, nil
 }

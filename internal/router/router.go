@@ -197,10 +197,8 @@ func (r *Router) capFor(channel string) float64 {
 		return r.Caps.Claude.CapPct
 	case "codex":
 		return r.Caps.Codex.CapPct
-	case "gemini_free", "gemini":
-		return r.Caps.GeminiFree.CapPct
-	case "gemini_paid":
-		return r.Caps.GeminiPaid.CapPct
+	case "agy", "gemini": // gemini is the v0.1 alias
+		return r.Caps.Agy.CapPct
 	}
 	return 0
 }
