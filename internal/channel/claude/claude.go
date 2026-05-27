@@ -1,1 +1,109 @@
+// Package claude implements the Channel interface against the local `claude`
+// CLI (Claude Code). It supports one-shot (-p) and interactive modes.
 package claude
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+
+	"github.com/ishaanbatra/styx/internal/channel"
+)
+
+// Channel is the Claude implementation.
+type Channel struct {
+	bin string // override-able for tests; "" means look up "claude" on PATH
+}
+
+// New returns a Claude channel that finds `claude` on PATH.
+func New() *Channel { return &Channel{} }
+
+// Name implements channel.Channel.
+func (c *Channel) Name() string { return "claude" }
+
+// BudgetState implements channel.Channel. Without a stable `claude --usage`
+// surface, we report unknown (zero) and rely on the local sqlite tracker for
+// budget enforcement.
+func (c *Channel) BudgetState(ctx context.Context) (channel.Budget, error) {
+	return channel.Budget{}, nil
+}
+
+// Send implements channel.Channel.
+func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Response, error) {
+	if req.Interactive {
+		return c.sendInteractive(ctx, req)
+	}
+	return c.sendOneShot(ctx, req)
+}
+
+func (c *Channel) sendOneShot(ctx context.Context, req channel.Request) (channel.Response, error) {
+	args := []string{"-p", req.Prompt}
+	if req.Model != "" {
+		args = append([]string{"--model", req.Model}, args...)
+	}
+	cmd := exec.CommandContext(ctx, c.binary(), args...)
+	if req.WorkingDir != "" {
+		cmd.Dir = req.WorkingDir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return channel.Response{}, classifyExecError(err)
+	}
+	text := strings.TrimRight(string(out), "\n")
+	return channel.Response{
+		Text:         text,
+		EstTokensIn:  estimateTokens(req.Prompt + req.System),
+		EstTokensOut: estimateTokens(text),
+	}, nil
+}
+
+func (c *Channel) sendInteractive(ctx context.Context, req channel.Request) (channel.Response, error) {
+	args := []string{}
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
+	}
+	cmd := exec.CommandContext(ctx, c.binary(), args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if req.WorkingDir != "" {
+		cmd.Dir = req.WorkingDir
+	}
+	if err := cmd.Run(); err != nil {
+		return channel.Response{}, classifyExecError(err)
+	}
+	return channel.Response{}, nil
+}
+
+func (c *Channel) binary() string {
+	if c.bin != "" {
+		return c.bin
+	}
+	return "claude"
+}
+
+func estimateTokens(s string) int { return len(s) / 4 }
+
+func classifyExecError(err error) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		return &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: fmt.Errorf("claude CLI not found on PATH: %w", err)}
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		// SIGPIPE / 124 (timeout) → timeout kind
+		if status, ok := ee.Sys().(syscall.WaitStatus); ok {
+			if status.Signal() == syscall.SIGKILL || status.Signal() == syscall.SIGTERM {
+				return &channel.ClassifiedError{Kind: channel.ErrKindTimeout, Err: err}
+			}
+		}
+		return &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: fmt.Errorf("claude exited %d: %s", ee.ExitCode(), strings.TrimSpace(string(ee.Stderr)))}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return &channel.ClassifiedError{Kind: channel.ErrKindTimeout, Err: err}
+	}
+	return &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: err}
+}
