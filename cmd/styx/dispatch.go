@@ -16,7 +16,6 @@ import (
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
-	"github.com/ishaanbatra/styx/internal/signals"
 )
 
 // app bundles the long-lived dependencies shared by every verb.
@@ -142,5 +141,3 @@ func resolveTarget(arg string) (project.Project, error) {
 	return project.Current()
 }
 
-// Ensure signals is used (referenced by verb stubs via loadApp path).
-var _ = signals.Extract
