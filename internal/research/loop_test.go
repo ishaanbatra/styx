@@ -158,3 +158,32 @@ func TestChaseSources_SummarizesEachURL(t *testing.T) {
 		t.Errorf("source 0 unexpected: %+v", got[0])
 	}
 }
+
+func TestAgySummarizer_FetchFailureDoesNotInvokeAgy(t *testing.T) {
+	// Use an unroutable URL so curl fails fast.
+	called := 0
+	stubAgy := &fakeChan{responses: []string{"agy would have hallucinated this"}}
+	wrappedAgy := &countingChannel{inner: stubAgy, count: &called}
+	summarize := AgySummarizer(wrappedAgy)
+	got, err := summarize(context.Background(), "http://127.0.0.1:1/styx-fetch-fail-test")
+	if err != nil {
+		// Either error or graceful-degrade string is fine; just don't hallucinate.
+	}
+	if called != 0 {
+		t.Errorf("agy.Send must not be invoked when curl fails; got %d calls. Returned: %q", called, got)
+	}
+	if !strings.Contains(strings.ToLower(got), "fetch failed") && err == nil {
+		t.Errorf("expected 'fetch failed' marker or non-nil err, got %q", got)
+	}
+}
+
+// countingChannel wraps a Channel and counts how many Send calls it gets.
+type countingChannel struct {
+	inner Channel
+	count *int
+}
+
+func (c *countingChannel) Send(ctx context.Context, prompt string) (string, error) {
+	*c.count++
+	return c.inner.Send(ctx, prompt)
+}
