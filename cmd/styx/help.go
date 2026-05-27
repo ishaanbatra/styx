@@ -28,6 +28,9 @@ VERBS
   context show              Print rendered .claude/context.md for current project
   auto <goal>               Full autonomous pipeline (research -> ship)
   auto --resume <run-id>    Resume an interrupted pipeline
+  execute <plan-file>       Non-interactive code execution from a plan markdown
+  runs ls                   List pipeline runs for current project
+  runs show <run-id>        Show JSON state of a specific run
   help                      Show this menu
 
 CONFIG
