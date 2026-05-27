@@ -25,6 +25,7 @@ VERBS
   migrate-secrets           One-time: move env-var secrets to macOS Keychain
   intel <p> [--force]       Build/refresh the codebase intel index
   intel ls                  List cached indexes + freshness state
+  context show              Print rendered .claude/context.md for current project
   help                      Show this menu
 
 CONFIG

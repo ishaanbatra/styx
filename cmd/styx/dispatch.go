@@ -85,6 +85,8 @@ func dispatch(verb string, args []string) error {
 		return cmdCheck(args)
 	case "deep-research":
 		return cmdDeepResearch(args)
+	case "context":
+		return cmdContext(args)
 	}
 
 	a, err := loadApp()
