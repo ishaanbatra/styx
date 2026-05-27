@@ -31,6 +31,7 @@ VERBS
   execute <plan-file>       Non-interactive code execution from a plan markdown
   runs ls                   List pipeline runs for current project
   runs show <run-id>        Show JSON state of a specific run
+  runs unlock               Force-release a stale pipeline lock (after a crash)
   help                      Show this menu
 
 CONFIG

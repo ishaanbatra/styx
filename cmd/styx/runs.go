@@ -13,7 +13,7 @@ import (
 
 func cmdRuns(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: styx runs ls | styx runs show <run-id>")
+		return fmt.Errorf("usage: styx runs ls | styx runs show <run-id> | styx runs unlock")
 	}
 	switch args[0] {
 	case "ls":
@@ -23,8 +23,27 @@ func cmdRuns(args []string) error {
 			return fmt.Errorf("usage: styx runs show <run-id>")
 		}
 		return cmdRunsShow(args[1])
+	case "unlock":
+		return cmdRunsUnlock()
 	}
 	return fmt.Errorf("unknown runs subcommand %q", args[0])
+}
+
+func cmdRunsUnlock() error {
+	proj, err := project.Current()
+	if err != nil {
+		return err
+	}
+	holder, _ := pipeline.ReadLockHolder(proj.Path)
+	if holder == "" {
+		fmt.Println("(no lock held)")
+		return nil
+	}
+	if err := pipeline.ReleaseLock(proj.Path); err != nil {
+		return err
+	}
+	fmt.Printf("Released lock previously held by %s\n", holder)
+	return nil
 }
 
 func cmdRunsLs() error {
