@@ -73,6 +73,8 @@ func dispatch(verb string, args []string) error {
 		return nil
 	case "migrate-secrets":
 		return cmdMigrateSecrets()
+	case "upgrade":
+		return cmdUpgrade()
 	case "project":
 		return cmdProject(args)
 	case "route":
@@ -127,6 +129,12 @@ func ensureFirstRun() error {
 			return fmt.Errorf("seed default routing.toml: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "[styx] wrote default routing.toml to %s\n", routingPath)
+	}
+	// v0.2 auto-upgrade: rewrite gemini:* -> agy:default if present.
+	if n, err := config.UpgradeRoutingFile(routingPath); err != nil {
+		fmt.Fprintf(os.Stderr, "[styx] upgrade check failed: %v\n", err)
+	} else if n > 0 {
+		fmt.Fprintf(os.Stderr, "[styx] auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)\n", n)
 	}
 	return nil
 }
