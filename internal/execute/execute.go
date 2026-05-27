@@ -3,8 +3,10 @@
 package execute
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -34,15 +36,20 @@ func Apply(ctx context.Context, o Options) (string, error) {
 			cmd.Dir = o.ProjectPath
 		}
 	}
-	out, err := cmd.Output()
+	// Stream stderr live so the user sees progress during long claude runs.
+	// Buffer stderr too so we can include it in the error message on non-zero exit.
+	var stdout, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+	err := cmd.Run()
 	if err != nil {
 		var ee *exec.ExitError
 		if errAs(err, &ee) {
-			return "", fmt.Errorf("claude exited %d: %s", ee.ExitCode(), strings.TrimSpace(string(ee.Stderr)))
+			return "", fmt.Errorf("claude exited %d: %s", ee.ExitCode(), strings.TrimSpace(stderrBuf.String()))
 		}
 		return "", err
 	}
-	return strings.TrimRight(string(out), "\n"), nil
+	return strings.TrimRight(stdout.String(), "\n"), nil
 }
 
 func buildPrompt(plan string) string {
