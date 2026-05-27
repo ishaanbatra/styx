@@ -62,3 +62,62 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestDetectTestCommand(t *testing.T) {
+	cases := []struct {
+		name      string
+		framework string
+		wantCmd   []string
+	}{
+		{"pytest", "pytest", []string{"pytest"}},
+		{"jest", "jest", []string{"npm", "test"}},
+		{"vitest", "vitest", []string{"npm", "test"}},
+		{"go test", "go test", []string{"go", "test", "./..."}},
+		{"cargo test", "cargo test", []string{"cargo", "test"}},
+		{"unknown framework yields nil", "homegrown", nil},
+		{"empty framework yields nil", "", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := DetectTestCommand(c.framework)
+			if len(got) != len(c.wantCmd) {
+				t.Fatalf("got %v, want %v", got, c.wantCmd)
+			}
+			for i, w := range c.wantCmd {
+				if got[i] != w {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], w)
+				}
+			}
+		})
+	}
+}
+
+func TestRunTests_PassingCommand(t *testing.T) {
+	res, err := RunTests(context.Background(), t.TempDir(), []string{"true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Passed {
+		t.Errorf("expected pass, got fail. output: %s", res.Output)
+	}
+}
+
+func TestRunTests_FailingCommand(t *testing.T) {
+	res, err := RunTests(context.Background(), t.TempDir(), []string{"false"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Passed {
+		t.Error("expected fail, got pass")
+	}
+}
+
+func TestRunTests_NilCommandSkips(t *testing.T) {
+	res, err := RunTests(context.Background(), t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Skipped {
+		t.Error("expected Skipped=true for nil command")
+	}
+}
