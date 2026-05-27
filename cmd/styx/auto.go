@@ -93,10 +93,11 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 	}
 
 	r.RunResearch = func(ctx context.Context, rr *pipeline.Runner) (string, error) {
-		drafter := routeChannel(a, "research", []string{goal})
-		critic := routeChannel(a, "research.critic", []string{goal})
+		g := rr.State.Goal
+		drafter := routeChannel(a, "research", []string{g})
+		critic := routeChannel(a, "research.critic", []string{g})
 		drafter.projectPath = proj.Path
-		b, err := research.Loop(ctx, goal, drafter, critic)
+		b, err := research.Loop(ctx, g, drafter, critic)
 		if err != nil {
 			return "", err
 		}
@@ -116,7 +117,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		path, err := brief.WriteBrief(brief.WriteOpts{
 			ProjectPath: proj.Path,
 			SubDir:      subDir,
-			Query:       goal,
+			Query:       g,
 			Body:        research.RenderBrief(b),
 			Now:         b.StartedAt,
 		})
@@ -151,6 +152,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 	}
 
 	r.RunPlan = func(ctx context.Context, rr *pipeline.Runner) (string, error) {
+		g := rr.State.Goal
 		idx, err := intel.Load(proj)
 		if err != nil {
 			return "", err
@@ -173,10 +175,10 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 
 --- RESEARCH BRIEF ---
 %s
-`, goal, ctxMD, briefBody)
-		sigs := signals.Extract("plan", []string{goal}, proj)
+`, g, ctxMD, briefBody)
+		sigs := signals.Extract("plan", []string{g}, proj)
 		resp, _, err := sendWithFallback(a, ctx,
-			router.Request{Verb: "plan", Args: []string{goal}, Signals: sigs},
+			router.Request{Verb: "plan", Args: []string{g}, Signals: sigs},
 			channel.Request{Prompt: prompt, WorkingDir: proj.Path})
 		if err != nil {
 			return "", err
@@ -188,7 +190,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		path, err := brief.WritePlan(brief.WriteOpts{
 			ProjectPath: proj.Path,
 			SubDir:      subDirPlans,
-			Query:       goal,
+			Query:       g,
 			Body:        resp.Text,
 		})
 		if err != nil {
@@ -280,7 +282,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 			Branch:      rr.State.Branch,
 			NoPR:        noPR,
 			NoPush:      noPush,
-			Goal:        goal,
+			Goal:        rr.State.Goal,
 		})
 		if err != nil {
 			return "", false, err
