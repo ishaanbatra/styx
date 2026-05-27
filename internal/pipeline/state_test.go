@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -99,4 +100,80 @@ func TestLock_ReadHolder(t *testing.T) {
 		t.Errorf("holder = %q, want run-X", got)
 	}
 	_ = ReleaseLock(proj)
+}
+
+func newStubRunner(t *testing.T, projectPath, goal string) *Runner {
+	t.Helper()
+	runID := NewRunID(goal)
+	st := NewState(runID, goal)
+	return &Runner{
+		State:        st,
+		StateDir:     RunDir(projectPath, runID),
+		ProjectPath:  projectPath,
+		Goal:         goal,
+		RunResearch:  func(ctx context.Context, r *Runner) (string, error) { return "brief.md", nil },
+		EnsureIntel:  func(ctx context.Context, r *Runner) (bool, string, error) { return true, "fresh", nil },
+		RunPlan:      func(ctx context.Context, r *Runner) (string, error) { return "plan.md", nil },
+		RunExecute:   func(ctx context.Context, r *Runner) ([]string, error) { return []string{"abc1234"}, nil },
+		RunTest:      func(ctx context.Context, r *Runner) (bool, string, error) { return true, "", nil },
+		RunFixTests:  func(ctx context.Context, r *Runner, out string, n int) error { return nil },
+		RunReview:    func(ctx context.Context, r *Runner) (int, int, string, error) { return 0, 0, "clean", nil },
+		RunFixReview: func(ctx context.Context, r *Runner, fnd string, n int) error { return nil },
+		RunShip:      func(ctx context.Context, r *Runner) (string, bool, error) { return "https://example.com/pr/1", true, nil },
+	}
+}
+
+func TestRun_HappyPathProgressesAllStages(t *testing.T) {
+	proj := t.TempDir()
+	r := newStubRunner(t, proj, "add streaming")
+	if err := Run(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	if r.State.Status != StatusCompleted {
+		t.Errorf("Status = %q, want completed", r.State.Status)
+	}
+	for _, s := range r.State.Stages {
+		if s.Status != StageCompleted {
+			t.Errorf("stage %d (%s) status = %q, want completed", s.ID, s.Name, s.Status)
+		}
+	}
+}
+
+func TestRun_FailureHalts(t *testing.T) {
+	proj := t.TempDir()
+	r := newStubRunner(t, proj, "broken")
+	r.RunExecute = func(ctx context.Context, r *Runner) ([]string, error) {
+		return nil, errFromString("claude no edits")
+	}
+	err := Run(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected error from execute stage")
+	}
+	if r.State.Status != StatusFailed {
+		t.Errorf("Status = %q, want failed", r.State.Status)
+	}
+}
+
+func TestResume_PicksUpWhereLeftOff(t *testing.T) {
+	proj := t.TempDir()
+	r := newStubRunner(t, proj, "resume me")
+	// Pretend stages 1-3 already completed in a prior run.
+	for i := 0; i < 3; i++ {
+		r.State.Stages[i].Status = StageCompleted
+	}
+	r.State.CurrentStage = 4
+	if err := SaveState(r.StateDir, r.State); err != nil {
+		t.Fatal(err)
+	}
+	if err := Resume(context.Background(), r); err != nil {
+		t.Fatal(err)
+	}
+	if r.State.Status != StatusCompleted {
+		t.Errorf("Status = %q, want completed", r.State.Status)
+	}
+	for _, s := range r.State.Stages {
+		if s.Status != StageCompleted {
+			t.Errorf("stage %d status = %q after resume", s.ID, s.Status)
+		}
+	}
 }
