@@ -17,6 +17,13 @@ func Run(ctx context.Context, r *Runner) error {
 	if err := os.MkdirAll(r.StateDir, 0o755); err != nil {
 		return err
 	}
+	if r.State.CurrentStage < 1 {
+		r.State.CurrentStage = 1
+	}
+	if r.State.CurrentStage > len(r.State.Stages) {
+		r.State.CurrentStage = len(r.State.Stages)
+	}
+
 	if err := SaveState(r.StateDir, r.State); err != nil {
 		return err
 	}
