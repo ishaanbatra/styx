@@ -86,3 +86,39 @@ use  = "gemini:flash"
 		t.Errorf("post-upgrade file missing agy:default: %s", b)
 	}
 }
+
+func TestRewriteRouting_RemovesStaleGeminiBudgetKeys(t *testing.T) {
+	src := `[budget]
+claude.cap_pct = 80
+gemini_free.cap_pct = 70
+gemini_paid.cap_pct = 80
+
+[[rule]]
+verb = "plan"
+use  = "claude:sonnet-4-6"
+`
+	got, _ := RewriteRoutingGeminiToAgy(src)
+	if strings.Contains(got, "gemini_free.cap_pct") {
+		t.Error("gemini_free.cap_pct still present after rewrite")
+	}
+	if strings.Contains(got, "gemini_paid.cap_pct") {
+		t.Error("gemini_paid.cap_pct still present after rewrite")
+	}
+	if !strings.Contains(got, "agy.cap_pct = 80") {
+		t.Error("agy.cap_pct = 80 not present after rewrite")
+	}
+}
+
+func TestRewriteRouting_DedupesAgyFallback(t *testing.T) {
+	src := `[[rule]]
+verb = "research"
+use  = "agy:default"
+fallback = ["agy:default", "agy:default", "ollama:qwen2.5-coder:14b"]
+`
+	got, _ := RewriteRoutingGeminiToAgy(src)
+	// Should dedupe to exactly one agy:default in the fallback
+	want := `fallback = ["agy:default", "ollama:qwen2.5-coder:14b"]`
+	if !strings.Contains(got, want) {
+		t.Errorf("fallback not deduped; output:\n%s", got)
+	}
+}
