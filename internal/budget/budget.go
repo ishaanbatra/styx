@@ -15,12 +15,25 @@ import (
 	"github.com/ishaanbatra/styx/internal/paths"
 )
 
+// WindowSession is the rolling window for session-level message counts (Pro/Plus 5h limit).
+const WindowSession = 5 * time.Hour
+
+// WindowWeek is the rolling window for weekly message counts (168h = 7 days).
+const WindowWeek = 168 * time.Hour
+
+// msgLimit holds per-channel message caps for the two rolling windows.
+type msgLimit struct {
+	session int
+	weekly  int
+}
+
 // Tracker is the budget API. Methods are safe for concurrent use.
 type Tracker struct {
-	db   *sql.DB
-	mu   sync.RWMutex
-	caps map[string]int // channel name -> token cap per window
-	wind map[string]time.Duration
+	db        *sql.DB
+	mu        sync.RWMutex
+	caps      map[string]int // channel name -> token cap per window
+	wind      map[string]time.Duration
+	msgLimits map[string]msgLimit // channel -> {session, weekly}
 }
 
 // Event is a single usage record.
@@ -40,6 +53,14 @@ type State struct {
 	UsedPct       float64
 	LimitHit      bool
 	CooldownUntil time.Time
+
+	// Message-count fields (populated alongside the legacy token fields).
+	SessionCount int     // messages (rows) in last 5h
+	SessionLimit int     // configured 5h message cap (0 = unset)
+	WeeklyCount  int     // messages (rows) in last 168h
+	WeeklyLimit  int     // configured weekly message cap (0 = unset)
+	SessionPct   float64 // SessionCount/SessionLimit*100 (0 if no limit)
+	WeeklyPct    float64 // WeeklyCount/WeeklyLimit*100 (0 if no limit)
 }
 
 const schema = `
@@ -90,6 +111,7 @@ func New(path string) (*Tracker, error) {
 			"agy":    30 * 24 * time.Hour,
 			"ollama": 24 * time.Hour, // unlimited but bounded for reporting
 		},
+		msgLimits: map[string]msgLimit{},
 	}, nil
 }
 
@@ -102,6 +124,26 @@ func (t *Tracker) SetCap(channel string, tokens int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.caps[channel] = tokens
+}
+
+// SetMessageLimits configures per-channel message caps for the 5h and weekly windows.
+func (t *Tracker) SetMessageLimits(channel string, sessionLimit, weeklyLimit int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.msgLimits[channel] = msgLimit{session: sessionLimit, weekly: weeklyLimit}
+}
+
+// messageCount returns the number of usage rows for channel within the given window.
+func (t *Tracker) messageCount(ctx context.Context, channel string, window time.Duration) (int, error) {
+	cutoff := time.Now().Add(-window).Unix()
+	row := t.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage WHERE channel = ? AND ts >= ?`,
+		channel, cutoff)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("count messages for %s: %w", channel, err)
+	}
+	return n, nil
 }
 
 // Window returns the rolling window over which usage is summed for `channel`.
@@ -129,15 +171,19 @@ func (t *Tracker) Record(ctx context.Context, e Event) error {
 	return nil
 }
 
-// State computes UsedPct + cooldown for a channel.
+// State computes UsedPct + cooldown for a channel, and also populates
+// message-count fields (SessionCount, WeeklyCount, SessionPct, WeeklyPct).
 func (t *Tracker) State(ctx context.Context, channel string) (State, error) {
 	st := State{Channel: channel, Window: t.Window(channel)}
+
+	// --- legacy token-based logic (unchanged) ---
 	total, err := t.totalTokens(ctx, channel, st.Window)
 	if err != nil {
 		return State{}, err
 	}
 	t.mu.RLock()
 	cap := t.caps[channel]
+	ml := t.msgLimits[channel]
 	t.mu.RUnlock()
 	if cap > 0 {
 		st.UsedPct = float64(total) / float64(cap) * 100
@@ -145,6 +191,34 @@ func (t *Tracker) State(ctx context.Context, channel string) (State, error) {
 			st.LimitHit = true
 		}
 	}
+
+	// --- message-count fields ---
+	sessionCount, err := t.messageCount(ctx, channel, WindowSession)
+	if err != nil {
+		return State{}, err
+	}
+	weeklyCount, err := t.messageCount(ctx, channel, WindowWeek)
+	if err != nil {
+		return State{}, err
+	}
+	st.SessionCount = sessionCount
+	st.WeeklyCount = weeklyCount
+	st.SessionLimit = ml.session
+	st.WeeklyLimit = ml.weekly
+	if ml.session > 0 {
+		st.SessionPct = float64(sessionCount) / float64(ml.session) * 100
+		if st.SessionPct >= 100 {
+			st.LimitHit = true
+		}
+	}
+	if ml.weekly > 0 {
+		st.WeeklyPct = float64(weeklyCount) / float64(ml.weekly) * 100
+		if st.WeeklyPct >= 100 {
+			st.LimitHit = true
+		}
+	}
+
+	// --- cooldown ---
 	cd, err := t.cooldownUntil(ctx, channel)
 	if err != nil {
 		return State{}, err

@@ -111,3 +111,72 @@ func TestRecentErrors_DoesNotTripBelowThreshold(t *testing.T) {
 		t.Error("circuit should not trip with only 3 errors")
 	}
 }
+
+func TestState_MessageCounts(t *testing.T) {
+	tr := newTestTracker(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := tr.Record(ctx, Event{Channel: "claude", Verb: "plan", TokensIn: 10, TokensOut: 20, Success: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := tr.State(ctx, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SessionCount != 3 {
+		t.Errorf("SessionCount = %d, want 3", st.SessionCount)
+	}
+	if st.WeeklyCount != 3 {
+		t.Errorf("WeeklyCount = %d, want 3", st.WeeklyCount)
+	}
+}
+
+func TestSetMessageLimits_ComputesPct(t *testing.T) {
+	tr := newTestTracker(t)
+	ctx := context.Background()
+	tr.SetMessageLimits("claude", 10, 100)
+
+	// Record 5 messages — should be 50% session, 5% weekly.
+	for i := 0; i < 5; i++ {
+		if err := tr.Record(ctx, Event{Channel: "claude", Verb: "plan", TokensIn: 10, TokensOut: 20, Success: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := tr.State(ctx, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SessionLimit != 10 {
+		t.Errorf("SessionLimit = %d, want 10", st.SessionLimit)
+	}
+	if st.WeeklyLimit != 100 {
+		t.Errorf("WeeklyLimit = %d, want 100", st.WeeklyLimit)
+	}
+	if st.SessionPct < 49 || st.SessionPct > 51 {
+		t.Errorf("SessionPct = %.2f, want ~50", st.SessionPct)
+	}
+	if st.WeeklyPct < 4 || st.WeeklyPct > 6 {
+		t.Errorf("WeeklyPct = %.2f, want ~5", st.WeeklyPct)
+	}
+	if st.LimitHit {
+		t.Error("LimitHit should be false with 5/10 session messages")
+	}
+
+	// Record 5 more — session should now hit 100%, LimitHit must flip.
+	for i := 0; i < 5; i++ {
+		if err := tr.Record(ctx, Event{Channel: "claude", Verb: "plan", TokensIn: 10, TokensOut: 20, Success: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st2, err := tr.State(ctx, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st2.SessionPct < 100 {
+		t.Errorf("SessionPct = %.2f, want >= 100 after 10 messages", st2.SessionPct)
+	}
+	if !st2.LimitHit {
+		t.Error("LimitHit should be true when SessionPct >= 100")
+	}
+}
