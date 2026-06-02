@@ -122,3 +122,38 @@ fallback = ["agy:default", "agy:default", "ollama:qwen2.5-coder:14b"]
 		t.Errorf("fallback not deduped; output:\n%s", got)
 	}
 }
+
+func TestRewriteRouting_SeedsMessageLimits(t *testing.T) {
+	src := `[budget]
+claude.cap_pct = 80
+
+[[rule]]
+verb = "plan"
+use  = "claude:sonnet-4-6"
+`
+	// First pass: should inject message-limit keys for claude, codex, agy
+	got1, _ := RewriteRoutingGeminiToAgy(src)
+
+	checks := []string{
+		"claude.messages_per_5h   = 45",
+		"claude.messages_per_week = 225",
+		"codex.messages_per_5h   = 50",
+		"codex.messages_per_week = 250",
+		"agy.messages_per_5h   = 100",
+		"agy.messages_per_week = 500",
+	}
+	for _, want := range checks {
+		if !strings.Contains(got1, want) {
+			t.Errorf("first pass: expected %q in output; got:\n%s", want, got1)
+		}
+	}
+
+	// Second pass: idempotent — running on already-migrated output must not duplicate keys
+	got2, _ := RewriteRoutingGeminiToAgy(got1)
+	for _, key := range []string{"claude.messages_per_5h", "codex.messages_per_5h", "agy.messages_per_5h"} {
+		count := strings.Count(got2, key)
+		if count != 1 {
+			t.Errorf("idempotency: %q appears %d times after second pass (want 1):\n%s", key, count, got2)
+		}
+	}
+}

@@ -4,10 +4,16 @@ const defaultRoutingTOML = `# Styx routing rules.  Edit freely; first match wins
 # Use 'styx route --explain <verb> "..."' to see why a route was chosen.
 
 [budget]
-claude.cap_pct       = 80
-codex.cap_pct        = 80
-agy.cap_pct          = 80
-ollama.cap_pct       = 0    # local, unlimited
+claude.cap_pct           = 80
+claude.messages_per_5h   = 45
+claude.messages_per_week = 225
+codex.cap_pct            = 80
+codex.messages_per_5h    = 50
+codex.messages_per_week  = 250
+agy.cap_pct              = 80
+agy.messages_per_5h      = 100
+agy.messages_per_week    = 500
+ollama.cap_pct           = 0    # local, unlimited
 
 # ── research ──
 [[rule]]

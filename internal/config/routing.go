@@ -25,7 +25,9 @@ type BudgetCaps struct {
 
 // ChannelCap is the maximum percentage of a channel's budget to use before degrading.
 type ChannelCap struct {
-	CapPct float64 `toml:"cap_pct"`
+	CapPct          float64 `toml:"cap_pct"`
+	MessagesPer5h   int     `toml:"messages_per_5h"`
+	MessagesPerWeek int     `toml:"messages_per_week"`
 }
 
 // Rule is a single routing rule. First match wins.

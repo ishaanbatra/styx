@@ -57,15 +57,41 @@ func dedupeFallback(line string) string {
 	return prefix + strings.Join(kept, ", ") + "]"
 }
 
+// budgetMsgDefaults holds the default message limits injected during migration.
+// ollama is intentionally omitted (unlimited).
+var budgetMsgDefaults = []struct {
+	channel string
+	per5h   int
+	perWeek int
+}{
+	{"claude", 45, 225},
+	{"codex", 50, 250},
+	{"agy", 100, 500},
+}
+
 // rewriteBudgetBlock processes lines of a [budget] section:
 // - drops gemini_free.cap_pct and gemini_paid.cap_pct lines
 // - inserts agy.cap_pct = 80 after the [budget] header line if not already present
+// - injects <channel>.messages_per_5h and <channel>.messages_per_week for each
+//   of claude/codex/agy if those keys are not already present
 func rewriteBudgetBlock(lines []string) []string {
 	hasAgy := false
 	for _, l := range lines {
 		if strings.HasPrefix(strings.TrimSpace(l), "agy.cap_pct") {
 			hasAgy = true
 			break
+		}
+	}
+
+	// Detect which channels already have message-limit keys
+	hasMsgPer5h := map[string]bool{}
+	for _, entry := range budgetMsgDefaults {
+		key := entry.channel + ".messages_per_5h"
+		for _, l := range lines {
+			if strings.HasPrefix(strings.TrimSpace(l), key) {
+				hasMsgPer5h[entry.channel] = true
+				break
+			}
 		}
 	}
 
@@ -83,6 +109,18 @@ func rewriteBudgetBlock(lines []string) []string {
 			hasAgy = true
 		}
 	}
+
+	// Append missing message-limit keys at the end of the block.
+	// We do this after the main pass to keep all existing lines intact.
+	for _, entry := range budgetMsgDefaults {
+		if !hasMsgPer5h[entry.channel] {
+			out = append(out,
+				fmt.Sprintf("%s.messages_per_5h   = %d", entry.channel, entry.per5h),
+				fmt.Sprintf("%s.messages_per_week = %d", entry.channel, entry.perWeek),
+			)
+		}
+	}
+
 	return out
 }
 

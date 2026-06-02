@@ -26,6 +26,21 @@ type app struct {
 	channels map[string]channel.Channel
 }
 
+// builtinMsgLimits is the fallback used when routing.toml doesn't specify message limits
+// (e.g. upgraded users whose config predates the B2 migration).
+var builtinMsgLimits = map[string][2]int{
+	"claude": {45, 225},
+	"codex":  {50, 250},
+	"agy":    {100, 500},
+	// ollama omitted on purpose: unlimited (0/0)
+}
+
+// channelCapEntry pairs a channel name with its parsed ChannelCap.
+type channelCapEntry struct {
+	name string
+	cap  config.ChannelCap
+}
+
 func loadApp() (*app, error) {
 	r, err := config.LoadRouting()
 	if err != nil {
@@ -35,6 +50,26 @@ func loadApp() (*app, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open budget tracker: %w", err)
 	}
+
+	// Seed message limits from routing.toml, falling back to builtins for
+	// upgraded users whose config may not yet have message-limit keys.
+	caps := []channelCapEntry{
+		{"claude", r.Budget.Claude},
+		{"codex", r.Budget.Codex},
+		{"agy", r.Budget.Agy},
+	}
+	for _, entry := range caps {
+		builtin := builtinMsgLimits[entry.name]
+		s5h, sWeek := builtin[0], builtin[1]
+		if entry.cap.MessagesPer5h > 0 {
+			s5h = entry.cap.MessagesPer5h
+		}
+		if entry.cap.MessagesPerWeek > 0 {
+			sWeek = entry.cap.MessagesPerWeek
+		}
+		t.SetMessageLimits(entry.name, s5h, sWeek)
+	}
+
 	rt := router.FromConfig(r, &budgetSource{t: t})
 	return &app{
 		routing:  r,
