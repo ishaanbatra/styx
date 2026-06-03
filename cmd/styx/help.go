@@ -5,7 +5,11 @@ import "fmt"
 const helpText = `styx — multi-model dev orchestration
 
 USAGE
-  styx <verb> [args]
+  styx [--quiet|--verbose] <verb> [args]
+
+GLOBAL FLAGS
+  --quiet      Suppress progress narration (only final results print)
+  --verbose    Show extra detail (prompt sizes, model names) during long ops
 
 VERBS
   research <query>          Gemini draft + Codex critique -> brief

@@ -8,15 +8,27 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
+	"github.com/ishaanbatra/styx/internal/channel/agy"
 	"github.com/ishaanbatra/styx/internal/channel/claude"
 	"github.com/ishaanbatra/styx/internal/channel/codex"
-	"github.com/ishaanbatra/styx/internal/channel/agy"
 	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/paths"
+	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
 )
+
+// globalQuiet and globalVerbose are set by main() after parseGlobalFlags.
+var (
+	globalQuiet   bool
+	globalVerbose bool
+)
+
+// newProgress builds a progress tracker from the parsed global flags.
+func newProgress() *progress.Tracker {
+	return progress.New(os.Stderr, globalQuiet, globalVerbose)
+}
 
 // app bundles the long-lived dependencies shared by every verb.
 type app struct {
@@ -24,6 +36,7 @@ type app struct {
 	tracker  *budget.Tracker
 	router   *router.Router
 	channels map[string]channel.Channel
+	progress *progress.Tracker
 }
 
 // builtinMsgLimits is the fallback used when routing.toml doesn't specify message limits
@@ -82,6 +95,7 @@ func loadApp() (*app, error) {
 		tracker:  t,
 		router:   rt,
 		channels: defaultChannels(),
+		progress: newProgress(),
 	}, nil
 }
 

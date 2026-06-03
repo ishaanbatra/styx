@@ -6,13 +6,36 @@ import (
 	"os"
 )
 
+// parseGlobalFlags strips --quiet and --verbose from argv (long form only),
+// returning the remaining tokens plus the two bools.
+func parseGlobalFlags(argv []string) (rest []string, quiet, verbose bool) {
+	for _, a := range argv {
+		switch a {
+		case "--quiet":
+			quiet = true
+		case "--verbose":
+			verbose = true
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return rest, quiet, verbose
+}
+
 func main() {
-	if len(os.Args) < 2 {
+	rest, quiet, verbose := parseGlobalFlags(os.Args[1:])
+
+	if len(rest) == 0 {
 		printHelp()
 		return
 	}
-	verb := os.Args[1]
-	args := os.Args[2:]
+
+	// Store parsed globals so dispatch and verb handlers can read them.
+	globalQuiet = quiet
+	globalVerbose = verbose
+
+	verb := rest[0]
+	args := rest[1:]
 
 	if err := ensureFirstRun(); err != nil {
 		fmt.Fprintf(os.Stderr, "styx: setup error: %v\n", err)
