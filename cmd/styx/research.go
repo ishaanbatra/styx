@@ -76,9 +76,8 @@ func cmdResearch(a *app, args []string) error {
 		}
 		urls := research.ExtractURLs(body)
 		if len(urls) > 0 {
-			fmt.Fprintf(os.Stderr, "[styx] chasing %d source URLs...\n", len(urls))
 			summarizer := research.AgySummarizer(drafter)
-			sources, _ := research.ChaseSources(context.Background(), urls, summarizer)
+			sources, _ := research.ChaseSources(context.Background(), urls, summarizer, a.progress)
 			b.Sources = sources
 		}
 	}

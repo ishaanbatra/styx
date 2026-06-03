@@ -150,7 +150,7 @@ func TestChaseSources_SummarizesEachURL(t *testing.T) {
 		return "summary of " + url, nil
 	}
 	urls := []string{"https://a.test", "https://b.test"}
-	got, err := ChaseSources(context.Background(), urls, fake)
+	got, err := ChaseSources(context.Background(), urls, fake, progress.Quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +159,61 @@ func TestChaseSources_SummarizesEachURL(t *testing.T) {
 	}
 	if got[0].URL != "https://a.test" || !strings.Contains(got[0].Summary, "summary of") {
 		t.Errorf("source 0 unexpected: %+v", got[0])
+	}
+}
+
+func TestChaseSources_NarratesPerURL(t *testing.T) {
+	// stub summarizer: returns error for URLs containing "bad", summary otherwise.
+	stub := func(ctx context.Context, url string) (string, error) {
+		if strings.Contains(url, "bad") {
+			return "", errors.New("connection refused")
+		}
+		return "summary of " + url + " (123 chars)", nil
+	}
+
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false, false)
+
+	urls := []string{"https://good.test/page", "https://bad.test/page", "https://also-good.test/page"}
+	got, err := ChaseSources(context.Background(), urls, stub, prog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify returned sources are correct.
+	if len(got) != 3 {
+		t.Fatalf("got %d sources, want 3", len(got))
+	}
+	if !strings.Contains(got[1].Summary, "(failed to summarize:") {
+		t.Errorf("bad URL source should have failure summary, got %q", got[1].Summary)
+	}
+	if !strings.Contains(got[0].Summary, "summary of") {
+		t.Errorf("good URL source[0] should have summary, got %q", got[0].Summary)
+	}
+	if !strings.Contains(got[2].Summary, "summary of") {
+		t.Errorf("good URL source[2] should have summary, got %q", got[2].Summary)
+	}
+
+	out := buf.String()
+
+	// Progress buffer should contain a "[1/" line (per-URL stage).
+	if !strings.Contains(out, "[1/") {
+		t.Errorf("expected '[1/' in progress output, got:\n%s", out)
+	}
+	// Should mention the failed URL.
+	if !strings.Contains(out, "bad.test") {
+		t.Errorf("expected bad URL to appear in progress output, got:\n%s", out)
+	}
+	// Should contain the final summary stage.
+	if !strings.Contains(out, "Source chase complete") {
+		t.Errorf("expected 'Source chase complete' in progress output, got:\n%s", out)
+	}
+	// Should report 2 succeeded, 1 failed.
+	if !strings.Contains(out, "2 succeeded") {
+		t.Errorf("expected '2 succeeded' in progress output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "1 failed") {
+		t.Errorf("expected '1 failed' in progress output, got:\n%s", out)
 	}
 }
 

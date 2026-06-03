@@ -3,8 +3,11 @@ package research
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os/exec"
 	"regexp"
+
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 // maxFetchedBodyBytes caps how much of a fetched page we embed in the prompt
@@ -32,18 +35,30 @@ func ExtractURLs(body string) []string {
 	return out
 }
 
-// ChaseSources calls summarize for each URL serially. Returns one Source per URL.
-// (Serial keeps it simple — parallelism can come later if performance demands it.)
-func ChaseSources(ctx context.Context, urls []string, summarize Summarizer) ([]Source, error) {
+// ChaseSources calls summarize for each URL serially and narrates per-URL
+// progress via prog. If prog is nil a quiet (no-op) tracker is used.
+// Returns one Source per URL. (Serial keeps it simple — parallelism can come
+// later if performance demands it.)
+func ChaseSources(ctx context.Context, urls []string, summarize Summarizer, prog *progress.Tracker) ([]Source, error) {
+	if prog == nil {
+		prog = progress.Quiet()
+	}
 	out := make([]Source, 0, len(urls))
-	for _, u := range urls {
+	succeeded, failed := 0, 0
+	for i, u := range urls {
+		st := prog.Stage(fmt.Sprintf("[%d/%d] %s", i+1, len(urls), u))
 		s, err := summarize(ctx, u)
 		if err != nil {
+			st.Fail(err)
 			out = append(out, Source{URL: u, Summary: "(failed to summarize: " + err.Error() + ")"})
+			failed++
 			continue
 		}
+		st.Done("summarized (%d chars)", len(s))
 		out = append(out, Source{URL: u, Summary: s})
+		succeeded++
 	}
+	prog.Stage("Source chase complete").Done("%d succeeded, %d failed", succeeded, failed)
 	return out, nil
 }
 

@@ -109,7 +109,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		if deep {
 			urls := research.ExtractURLs(b.Drafts[len(b.Drafts)-1])
 			if len(urls) > 0 {
-				sources, _ := research.ChaseSources(ctx, urls, research.AgySummarizer(drafter))
+				sources, _ := research.ChaseSources(ctx, urls, research.AgySummarizer(drafter), a.progress)
 				b.Sources = sources
 			}
 		}
