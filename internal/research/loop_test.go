@@ -1,10 +1,13 @@
 package research
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 // fakeChan emits canned responses for each call.
@@ -27,7 +30,7 @@ func TestLoop_ConvergesImmediately(t *testing.T) {
 	critic := &fakeChan{responses: []string{
 		`{"blocking":[],"important":[],"nits":["small typo"]}`,
 	}}
-	b, err := Loop(context.Background(), "what is X?", drafter, critic)
+	b, err := Loop(context.Background(), "what is X?", drafter, critic, progress.Quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +54,7 @@ func TestLoop_ConvergesAfterRevise(t *testing.T) {
 		`{"blocking":["a","b"],"important":["c"],"nits":[]}`,
 		`{"blocking":[],"important":[],"nits":[]}`,
 	}}
-	b, err := Loop(context.Background(), "q", drafter, critic)
+	b, err := Loop(context.Background(), "q", drafter, critic, progress.Quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +79,7 @@ func TestLoop_MaxRoundsExhausted(t *testing.T) {
 	}
 	drafter := &fakeChan{responses: drafts}
 	critic := &fakeChan{responses: criticResponses}
-	b, err := Loop(context.Background(), "q", drafter, critic)
+	b, err := Loop(context.Background(), "q", drafter, critic, progress.Quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +97,7 @@ func TestLoop_OscillatesAndBails(t *testing.T) {
 		`{"blocking":["x"],"important":[],"nits":[]}`,
 		`{"blocking":["x"],"important":[],"nits":[]}`,
 	}}
-	b, err := Loop(context.Background(), "q", drafter, critic)
+	b, err := Loop(context.Background(), "q", drafter, critic, progress.Quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +177,34 @@ func TestAgySummarizer_FetchFailureDoesNotInvokeAgy(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(got), "fetch failed") && err == nil {
 		t.Errorf("expected 'fetch failed' marker or non-nil err, got %q", got)
+	}
+}
+
+func TestLoop_EmitsRoundProgress(t *testing.T) {
+	// drafter: initial draft then a revised draft.
+	drafter := &fakeChan{responses: []string{"draft 1", "draft 2 revised"}}
+	// critic: first round has findings (forces a revise), second converges.
+	critic := &fakeChan{responses: []string{
+		`{"blocking":["missing context"],"important":["weak evidence"],"nits":[]}`,
+		`{"blocking":[],"important":[],"nits":[]}`,
+	}}
+
+	var buf bytes.Buffer
+	prog := progress.New(&buf, false, false)
+	b, err := Loop(context.Background(), "test query", drafter, critic, prog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Status != "converged" {
+		t.Errorf("Status = %q, want converged", b.Status)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "drafting initial response") {
+		t.Errorf("expected 'drafting initial response' in progress output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "critiquing draft") {
+		t.Errorf("expected 'critiquing draft' in progress output, got:\n%s", out)
 	}
 }
 

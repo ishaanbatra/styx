@@ -95,9 +95,11 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 	r.RunResearch = func(ctx context.Context, rr *pipeline.Runner) (string, error) {
 		g := rr.State.Goal
 		drafter := routeChannel(a, "research", []string{g})
+		drafter.ch = rawChannel(drafter.ch)
 		critic := routeChannel(a, "research.critic", []string{g})
+		critic.ch = rawChannel(critic.ch)
 		drafter.projectPath = proj.Path
-		b, err := research.Loop(ctx, g, drafter, critic)
+		b, err := research.Loop(ctx, g, drafter, critic, a.progress)
 		if err != nil {
 			return "", err
 		}

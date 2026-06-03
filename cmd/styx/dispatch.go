@@ -208,6 +208,15 @@ func ensureFirstRun() error {
 	return nil
 }
 
+// rawChannel unwraps a progress-decorated channel back to its inner channel,
+// so orchestration verbs that narrate their own progress don't double-narrate.
+func rawChannel(ch channel.Channel) channel.Channel {
+	if w, ok := ch.(*channel.WithProgress); ok {
+		return w.Inner
+	}
+	return ch
+}
+
 // resolveTarget converts a "backend|student|teacher|<alias>" arg into a Project.
 // Empty arg means the project for the current working directory.
 func resolveTarget(arg string) (project.Project, error) {

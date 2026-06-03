@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 // MaxRounds caps the convergence loop. After this many critic passes, status is max_rounds_exhausted.
@@ -38,32 +40,45 @@ type Source struct {
 }
 
 // Loop runs the convergence loop. drafter produces drafts; critic produces critiques.
+// prog receives narration of each round; pass nil or progress.Quiet() for silence.
 //
 // Stop conditions (in order):
 //  1. critic.Converged() (no blocking + no important findings) -> "converged"
 //  2. draft[N] hash equals draft[N-2] hash after N >= 3 -> "oscillating"
 //  3. MaxRounds critic passes reached -> "max_rounds_exhausted"
-func Loop(ctx context.Context, query string, drafter, critic Channel) (*Brief, error) {
+func Loop(ctx context.Context, query string, drafter, critic Channel, prog *progress.Tracker) (*Brief, error) {
+	if prog == nil {
+		prog = progress.Quiet()
+	}
 	b := &Brief{
 		Query:     query,
 		StartedAt: time.Now().UTC(),
 	}
 	// Initial draft.
+	stDraft := prog.Stage(fmt.Sprintf("Round 1/%d: drafting initial response", MaxRounds))
 	d0, err := drafter.Send(ctx, draftPrompt(query))
 	if err != nil {
+		stDraft.Fail(err)
 		return nil, fmt.Errorf("initial draft: %w", err)
 	}
+	stDraft.Done("done")
 	b.Drafts = append(b.Drafts, d0)
 
 	for round := 1; round <= MaxRounds; round++ {
 		currentDraft := b.Drafts[len(b.Drafts)-1]
+
+		stCrit := prog.Stage(fmt.Sprintf("Round %d/%d: critiquing draft", round, MaxRounds))
 		critRaw, err := critic.Send(ctx, critiquePrompt(currentDraft))
 		if err != nil {
+			stCrit.Fail(err)
 			return nil, fmt.Errorf("round %d critique: %w", round, err)
 		}
 		c, _ := Parse(critRaw)
 		b.Critiques = append(b.Critiques, c)
+
+		critSummary := fmt.Sprintf("%d BLOCKING, %d IMPORTANT, %d NITs", len(c.Blocking), len(c.Important), len(c.Nits))
 		if c.Converged() {
+			stCrit.Done(critSummary + " -> converged")
 			b.Status = "converged"
 			b.EndedAt = time.Now().UTC()
 			return b, nil
@@ -75,16 +90,22 @@ func Loop(ctx context.Context, query string, drafter, critic Channel) (*Brief, e
 		// (Equivalent to checking after generation; this saves a model call.)
 		if len(b.Drafts) >= 3 {
 			if hash(b.Drafts[len(b.Drafts)-1]) == hash(b.Drafts[len(b.Drafts)-3]) {
+				stCrit.Done(critSummary + " -> oscillating")
 				b.Status = "oscillating"
 				b.EndedAt = time.Now().UTC()
 				return b, nil
 			}
 		}
 
+		stCrit.Done(critSummary)
+
+		stRevise := prog.Stage(fmt.Sprintf("Round %d/%d: revising draft", round, MaxRounds))
 		newDraft, err := drafter.Send(ctx, revisePrompt(currentDraft, c))
 		if err != nil {
+			stRevise.Fail(err)
 			return nil, fmt.Errorf("round %d revise: %w", round, err)
 		}
+		stRevise.Done("done")
 		b.Drafts = append(b.Drafts, newDraft)
 	}
 	b.Status = "max_rounds_exhausted"

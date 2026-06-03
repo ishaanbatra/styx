@@ -55,14 +55,14 @@ func cmdResearch(a *app, args []string) error {
 		return fmt.Errorf("unknown critic channel %q", criticDec.Channel)
 	}
 
-	drafter := &channelAdapter{ch: drafterCh, model: drafterDec.Model, projectPath: proj.Path}
-	critic := &channelAdapter{ch: criticCh, model: criticDec.Model}
+	drafter := &channelAdapter{ch: rawChannel(drafterCh), model: drafterDec.Model, projectPath: proj.Path}
+	critic := &channelAdapter{ch: rawChannel(criticCh), model: criticDec.Model}
 
 	fmt.Fprintf(os.Stderr, "[styx] research: drafter=%s:%s critic=%s:%s%s\n",
 		drafterDec.Channel, drafterDec.Model, criticDec.Channel, criticDec.Model,
 		mapStr(deep, " (--deep)"))
 
-	b, err := research.Loop(context.Background(), query, drafter, critic)
+	b, err := research.Loop(context.Background(), query, drafter, critic, a.progress)
 	if err != nil {
 		return fmt.Errorf("convergence loop: %w", err)
 	}
