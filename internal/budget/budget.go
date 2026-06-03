@@ -269,6 +269,20 @@ func (t *Tracker) MarkCooldown(ctx context.Context, channel string, until time.T
 	return nil
 }
 
+// UsedPct returns the higher of the session (5h) and weekly message-count
+// percentages for channel — styx degrades on whichever ceiling it is nearest.
+// Returns 0 when no message limits are configured for the channel.
+func (t *Tracker) UsedPct(ctx context.Context, channel string) (float64, error) {
+	st, err := t.State(ctx, channel)
+	if err != nil {
+		return 0, err
+	}
+	if st.WeeklyPct > st.SessionPct {
+		return st.WeeklyPct, nil
+	}
+	return st.SessionPct, nil
+}
+
 // ShouldCircuitBreak returns true if `channel` has had >= `threshold`
 // failures within the last `window`. The router uses this to short-circuit
 // thrashing on a broken channel.

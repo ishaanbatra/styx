@@ -82,6 +82,27 @@ func TestRoute_BudgetCapDegradesToFallback(t *testing.T) {
 	}
 }
 
+func TestRoute_BudgetCapPrimaryUnderCap_NoDegradation(t *testing.T) {
+	// Symmetric case: primary is under its cap_pct → primary chosen, Degraded=false.
+	r := newRouter(
+		[]config.Rule{
+			{Verb: "plan", Use: "claude:sonnet-4-6", Fallback: []string{"codex:gpt-5", "ollama:qwen2.5-coder:14b"}},
+		},
+		config.BudgetCaps{Claude: config.ChannelCap{CapPct: 80}},
+		map[string]float64{"claude": 50}, // 50% used < 80% cap
+	)
+	dec, err := r.Route(context.Background(), Request{Verb: "plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Channel != "claude" {
+		t.Errorf("expected primary claude, got %s:%s", dec.Channel, dec.Model)
+	}
+	if dec.Degraded {
+		t.Errorf("expected Degraded=false when primary is under cap")
+	}
+}
+
 func TestRoute_NoMatchDefaultsToOllama(t *testing.T) {
 	r := newRouter(nil, config.BudgetCaps{}, nil)
 	dec, err := r.Route(context.Background(), Request{Verb: "unknown"})

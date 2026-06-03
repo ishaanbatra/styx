@@ -94,11 +94,7 @@ func defaultChannels() map[string]channel.Channel {
 type budgetSource struct{ t *budget.Tracker }
 
 func (b *budgetSource) UsedPct(ctx context.Context, ch string) (float64, error) {
-	st, err := b.t.State(ctx, ch)
-	if err != nil {
-		return 0, err
-	}
-	return st.UsedPct, nil
+	return b.t.UsedPct(ctx, ch)
 }
 
 func dispatch(verb string, args []string) error {

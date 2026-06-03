@@ -132,6 +132,68 @@ func TestState_MessageCounts(t *testing.T) {
 	}
 }
 
+func TestUsedPct_ReturnsMaxOfSessionAndWeekly(t *testing.T) {
+	ctx := context.Background()
+
+	// Case 1: session ceiling hit, weekly barely ticked — UsedPct returns SessionPct.
+	// SetMessageLimits("claude", session=5, weekly=1000): record 5 messages.
+	// SessionPct = 5/5*100 = 100, WeeklyPct = 5/1000*100 = 0.5 → max is 100.
+	t.Run("session_dominates", func(t *testing.T) {
+		tr := newTestTracker(t)
+		tr.SetMessageLimits("claude", 5, 1000)
+		for i := 0; i < 5; i++ {
+			if err := tr.Record(ctx, Event{Channel: "claude", Verb: "plan", TokensIn: 1, TokensOut: 1, Success: true}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := tr.UsedPct(ctx, "claude")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got < 99 || got > 101 {
+			t.Errorf("UsedPct = %.2f, want ~100 (session dominates)", got)
+		}
+	})
+
+	// Case 2: weekly ceiling hit, session barely ticked — UsedPct returns WeeklyPct.
+	// SetMessageLimits("agy", session=1000, weekly=4): record 4 messages.
+	// SessionPct = 4/1000*100 = 0.4, WeeklyPct = 4/4*100 = 100 → max is 100.
+	t.Run("weekly_dominates", func(t *testing.T) {
+		tr := newTestTracker(t)
+		tr.SetMessageLimits("agy", 1000, 4)
+		for i := 0; i < 4; i++ {
+			if err := tr.Record(ctx, Event{Channel: "agy", Verb: "plan", TokensIn: 1, TokensOut: 1, Success: true}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := tr.UsedPct(ctx, "agy")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got < 99 || got > 101 {
+			t.Errorf("UsedPct = %.2f, want ~100 (weekly dominates)", got)
+		}
+	})
+
+	// Case 3: no limits configured — UsedPct returns 0.
+	t.Run("no_limits_returns_zero", func(t *testing.T) {
+		tr := newTestTracker(t)
+		// record events but set no limits
+		for i := 0; i < 10; i++ {
+			if err := tr.Record(ctx, Event{Channel: "ollama", Verb: "grunt", TokensIn: 1, TokensOut: 1, Success: true}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := tr.UsedPct(ctx, "ollama")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != 0 {
+			t.Errorf("UsedPct = %.2f, want 0 for channel with no configured limits", got)
+		}
+	})
+}
+
 func TestSetMessageLimits_ComputesPct(t *testing.T) {
 	tr := newTestTracker(t)
 	ctx := context.Background()
