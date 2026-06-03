@@ -89,25 +89,33 @@ func loadApp() (*app, error) {
 	// upgraded users whose config may not yet have message-limit keys.
 	seedMessageLimits(t, r)
 
+	// Create the progress tracker once and share it with both app.progress and
+	// defaultChannels so the decorator narrates the same tracker output.
+	p := newProgress()
 	rt := router.FromConfig(r, &budgetSource{t: t})
 	return &app{
 		routing:  r,
 		tracker:  t,
 		router:   rt,
-		channels: defaultChannels(),
-		progress: newProgress(),
+		channels: defaultChannels(p),
+		progress: p,
 	}, nil
 }
 
-func defaultChannels() map[string]channel.Channel {
+func defaultChannels(prog *progress.Tracker) map[string]channel.Channel {
 	a := agy.New()
-	return map[string]channel.Channel{
+	raw := map[string]channel.Channel{
 		"claude": claude.New(),
 		"codex":  codex.New(),
 		"agy":    a,
 		"gemini": a, // alias for backward-compatible routing rules
 		"ollama": ollama.New(),
 	}
+	wrapped := make(map[string]channel.Channel, len(raw))
+	for name, ch := range raw {
+		wrapped[name] = &channel.WithProgress{Inner: ch, Tracker: prog, Label: name}
+	}
+	return wrapped
 }
 
 // budgetSource adapts *budget.Tracker to router.BudgetSource.
