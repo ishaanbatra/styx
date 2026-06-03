@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 func gitInit(t *testing.T, dir string) string {
@@ -61,7 +63,7 @@ func TestBuild_AndLoad_RoundTrip(t *testing.T) {
 
 	proj := config.Project{Name: "proj", Path: repo, Language: "go"}
 
-	idx, err := Build(context.Background(), proj, fakeAgyEcho{})
+	idx, err := Build(context.Background(), proj, fakeAgyEcho{}, progress.Quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +100,7 @@ func TestIsStale_NewlyBuilt(t *testing.T) {
 	gitCommit(t, repo, "init")
 
 	proj := config.Project{Name: "p2", Path: repo}
-	if _, err := Build(context.Background(), proj, fakeAgyEcho{}); err != nil {
+	if _, err := Build(context.Background(), proj, fakeAgyEcho{}, progress.Quiet()); err != nil {
 		t.Fatal(err)
 	}
 	stale, reason, err := IsStale(proj)
@@ -120,7 +122,7 @@ func TestIsStale_CommitsSinceBuild(t *testing.T) {
 	gitCommit(t, repo, "init")
 
 	proj := config.Project{Name: "p3", Path: repo}
-	if _, err := Build(context.Background(), proj, fakeAgyEcho{}); err != nil {
+	if _, err := Build(context.Background(), proj, fakeAgyEcho{}, progress.Quiet()); err != nil {
 		t.Fatal(err)
 	}
 	// Make 6 commits (cap is 5).
@@ -147,7 +149,7 @@ func TestIsStale_OldByAge(t *testing.T) {
 	gitCommit(t, repo, "init")
 
 	proj := config.Project{Name: "p4", Path: repo}
-	idx, err := Build(context.Background(), proj, fakeAgyEcho{})
+	idx, err := Build(context.Background(), proj, fakeAgyEcho{}, progress.Quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +164,46 @@ func TestIsStale_OldByAge(t *testing.T) {
 	}
 	if !stale {
 		t.Errorf("expected stale after 30 days, got fresh")
+	}
+}
+
+func TestBuild_EmitsProgress(t *testing.T) {
+	cfgDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+
+	repo := filepath.Join(t.TempDir(), "prog-proj")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitInit(t, repo)
+	// Create a top-level module directory so buildModuleSummaries has something to narrate.
+	if err := os.MkdirAll(filepath.Join(repo, "mymodule"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, repo, "mymodule/doc.go", "package mymodule\n")
+	writeFile(t, repo, "main.go", "package main\nfunc main() {}\n")
+	gitCommit(t, repo, "init")
+
+	proj := config.Project{Name: "prog-proj", Path: repo, Language: "go"}
+
+	var buf bytes.Buffer
+	tracker := progress.New(&buf, false, false)
+
+	_, err := Build(context.Background(), proj, fakeAgyEcho{}, tracker)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	for _, want := range []string{
+		"Walking files",
+		"Sniffing conventions",
+		"Summarizing module",
+		"key symbols",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("progress output missing %q; full output:\n%s", want, out)
+		}
 	}
 }
 

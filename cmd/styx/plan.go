@@ -35,7 +35,7 @@ func cmdPlan(a *app, args []string) error {
 		if !ok {
 			return fmt.Errorf("agy channel not registered, cannot build intel")
 		}
-		if _, err := intel.Build(context.Background(), proj, &agyAdapter{ch: ag}); err != nil {
+		if _, err := intel.Build(context.Background(), proj, &agyAdapter{ch: rawChannel(ag)}, a.progress); err != nil {
 			return fmt.Errorf("rebuild intel: %w", err)
 		}
 	}

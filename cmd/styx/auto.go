@@ -142,7 +142,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		if !ok {
 			return false, "", fmt.Errorf("agy not registered")
 		}
-		if _, err := intel.Build(ctx, proj, &agyAdapter{ch: ag}); err != nil {
+		if _, err := intel.Build(ctx, proj, &agyAdapter{ch: rawChannel(ag)}, a.progress); err != nil {
 			return false, "", err
 		}
 		idx, err := intel.Load(proj)

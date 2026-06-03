@@ -15,6 +15,7 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/paths"
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 const SchemaVersion = 1
@@ -104,11 +105,23 @@ func indexPath(proj config.Project) (string, error) {
 
 // Build runs the full index build pipeline: walk, sniff, recent commits, todos,
 // external deps, agy module summaries, agy key symbols. Atomic-writes the result.
-func Build(ctx context.Context, proj config.Project, agy AgyClient) (*Index, error) {
+func Build(ctx context.Context, proj config.Project, agy AgyClient, prog *progress.Tracker) (*Index, error) {
+	if prog == nil {
+		prog = progress.Quiet()
+	}
+
+	st := prog.Stage("Walking files in " + proj.Path)
 	files, err := Walk(proj.Path)
 	if err != nil {
+		st.Fail(err)
 		return nil, fmt.Errorf("walk: %w", err)
 	}
+	st.Done("%d files", len(files))
+
+	st2 := prog.Stage("Sniffing conventions")
+	conv := Sniff(proj.Path)
+	st2.Done("test=%s, types=%s", conv.TestFramework, conv.TypeSystem)
+
 	idx := &Index{
 		Project:       proj.Name,
 		Path:          proj.Path,
@@ -116,15 +129,15 @@ func Build(ctx context.Context, proj config.Project, agy AgyClient) (*Index, err
 		BuiltAt:       time.Now().UTC(),
 		SchemaVersion: SchemaVersion,
 		FileTree:      files,
-		Conventions:   Sniff(proj.Path),
+		Conventions:   conv,
 		RecentCommits: recentCommits(proj.Path),
 		OpenTodos:     openTodos(proj.Path),
 		ExternalDeps:  externalDeps(proj.Path),
 		GitHead:       gitHead(proj.Path),
 	}
 
-	idx.Modules = buildModuleSummaries(ctx, proj.Path, agy)
-	idx.KeySymbols = buildKeySymbols(ctx, proj.Path, agy)
+	idx.Modules = buildModuleSummaries(ctx, proj.Path, agy, prog)
+	idx.KeySymbols = buildKeySymbols(ctx, proj.Path, agy, prog)
 
 	if err := Save(proj, idx); err != nil {
 		return nil, err
@@ -292,36 +305,46 @@ func externalDeps(repo string) ExternalDeps {
 	return out
 }
 
-func buildModuleSummaries(ctx context.Context, repo string, agy AgyClient) []Module {
+func buildModuleSummaries(ctx context.Context, repo string, agy AgyClient, prog *progress.Tracker) []Module {
 	entries, err := os.ReadDir(repo)
 	if err != nil {
 		return nil
 	}
-	var mods []Module
+	// Collect qualifying top-level directories first so we can show i/n progress.
+	var dirs []os.DirEntry
 	for _, e := range entries {
 		if !e.IsDir() || builtinExcludes[e.Name()] || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
+		dirs = append(dirs, e)
+	}
+	var mods []Module
+	for i, e := range dirs {
+		st := prog.Stage(fmt.Sprintf("Summarizing module %d/%d: %s", i+1, len(dirs), e.Name()))
 		modPath := filepath.Join(repo, e.Name())
 		prompt := fmt.Sprintf("Summarize the purpose, entry points, and dependencies of this module in <=120 words. Module dir: %s", e.Name())
 		cctx, cancel := context.WithTimeout(ctx, ModuleSummaryTimeout)
 		resp, err := agy.Send(cctx, prompt, modPath)
 		cancel()
 		if err != nil {
+			st.Fail(err)
 			mods = append(mods, Module{Path: e.Name(), Purpose: "(agy unavailable: " + err.Error() + ")"})
 			continue
 		}
+		st.Done("done")
 		mods = append(mods, Module{Path: e.Name(), Purpose: resp})
 	}
 	return mods
 }
 
-func buildKeySymbols(ctx context.Context, repo string, agy AgyClient) []KeySymbol {
+func buildKeySymbols(ctx context.Context, repo string, agy AgyClient, prog *progress.Tracker) []KeySymbol {
+	st := prog.Stage("Extracting key symbols")
 	prompt := "List the 10-15 most central types, functions, or services in this codebase, formatted as: <Name> (<file:line>) - <one-line why this is central>. Return one per line."
 	cctx, cancel := context.WithTimeout(ctx, KeySymbolsTimeout)
 	defer cancel()
 	resp, err := agy.Send(cctx, prompt, repo)
 	if err != nil {
+		st.Fail(err)
 		return nil
 	}
 	var syms []KeySymbol
@@ -346,5 +369,6 @@ func buildKeySymbols(ctx context.Context, repo string, agy AgyClient) []KeySymbo
 			break
 		}
 	}
+	st.Done("%d symbols", len(syms))
 	return syms
 }
