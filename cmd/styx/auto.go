@@ -13,6 +13,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/execute"
 	"github.com/ishaanbatra/styx/internal/intel"
 	"github.com/ishaanbatra/styx/internal/pipeline"
+	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/research"
 	"github.com/ishaanbatra/styx/internal/router"
@@ -263,7 +264,10 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		if err != nil {
 			return 0, 0, "", err
 		}
-		text, err := runReviewSynthesized(a, ctx, proj.Path, diff)
+		// The pipeline already opens a "stage N/7 review" around this closure.
+		// Pass progress.Quiet() so the inner review stays silent and doesn't
+		// collapse the pipeline stage.
+		text, err := runReviewSynthesized(a, ctx, progress.Quiet(), proj.Path, diff)
 		if err != nil {
 			return 0, 0, "", err
 		}
