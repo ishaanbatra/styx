@@ -205,6 +205,29 @@ func TestStage_DoneAfterPause_StillFinalizes(t *testing.T) {
 	}
 }
 
+// TestTracker_ConcurrentStages_NoRace verifies that many goroutines calling
+// Stage/Done concurrently on the same Tracker do not trigger a data race on
+// the Stage's sp (spinner) field. Run under -race to catch violations.
+func TestTracker_ConcurrentStages_NoRace(t *testing.T) {
+	var buf bytes.Buffer
+	tr := progress.New(&buf, false, false)
+
+	const goroutines = 20
+	done := make(chan struct{})
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			s := tr.Stage("x")
+			s.Done("y")
+		}()
+	}
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+	// If we reach here without a panic/deadlock the test passes.
+	// The -race detector will report any data race as a test failure.
+}
+
 // TestDoubleDone_Safe verifies that calling Done twice on the same Stage
 // does not panic or produce duplicate final lines.
 func TestDoubleDone_Safe(t *testing.T) {

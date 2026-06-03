@@ -71,41 +71,46 @@ func (t *Tracker) Stage(name string) *Stage {
 		return &Stage{quiet: true}
 	}
 
+	// Read prev under lock, then close it outside the lock (prev is already
+	// published so no other goroutine can replace it under us).
 	t.mu.Lock()
 	prev := t.activeStage
 	t.mu.Unlock()
 
-	// Implicitly close the previous stage before opening the new one.
 	if prev != nil {
 		prev.implicitClose()
 	}
 
+	// Build s COMPLETELY before publishing it to t.activeStage.
+	// This ensures that any concurrent goroutine that reads t.activeStage
+	// and calls s methods (e.g. implicitClose → finish → s.sp) always sees
+	// a fully-initialised Stage — eliminating the data race on s.sp.
 	s := &Stage{
 		tracker: t,
 		name:    name,
 		start:   time.Now(),
 	}
 
-	t.mu.Lock()
-	t.activeStage = s
-	t.mu.Unlock()
-
 	if t.isTTY {
 		// On a TTY the spinner goroutine handles writing; we start it here.
 		// We pass a write function that acquires the tracker mutex so that the
 		// goroutine and public API methods don't race on w.
-		sp := newSpinner(name, t.w, func(line string) {
+		s.sp = newSpinner(name, t.w, func(line string) {
 			t.mu.Lock()
 			fmt.Fprint(t.w, line)
 			t.mu.Unlock()
 		})
-		s.sp = sp
 	} else {
 		// Non-TTY: plain text start line.
 		t.mu.Lock()
 		fmt.Fprintf(t.w, "[styx] %s... (started)\n", name)
 		t.mu.Unlock()
 	}
+
+	// Only NOW publish s; it is fully constructed.
+	t.mu.Lock()
+	t.activeStage = s
+	t.mu.Unlock()
 
 	return s
 }
