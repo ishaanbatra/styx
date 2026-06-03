@@ -222,7 +222,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		_, err = execute.Apply(ctx, execute.Options{
 			PlanContent: string(planContent),
 			ProjectPath: proj.Path,
-		})
+		}, a.progress)
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +254,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		_, err := execute.Apply(ctx, execute.Options{
 			PlanContent: fixPrompt,
 			ProjectPath: proj.Path,
-		})
+		}, a.progress)
 		return err
 	}
 
@@ -276,7 +276,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		_, err := execute.Apply(ctx, execute.Options{
 			PlanContent: fixPrompt,
 			ProjectPath: proj.Path,
-		})
+		}, a.progress)
 		return err
 	}
 

@@ -196,6 +196,40 @@ func (s *Stage) Fail(err error) {
 	s.finish("", err)
 }
 
+// Pause suspends the spinner so a child process can write to the same stream
+// without the animation interleaving. No-op unless on a TTY with a running spinner.
+// Pause does NOT complete the stage; Done/Fail still work afterward.
+func (s *Stage) Pause() {
+	if s.quiet {
+		return
+	}
+	if s.sp != nil {
+		s.sp.stopAndWait()
+		s.sp = nil
+		s.tracker.mu.Lock()
+		fmt.Fprint(s.tracker.w, "\r\033[K") // clear the spinner line
+		s.tracker.mu.Unlock()
+	}
+}
+
+// Resume restarts the spinner after a Pause. No-op in quiet/non-TTY mode, if the
+// stage is already complete, or if a spinner is already running.
+// Note: the resumed spinner resets its elapsed clock to zero — acceptable here
+// because Apply pauses-then-Done's without resuming in the common path.
+func (s *Stage) Resume() {
+	if s.quiet || !s.tracker.isTTY {
+		return
+	}
+	if s.done.Load() != 0 || s.sp != nil {
+		return
+	}
+	s.sp = newSpinner(s.name, s.tracker.w, func(line string) {
+		s.tracker.mu.Lock()
+		fmt.Fprint(s.tracker.w, line)
+		s.tracker.mu.Unlock()
+	})
+}
+
 // implicitClose is called when a new Stage is opened while this one is still
 // active. It closes the stage with an implicit completion marker.
 func (s *Stage) implicitClose() {

@@ -164,6 +164,47 @@ func TestStage_ImplicitClose(t *testing.T) {
 	}
 }
 
+// TestStage_PauseResume_NonTTY_NoPanic verifies that Pause and Resume are
+// no-ops on a non-TTY writer and that the buffer still contains the start and
+// done lines as if Pause/Resume were never called.
+func TestStage_PauseResume_NonTTY_NoPanic(t *testing.T) {
+	var buf bytes.Buffer
+	tr := progress.New(&buf, false, false)
+	s := tr.Stage("applying plan")
+	s.Info("plan size: 42 bytes") // no-op (non-verbose), but must not panic
+	s.Pause()
+	// Simulate child work (writes something to the buffer directly).
+	buf.WriteString("[child] doing stuff\n")
+	s.Resume()
+	s.Done("done")
+
+	out := buf.String()
+	if !strings.Contains(out, "applying plan") {
+		t.Errorf("expected 'applying plan' in output, got: %q", out)
+	}
+	if !strings.Contains(out, "done") {
+		t.Errorf("expected 'done' in output, got: %q", out)
+	}
+}
+
+// TestStage_DoneAfterPause_StillFinalizes verifies that calling Done after Pause
+// still emits the completion line (Pause must not consume the done state).
+func TestStage_DoneAfterPause_StillFinalizes(t *testing.T) {
+	var buf bytes.Buffer
+	tr := progress.New(&buf, false, false)
+	s := tr.Stage("uploading")
+	s.Pause()
+	s.Done("finished")
+
+	out := buf.String()
+	if !strings.Contains(out, "uploading") {
+		t.Errorf("expected 'uploading' in output, got: %q", out)
+	}
+	if !strings.Contains(out, "finished") {
+		t.Errorf("expected 'finished' in done line, got: %q", out)
+	}
+}
+
 // TestDoubleDone_Safe verifies that calling Done twice on the same Stage
 // does not panic or produce duplicate final lines.
 func TestDoubleDone_Safe(t *testing.T) {

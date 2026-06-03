@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 // Options configure an Apply call.
@@ -21,7 +23,11 @@ type Options struct {
 
 // Apply invokes claude --dangerously-skip-permissions -p with a structured
 // "implement this plan" prompt. Returns Claude's stdout text.
-func Apply(ctx context.Context, o Options) (string, error) {
+// prog narrates the operation; pass nil (or progress.Quiet()) to suppress output.
+func Apply(ctx context.Context, o Options, prog *progress.Tracker) (string, error) {
+	if prog == nil {
+		prog = progress.Quiet()
+	}
 	if o.PlanContent == "" {
 		return "", fmt.Errorf("PlanContent is empty")
 	}
@@ -41,14 +47,22 @@ func Apply(ctx context.Context, o Options) (string, error) {
 	var stdout, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
+
+	s := prog.Stage("Applying plan via claude")
+	s.Info("plan size: %d bytes", len(o.PlanContent))
+	// Pause the spinner: claude streams its own stderr below; don't animate over it.
+	s.Pause()
 	err := cmd.Run()
 	if err != nil {
 		var ee *exec.ExitError
 		if errAs(err, &ee) {
+			s.Fail(fmt.Errorf("claude exited %d: %s", ee.ExitCode(), strings.TrimSpace(stderrBuf.String())))
 			return "", fmt.Errorf("claude exited %d: %s", ee.ExitCode(), strings.TrimSpace(stderrBuf.String()))
 		}
+		s.Fail(err)
 		return "", err
 	}
+	s.Done("done")
 	return strings.TrimRight(stdout.String(), "\n"), nil
 }
 

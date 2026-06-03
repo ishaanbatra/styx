@@ -22,11 +22,10 @@ func cmdExecuteVerb(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "[styx] executing %s in %s\n", planFile, proj.Path)
 	out, err := execute.Apply(context.Background(), execute.Options{
 		PlanContent: string(b),
 		ProjectPath: proj.Path,
-	})
+	}, newProgress())
 	if err != nil {
 		return err
 	}

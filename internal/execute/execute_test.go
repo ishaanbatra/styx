@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 func fakeClaude(t *testing.T, script string) string {
@@ -26,7 +28,7 @@ func TestApply_InvokesClaudeWithSkipPermissionsAndPrompt(t *testing.T) {
 	stdout, err := Apply(context.Background(), Options{
 		PlanContent: "# Plan\n\nDo the thing.",
 		ProjectPath: "/some/proj",
-	})
+	}, progress.Quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +50,7 @@ func TestApply_InvokesClaudeWithSkipPermissionsAndPrompt(t *testing.T) {
 func TestApply_NonZeroExitIsError(t *testing.T) {
 	dir := fakeClaude(t, `echo "boom" >&2; exit 7`)
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
-	_, err := Apply(context.Background(), Options{PlanContent: "x", ProjectPath: "/p"})
+	_, err := Apply(context.Background(), Options{PlanContent: "x", ProjectPath: "/p"}, progress.Quiet())
 	if err == nil {
 		t.Fatal("expected error on non-zero exit")
 	}
