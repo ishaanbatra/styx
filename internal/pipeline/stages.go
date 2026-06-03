@@ -2,7 +2,10 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 // StageFunc runs one stage. The runner mutates `stage` (status, attempts,
@@ -19,6 +22,8 @@ type Runner struct {
 	Deep        bool   // --deep flag (only affects research stage)
 	NoPR        bool   // --no-pr flag
 	NoPush      bool   // --no-push flag
+
+	Prog *progress.Tracker // progress tracker; nil → Quiet
 
 	// Adapter functions injected by Run(). Tests inject stubs.
 	RunResearch  func(ctx context.Context, r *Runner) (artifact string, err error)
@@ -190,6 +195,22 @@ func runStageShip(ctx context.Context, r *Runner, s *Stage) error {
 	}
 	markDone(s, prURL)
 	return nil
+}
+
+// stageSummary returns a concise one-line completion summary for a stage.
+// It is called after fn(ctx,r,s) returns nil, so Artifact/Commits/SkippedReason
+// have already been populated by the stage function.
+func stageSummary(s *Stage) string {
+	if s.SkippedReason != "" {
+		return "skipped: " + s.SkippedReason
+	}
+	if len(s.Commits) > 0 {
+		return fmt.Sprintf("%d commit(s)", len(s.Commits))
+	}
+	if s.Artifact != "" {
+		return s.Artifact
+	}
+	return "done"
 }
 
 // errFromString avoids importing errors in this file.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+
+	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 // Run executes all pending stages of r.State in order, persisting state.json
@@ -28,24 +30,32 @@ func Run(ctx context.Context, r *Runner) error {
 		return err
 	}
 
+	prog := r.Prog
+	if prog == nil {
+		prog = progress.Quiet()
+	}
+
 	for i := r.State.CurrentStage - 1; i < len(r.State.Stages); i++ {
 		s := &r.State.Stages[i]
 		r.State.CurrentStage = s.ID
 		if s.Status == StageCompleted {
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "[styx] stage %d/%d %s...\n", s.ID, len(r.State.Stages), s.Name)
+		st := prog.Stage(fmt.Sprintf("stage %d/%d %s", s.ID, len(r.State.Stages), s.Name))
 		fn := stageDispatch(s.ID)
 		if fn == nil {
+			st.Fail(fmt.Errorf("no dispatcher"))
 			r.State.Status = StatusFailed
 			_ = SaveState(r.StateDir, r.State)
 			return fmt.Errorf("no dispatcher for stage %d", s.ID)
 		}
 		if err := fn(ctx, r, s); err != nil {
+			st.Fail(err)
 			r.State.Status = StatusFailed
 			_ = SaveState(r.StateDir, r.State)
 			return fmt.Errorf("stage %d (%s): %w", s.ID, s.Name, err)
 		}
+		st.Done("%s", stageSummary(s))
 		if err := SaveState(r.StateDir, r.State); err != nil {
 			return err
 		}

@@ -90,6 +90,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		Deep:        deep,
 		NoPR:        noPR,
 		NoPush:      noPush,
+		Prog:        a.progress,
 	}
 
 	r.RunResearch = func(ctx context.Context, rr *pipeline.Runner) (string, error) {
