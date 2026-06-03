@@ -41,18 +41,9 @@ type channelCapEntry struct {
 	cap  config.ChannelCap
 }
 
-func loadApp() (*app, error) {
-	r, err := config.LoadRouting()
-	if err != nil {
-		return nil, fmt.Errorf("load routing: %w", err)
-	}
-	t, err := budget.Default()
-	if err != nil {
-		return nil, fmt.Errorf("open budget tracker: %w", err)
-	}
-
-	// Seed message limits from routing.toml, falling back to builtins for
-	// upgraded users whose config may not yet have message-limit keys.
+// seedMessageLimits applies per-channel message limits to t, preferring
+// routing.toml values and falling back to builtins for unset channels.
+func seedMessageLimits(t *budget.Tracker, r config.Routing) {
 	caps := []channelCapEntry{
 		{"claude", r.Budget.Claude},
 		{"codex", r.Budget.Codex},
@@ -69,6 +60,21 @@ func loadApp() (*app, error) {
 		}
 		t.SetMessageLimits(entry.name, s5h, sWeek)
 	}
+}
+
+func loadApp() (*app, error) {
+	r, err := config.LoadRouting()
+	if err != nil {
+		return nil, fmt.Errorf("load routing: %w", err)
+	}
+	t, err := budget.Default()
+	if err != nil {
+		return nil, fmt.Errorf("open budget tracker: %w", err)
+	}
+
+	// Seed message limits from routing.toml, falling back to builtins for
+	// upgraded users whose config may not yet have message-limit keys.
+	seedMessageLimits(t, r)
 
 	rt := router.FromConfig(r, &budgetSource{t: t})
 	return &app{
