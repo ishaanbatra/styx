@@ -49,7 +49,7 @@ func cmdOneShot(a *app, verb string, args []string) error {
 	if !strings.HasSuffix(resp.Text, "\n") {
 		fmt.Println()
 	}
-	fmt.Fprintf(os.Stderr, "[styx] channel=%s:%s\n", picked.Channel, picked.Model)
+	logStatus("channel=%s:%s", picked.Channel, picked.Model)
 	return nil
 }
 
@@ -88,7 +88,7 @@ func sendWithFallback(a *app, ctx context.Context, req router.Request, cr channe
 		if err == nil {
 			return resp, t, nil
 		}
-		fmt.Fprintf(os.Stderr, "[styx] %s failed (%v); falling back\n", t.Channel, err)
+		logStatus("%s failed (%v); falling back", t.Channel, err)
 		lastErr = err
 	}
 	return channel.Response{}, router.ChannelModel{}, fmt.Errorf("all channels failed; last err: %w", lastErr)

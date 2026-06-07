@@ -25,6 +25,15 @@ var (
 	globalVerbose bool
 )
 
+// logStatus writes a "[styx] " status line to stderr unless --quiet is set.
+// Final results (printed to stdout) are never suppressed by --quiet.
+func logStatus(format string, args ...any) {
+	if globalQuiet {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[styx] "+format+"\n", args...)
+}
+
 // newProgress builds a progress tracker from the parsed global flags.
 func newProgress() *progress.Tracker {
 	return progress.New(os.Stderr, globalQuiet, globalVerbose)
@@ -197,13 +206,13 @@ func ensureFirstRun() error {
 		if err := os.WriteFile(routingPath, []byte(defaultRoutingTOML), 0o644); err != nil {
 			return fmt.Errorf("seed default routing.toml: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "[styx] wrote default routing.toml to %s\n", routingPath)
+		logStatus("wrote default routing.toml to %s", routingPath)
 	}
 	// v0.2 auto-upgrade: rewrite gemini:* -> agy:default if present.
 	if n, err := config.UpgradeRoutingFile(routingPath); err != nil {
-		fmt.Fprintf(os.Stderr, "[styx] upgrade check failed: %v\n", err)
+		logStatus("upgrade check failed: %v", err)
 	} else if n > 0 {
-		fmt.Fprintf(os.Stderr, "[styx] auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)\n", n)
+		logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", n)
 	}
 	return nil
 }

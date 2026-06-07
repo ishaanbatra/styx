@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/ishaanbatra/styx/internal/channel"
@@ -26,7 +25,7 @@ func cmdBuild(a *app, args []string) error {
 	if stale, reason, err := intel.IsStale(proj); err != nil {
 		return fmt.Errorf("check intel: %w", err)
 	} else if stale {
-		fmt.Fprintf(os.Stderr, "[styx] intel index stale (%s) — rebuilding...\n", reason)
+		logStatus("intel index stale (%s) — rebuilding...", reason)
 		ag, ok := a.channels["agy"]
 		if !ok {
 			return fmt.Errorf("agy channel not registered, cannot build intel")
@@ -43,7 +42,7 @@ func cmdBuild(a *app, args []string) error {
 		return fmt.Errorf("write context.md: %w", err)
 	} else {
 		rel, _ := filepath.Rel(proj.Path, written)
-		fmt.Fprintf(os.Stderr, "[styx] context written to %s\n", rel)
+		logStatus("context written to %s", rel)
 	}
 
 	sigs := signals.Extract("build", args, proj)
@@ -55,7 +54,7 @@ func cmdBuild(a *app, args []string) error {
 	if !ok {
 		return fmt.Errorf("unknown channel %q for build", dec.Channel)
 	}
-	fmt.Fprintf(os.Stderr, "[styx] -> %s (%s:%s)\n", proj.Path, dec.Channel, dec.Model)
+	logStatus("-> %s (%s:%s)", proj.Path, dec.Channel, dec.Model)
 	_, err = ch.Send(context.Background(), channel.Request{
 		Model:       dec.Model,
 		Interactive: true,

@@ -30,7 +30,7 @@ func cmdPlan(a *app, args []string) error {
 	if stale, reason, err := intel.IsStale(proj); err != nil {
 		return fmt.Errorf("check intel: %w", err)
 	} else if stale {
-		fmt.Fprintf(os.Stderr, "[styx] intel index stale (%s) — rebuilding...\n", reason)
+		logStatus("intel index stale (%s) — rebuilding...", reason)
 		ag, ok := a.channels["agy"]
 		if !ok {
 			return fmt.Errorf("agy channel not registered, cannot build intel")
@@ -52,7 +52,7 @@ func cmdPlan(a *app, args []string) error {
 		return fmt.Errorf("write context.md: %w", err)
 	}
 	relWritten, _ := filepath.Rel(proj.Path, written)
-	fmt.Fprintf(os.Stderr, "[styx] context written to %s\n", relWritten)
+	logStatus("context written to %s", relWritten)
 
 	// Load latest brief if any.
 	subDirResearch := proj.ResearchDir
@@ -112,7 +112,7 @@ Use the research brief below if relevant. If the brief is empty, note that assum
 	}
 	rel, _ := filepath.Rel(proj.Path, out)
 	fmt.Printf("✓ Plan saved: %s\n", rel)
-	fmt.Fprintf(os.Stderr, "[styx] channel=%s:%s\n", picked.Channel, picked.Model)
+	logStatus("channel=%s:%s", picked.Channel, picked.Model)
 	return nil
 }
 

@@ -69,10 +69,10 @@ func cmdAuto(a *app, args []string) error {
 
 	ctx := context.Background()
 	if resumeID != "" {
-		fmt.Fprintf(os.Stderr, "[styx] resuming run %s\n", runID)
+		logStatus("resuming run %s", runID)
 		return pipeline.Resume(ctx, r)
 	}
-	fmt.Fprintf(os.Stderr, "[styx] starting run %s\n", runID)
+	logStatus("starting run %s", runID)
 	// Create branch.
 	if err := gitCheckoutNewBranch(proj.Path, r.State.Branch); err != nil {
 		return fmt.Errorf("create branch: %w", err)
@@ -244,7 +244,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 			return false, "", err
 		}
 		if res.Skipped {
-			fmt.Fprintln(os.Stderr, "[styx] no test framework detected; skipping test stage")
+			logStatus("no test framework detected; skipping test stage")
 			return true, "", nil
 		}
 		return res.Passed, res.Output, nil

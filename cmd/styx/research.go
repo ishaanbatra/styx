@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -58,7 +57,7 @@ func cmdResearch(a *app, args []string) error {
 	drafter := &channelAdapter{ch: rawChannel(drafterCh), model: drafterDec.Model, projectPath: proj.Path}
 	critic := &channelAdapter{ch: rawChannel(criticCh), model: criticDec.Model}
 
-	fmt.Fprintf(os.Stderr, "[styx] research: drafter=%s:%s critic=%s:%s%s\n",
+	logStatus("research: drafter=%s:%s critic=%s:%s%s",
 		drafterDec.Channel, drafterDec.Model, criticDec.Channel, criticDec.Model,
 		mapStr(deep, " (--deep)"))
 

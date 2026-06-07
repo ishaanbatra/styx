@@ -1,12 +1,8 @@
 package main
 
-import (
-	"fmt"
-	"os"
-)
 
 func cmdDeepResearch(args []string) error {
-	fmt.Fprintln(os.Stderr, "[styx] 'deep-research' is now 'research --deep' in v0.2 — forwarding")
+	logStatus("'deep-research' is now 'research --deep' in v0.2 — forwarding")
 	a, err := loadApp()
 	if err != nil {
 		return err
