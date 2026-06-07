@@ -101,16 +101,16 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		critic := routeChannel(a, "research.critic", []string{g})
 		critic.ch = rawChannel(critic.ch)
 		drafter.projectPath = proj.Path
-		b, err := research.Loop(ctx, g, drafter, critic, a.progress)
+		b, err := research.Loop(ctx, g, drafter, critic, progress.Quiet())
 		if err != nil {
 			return "", err
 		}
 		b.DrafterChannel = drafter.id
 		b.CriticChannel = critic.id
-		if deep {
+		if deep && len(b.Drafts) > 0 {
 			urls := research.ExtractURLs(b.Drafts[len(b.Drafts)-1])
 			if len(urls) > 0 {
-				sources, _ := research.ChaseSources(ctx, urls, research.AgySummarizer(drafter), a.progress)
+				sources, _ := research.ChaseSources(ctx, urls, research.AgySummarizer(drafter), progress.Quiet())
 				b.Sources = sources
 			}
 		}
@@ -144,7 +144,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		if !ok {
 			return false, "", fmt.Errorf("agy not registered")
 		}
-		if _, err := intel.Build(ctx, proj, &agyAdapter{ch: rawChannel(ag)}, a.progress); err != nil {
+		if _, err := intel.Build(ctx, proj, &agyAdapter{ch: rawChannel(ag)}, progress.Quiet()); err != nil {
 			return false, "", err
 		}
 		idx, err := intel.Load(proj)
@@ -183,7 +183,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		sigs := signals.Extract("plan", []string{g}, proj)
 		resp, _, err := sendWithFallback(a, ctx,
 			router.Request{Verb: "plan", Args: []string{g}, Signals: sigs},
-			channel.Request{Prompt: prompt, WorkingDir: proj.Path})
+			channel.Request{Prompt: prompt, WorkingDir: proj.Path}, true)
 		if err != nil {
 			return "", err
 		}
@@ -223,7 +223,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		_, err = execute.Apply(ctx, execute.Options{
 			PlanContent: string(planContent),
 			ProjectPath: proj.Path,
-		}, a.progress)
+		}, progress.Quiet())
 		if err != nil {
 			return nil, err
 		}
@@ -255,7 +255,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		_, err := execute.Apply(ctx, execute.Options{
 			PlanContent: fixPrompt,
 			ProjectPath: proj.Path,
-		}, a.progress)
+		}, progress.Quiet())
 		return err
 	}
 
@@ -280,7 +280,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		_, err := execute.Apply(ctx, execute.Options{
 			PlanContent: fixPrompt,
 			ProjectPath: proj.Path,
-		}, a.progress)
+		}, progress.Quiet())
 		return err
 	}
 

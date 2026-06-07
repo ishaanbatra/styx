@@ -41,7 +41,7 @@ func cmdOneShot(a *app, verb string, args []string) error {
 	resp, picked, err := sendWithFallback(a, context.Background(), req, channel.Request{
 		Prompt:      prompt,
 		Attachments: attachments,
-	})
+	}, false)
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,10 @@ func cmdOneShot(a *app, verb string, args []string) error {
 
 // sendWithFallback walks the router's primary + fallback chain, recording
 // usage at each attempt. Returns the successful response + the channel that produced it.
-func sendWithFallback(a *app, ctx context.Context, req router.Request, cr channel.Request) (channel.Response, router.ChannelModel, error) {
+// raw, when true, unwraps each channel's progress decorator before sending —
+// used by orchestration callers (e.g. the auto pipeline) that narrate at their
+// own level and must not open a competing progress stage.
+func sendWithFallback(a *app, ctx context.Context, req router.Request, cr channel.Request, raw bool) (channel.Response, router.ChannelModel, error) {
 	dec, err := a.router.Route(ctx, req)
 	if err != nil {
 		return channel.Response{}, router.ChannelModel{}, err
@@ -68,6 +71,9 @@ func sendWithFallback(a *app, ctx context.Context, req router.Request, cr channe
 		if !ok {
 			lastErr = fmt.Errorf("unknown channel %q in routing", t.Channel)
 			continue
+		}
+		if raw {
+			ch = rawChannel(ch)
 		}
 		cr.Model = t.Model
 		resp, err := ch.Send(ctx, cr)
