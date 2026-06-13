@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -c 'if ((.tool_input.file_path // \"\") | endswith(\".go\")) then {\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":(\"Drift contract: \" + .tool_input.file_path + \" was modified. docs/ARCHITECTURE.md owns this file — update it to reflect the change and bump its last_verified date in the same commit. If a verb was added/removed/renamed, update the README.md verb table too.\")}} else empty end' 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
