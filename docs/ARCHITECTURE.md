@@ -151,13 +151,27 @@ valid action so the REPL can keep moving.
 ## Agent threads (internal/agent)
 
 Agent threads are the durable conversation layer for the planned REPL
-orchestrator. The package currently defines the shared event shape and parses
-Claude's headless `stream-json` protocol: `system/init` captures session IDs,
-assistant text chunks stream intermediate output, and final `result` events
-carry the answer plus real usage. Context size counts normal input, cache
-creation input, and cache-read input tokens so future thread compaction is
-metered against the actual Claude context window rather than rough character
-estimates. Hook, tool-use-only, and malformed stream lines are ignored.
+orchestrator. Adapters encode how styx invokes each CLI. Claude runs in
+headless `stream-json` mode with native session resume (`--resume`), a 200k
+token context window, verbose JSON output, and pre-granted permissions matching
+the existing execute path. Codex and agy are plain v1 adapters with no native
+resume/stream support from styx's perspective: codex runs `codex exec`, agy
+runs `agy -p --dangerously-skip-permissions`, and continuity will be maintained
+by styx summaries.
+
+The package defines the shared event shape and parses Claude's stream protocol:
+`system/init` captures session IDs, assistant text chunks stream intermediate
+output, and final `result` events carry the answer plus real usage. Context
+size counts normal input, cache creation input, and cache-read input tokens so
+future thread compaction is metered against the actual Claude context window
+rather than rough character estimates. Hook, tool-use-only, and malformed
+stream lines are ignored.
+
+Each project has a JSON thread store under
+`~/.config/styx/state/threads/<project>.json`. Threads are named durable
+conversations with a CLI, optional Claude session ID, rolling summary for
+non-resume CLIs, last distillation checkpoint, context-token meter, turn count,
+and update timestamp. Stores are created lazily and saved with tmp+rename.
 
 ## Budget (internal/budget)
 
@@ -284,6 +298,6 @@ The remaining REPL orchestrator work — persistent conversational `styx` with
 per-turn `--resume`, frontend loop, and `styx doctor` — is specced in
 `docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-design.md` and
 planned task-by-task in `docs/superpowers/plans/
-2026-06-12-styx-repl-orchestrator.md`. It still needs agent adapters, durable
-thread stores, runners/managers, `cmd/styx/repl.go`, and `styx doctor`. When
-those land, keep the agent section current and update the overview diagram.
+2026-06-12-styx-repl-orchestrator.md`. It still needs agent runners/managers,
+`cmd/styx/repl.go`, and `styx doctor`. When those land, keep the agent section
+current and update the overview diagram.
