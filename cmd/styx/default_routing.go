@@ -89,4 +89,23 @@ fallback = ["claude:sonnet-4-6", "ollama:qwen2.5-coder:14b"]
 verb = "critique"
 use  = "codex:gpt-5"
 fallback = ["claude:sonnet-4-6", "ollama:qwen2.5-coder:14b"]
+
+# ── REPL brain ──
+[brain]
+model                 = "qwen3:4b"
+embed_model           = "nomic-embed-text"
+confidence_threshold  = 0.5
+context_threshold_pct = 70
+fable_weekly_cap      = 80   # vestigial while fable maps to opus (see [tiers] note); kept for easy restore
+
+# Tier -> claude CLI model alias. The brain emits tiers; the REPL maps them here.
+# NOTE (2026-06-12): Claude Fable 5 and Mythos 5 are suspended worldwide under a
+# US export-control directive, so the "fable" tier maps to opus until access is
+# restored. Opus 4.8 is the most capable model currently callable. Flip fable
+# back to "fable" if/when Anthropic restores it.
+[tiers]
+fable  = "opus"
+opus   = "opus"
+sonnet = "sonnet"
+haiku  = "haiku"
 `

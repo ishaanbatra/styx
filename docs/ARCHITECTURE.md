@@ -82,11 +82,11 @@ Token counts in `Response` are `len/4` estimates.
 
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
-`routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules}`.
-Rules match on `verb` + required `signals`; **first match wins**. A rule is
-either `use = "channel:model"` with an ordered `fallback` chain, or a parallel
-rule (`parallel` + `synthesize_with`, used by `review`). No match defaults to
-`ollama:qwen2.5-coder:14b`.
+`routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules,
+Brain, Tiers}`. Rules match on `verb` + required `signals`; **first match
+wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
+chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
+No match defaults to `ollama:qwen2.5-coder:14b`.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -95,7 +95,11 @@ rewrite keywords), etc. `styx route --explain` prints the full trace via
 
 Budget degradation: if the chosen channel's `UsedPct` (max of 5h/weekly
 message percentages) ≥ its `cap_pct`, the router walks the fallback chain and
-marks the Decision `Degraded`.
+marks the Decision `Degraded`. Per-channel caps also carry optional
+`timeout_minutes` for REPL/orchestrator subprocess budgets. `Brain` configures
+the planned local ollama routing brain and memory embedding model; `Tiers` maps
+brain tier names to claude CLI model aliases, with `fable` currently mapped to
+`opus` while the fable tier is suspended.
 
 ## Budget (internal/budget)
 
@@ -169,6 +173,7 @@ vars out of shell rc files.
 
 ```
 ~/.config/styx/routing.toml                 routing rules + caps (user-edited)
+                                             plus brain/tier defaults for REPL routing
 ~/.config/styx/projects.toml                project registry (auto-managed)
 ~/.config/styx/state/usage.db               sqlite usage log
 ~/.config/styx/state/memory/                per-project memory databases
