@@ -242,3 +242,52 @@ func TestSetMessageLimits_ComputesPct(t *testing.T) {
 		t.Error("LimitHit should be true when SessionPct >= 100")
 	}
 }
+
+func TestModelCount(t *testing.T) {
+	tr, err := New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	ctx := context.Background()
+	for _, m := range []string{"fable", "fable", "sonnet"} {
+		if err := tr.Record(ctx, Event{Channel: "claude", Verb: "thread", Model: m, Success: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tr.Record(ctx, Event{Channel: "codex", Verb: "thread", Model: "gpt-5", Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := tr.ModelCount(ctx, "claude", "fable", WindowWeek)
+	if err != nil {
+		t.Fatalf("ModelCount: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("fable count = %d, want 2", n)
+	}
+	n, err = tr.ModelCount(ctx, "claude", "sonnet", WindowWeek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("sonnet count = %d, want 1", n)
+	}
+}
+
+func TestModelColumnMigratesExistingDB(t *testing.T) {
+	// Open once (creates schema), close, reopen -- the ALTER must be idempotent.
+	p := filepath.Join(t.TempDir(), "usage.db")
+	tr, err := New(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.Close()
+	tr2, err := New(p)
+	if err != nil {
+		t.Fatalf("reopen after migration: %v", err)
+	}
+	defer tr2.Close()
+	if err := tr2.Record(context.Background(), Event{Channel: "claude", Verb: "x", Model: "haiku", Success: true}); err != nil {
+		t.Fatalf("record after reopen: %v", err)
+	}
+}

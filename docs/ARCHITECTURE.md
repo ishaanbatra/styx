@@ -32,7 +32,7 @@ argv ──► cmd/styx/main.go (global flags: --quiet --verbose)
               │                                       ▲
               │                          internal/signals.Extract (pure tagger)
               ▼
-        internal/channel (decorated: WithProgress wrapping the raw adapter)
+        internal/channel (decorated: WithProgress wrapping WithTimeout/raw adapter)
               ├── channel/claude   exec `claude -p` / interactive
               ├── channel/codex    exec `codex exec`
               ├── channel/agy      exec `agy -p --dangerously-skip-permissions`
@@ -54,9 +54,12 @@ Shared pieces:
   seeds config; errors exit 1 with a `styx:` prefix.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first; the rest construct `app{routing, tracker, router, channels,
-  progress}` via `loadApp()`. `rawChannel()` unwraps the progress decorator for
-  orchestration verbs that narrate themselves. `seedMessageLimits` applies
-  routing.toml message caps (with built-in fallbacks) to the budget tracker.
+  progress}` via `loadApp()`. `loadApp()` shares the budget tracker with the
+  router for both cap checks and 3-failures-in-10-minutes circuit breaking.
+  `rawChannel()` unwraps the progress decorator for orchestration verbs that
+  narrate themselves, leaving timeout protection in place. `seedMessageLimits`
+  applies routing.toml message caps (with built-in fallbacks) to the budget
+  tracker.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
@@ -83,6 +86,8 @@ Shared pieces:
   Ollama app with a 20s wait if it's down.
 - `decorator.go` — `WithProgress` narrates each Send as a progress stage;
   skipped for interactive sends (spinner would fight the child for the TTY).
+  `WithTimeout` gives non-interactive sends a deadline while leaving
+  interactive handoffs unbounded.
 - `gemini` is a registered alias for agy (v0.1 routing-rule compat).
 
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
@@ -104,13 +109,14 @@ The `implement` verb routes autonomous plan application: codex is primary
 rewrite keywords), etc. `styx route --explain` prints the full trace via
 `Router.Explain`.
 
-Budget degradation: if the chosen channel's `UsedPct` (max of 5h/weekly
-message percentages) ≥ its `cap_pct`, the router walks the fallback chain and
-marks the Decision `Degraded`. Per-channel caps also carry optional
-`timeout_minutes` for REPL/orchestrator subprocess budgets. `Brain` configures
-the planned local ollama routing brain and memory embedding model; `Tiers` maps
-brain tier names to claude CLI model aliases, with `fable` currently mapped to
-`opus` while the fable tier is suspended.
+Budget/reliability degradation: if the chosen channel's `UsedPct` (max of
+5h/weekly message percentages) ≥ its `cap_pct`, or its failure circuit is open,
+the router walks the fallback chain and marks the Decision `Degraded`.
+Per-channel caps also carry optional `timeout_minutes` for non-interactive
+subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
+wiring. `Brain` configures the planned local ollama routing brain and memory
+embedding model; `Tiers` maps brain tier names to claude CLI model aliases, with
+`fable` currently mapped to `opus` while the fable tier is suspended.
 
 ## Brain (internal/brain)
 
@@ -186,26 +192,28 @@ resume argument assertions and dead-session simulation.
 
 `Manager` owns a project's thread lifecycle. `Dispatch` resolves the adapter,
 creates the thread on first use, seeds fresh/restarted sessions with a project
-role line or last distillation, runs the turn, records real token usage to the
-budget log under verb `thread`, maintains rolling summaries for plain adapters,
-and saves the thread store. If a resume-capable CLI reports a dead session, the
-manager clears the session ID and retries once using the last distillation as
-the handoff seed. When a resume-capable thread crosses its configured context
-threshold, the manager asks the live session for a structured handoff using the
-distill model, writes that distillation to memory when an embedder/store are
-configured, clears the session ID, and starts the next turn fresh. `StatusLines`
-renders compact thread state for the brain and `/status`. `Handoff` opens an
-interactive Claude session for an existing Claude thread and then best-effort
-ingests a summary back into thread state and memory.
+role line or last distillation, runs the turn, records real token usage and the
+routed model to the budget log under verb `thread`, maintains rolling summaries
+for plain adapters, and saves the thread store. If a resume-capable CLI reports
+a dead session, the manager clears the session ID and retries once using the
+last distillation as the handoff seed. When a resume-capable thread crosses its
+configured context threshold, the manager asks the live session for a structured
+handoff using the distill model, writes that distillation to memory when an
+embedder/store are configured, clears the session ID, and starts the next turn
+fresh. `StatusLines` renders compact thread state for the brain and `/status`.
+`Handoff` opens an interactive Claude session for an existing Claude thread and
+then best-effort ingests a summary back into thread state and memory.
 
 ## Budget (internal/budget)
 
 Append-only SQLite log at `~/.config/styx/state/usage.db` (`usage` table:
-ts/channel/verb/tokens/success/error_kind; `cooldown` table). `Tracker`
+ts/channel/verb/model/tokens/success/error_kind; `cooldown` table). `Tracker`
 computes `State` per channel: legacy token percentages plus message counts in
 rolling 5h (`WindowSession`) and 168h (`WindowWeek`) windows against limits
-from routing.toml. `ShouldCircuitBreak(channel, threshold, window)` counts
-recent failures (wired into routing by the REPL-orchestrator plan).
+from routing.toml. `ModelCount(channel, model, window)` counts per-model rows
+for tier-aware degradation. `ShouldCircuitBreak(channel, threshold, window)`
+counts recent failures; app routing opens a channel circuit after 3 failures in
+10 minutes.
 
 ## Projects & paths (internal/project, internal/config/projects.go, internal/paths)
 
@@ -247,12 +255,13 @@ review → ship. State persists at `<project>/.styx/runs/<run-id>/state.json`
 after every stage; a lock file prevents concurrent runs; `auto --resume`
 re-enters at the first non-completed stage. Stage behaviors are closures on
 `Runner` injected by `auto.go` (e.g. `RunReview` = git diff → synthesized
-claude+codex review → `research.Parse` counts blocking/important findings;
-failed reviews loop through fix attempts via `execute.Apply`). The execute and
-fix-loop stages route through the `implement` verb: `implementOptions` resolves
-the channel (codex for well-scoped work, claude for `complex` goals) and injects
-it into `execute.Options.Channel` — except claude, which is left nil so `Apply`
-uses its built-in live-streaming claude path.
+claude+codex review → `research.Parse` counts blocking/important findings and
+logs when parsing degrades to the raw-text fallback; failed reviews loop through
+fix attempts via `execute.Apply`). The execute and fix-loop stages route through
+the `implement` verb: `implementOptions` resolves the channel (codex for
+well-scoped work, claude for `complex` goals) and injects it into
+`execute.Options.Channel` — except claude, which is left nil so `Apply` uses its
+built-in live-streaming claude path.
 
 ## Research (internal/research, internal/brief)
 
@@ -261,9 +270,10 @@ Convergence loop: drafter (agy) drafts, critic (codex) critiques as structured
 blocking/important), oscillation detected by draft-hash comparison, max 6
 rounds. `Parse` accepts strict JSON, embedded JSON, or keyword sections, and
 falls back to treating garbage as one IMPORTANT finding (never silently
-converges). `deep.go` extracts cited URLs, fetches (80KB cap), and appends a
-Sources Appendix. `brief` writes timestamped briefs/plans into the project's
-configured dirs and resolves the most recent brief.
+converges); parse fallback errors are surfaced through progress/status instead
+of being swallowed. `deep.go` extracts cited URLs, fetches (80KB cap), and
+appends a Sources Appendix. `brief` writes timestamped briefs/plans into the
+project's configured dirs and resolves the most recent brief.
 
 ## Execute (internal/execute)
 
