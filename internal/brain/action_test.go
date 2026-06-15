@@ -11,9 +11,9 @@ func TestActionUnmarshal(t *testing.T) {
 		"dispatches": [{
 			"thread": "claude",
 			"model": "sonnet",
-			"message": "refactor the session loader",
+			"message": "design the session loader refactor across the auth and storage layers",
 			"cli_options": ["--add-dir", "../other"],
-			"rationale": "implementation work"
+			"rationale": "ambiguous multi-file architecture work"
 		}],
 		"confidence": 0.9
 	}`
@@ -41,7 +41,7 @@ func TestActionValid(t *testing.T) {
 		{"reply ok", Action{Action: ActionReply, Reply: "hi", Confidence: 0.8}, true},
 		{"reply missing text", Action{Action: ActionReply, Confidence: 0.8}, false},
 		{"dispatch ok", Action{Action: ActionDispatch, Confidence: 0.7,
-			Dispatches: []Dispatch{{Thread: "claude", Message: "do it"}}}, true},
+			Dispatches: []Dispatch{{Thread: "codex", Message: "do it"}}}, true},
 		{"dispatch empty", Action{Action: ActionDispatch, Confidence: 0.7}, false},
 		{"dispatch bad thread", Action{Action: ActionDispatch, Confidence: 0.7,
 			Dispatches: []Dispatch{{Thread: "gpt9", Message: "x"}}}, false},
