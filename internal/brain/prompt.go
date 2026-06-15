@@ -2,15 +2,6 @@ package brain
 
 import "strings"
 
-// Turn is everything the brain sees for one routing decision.
-type Turn struct {
-	Utterance    string
-	Summary      string   // rolling conversation summary
-	RecentTurns  []string // rendered recent exchanges, oldest first
-	ThreadStatus []string // one line per live thread
-	MemoryHits   []string // rendered top-k memory recalls
-}
-
 // systemPreamble explains the brain's job and the action vocabulary. Kept
 // deliberately short: the brain must stay sub-second.
 const systemPreamble = `You are the routing brain of styx, a personal AI dev orchestrator. For each user utterance, decide ONE action and emit ONLY JSON matching the provided schema.

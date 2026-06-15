@@ -115,6 +115,12 @@ with the current user utterance, rolling summary, recent turns, live-thread
 status, and memory hits. The installed Codex CLI exposes `exec`, `--model`,
 `--add-dir`, and `resume`; styx v1 still presents codex to the brain as a
 headless `codex exec` dispatch target rather than an interactive handoff target.
+`Ollama.Decide` posts the prompt to `/api/chat` with `ActionSchema` as the
+structured-output format, retries once on invalid JSON/action output, and
+returns `ErrNeedUser` when local routing cannot produce a decision. Low
+confidence or explicit `escalate` actions can route the same prompt through
+`ClaudeEscalator` on the haiku tier; escalation failures fall back to the local
+valid action so the REPL can keep moving.
 
 ## Budget (internal/budget)
 
