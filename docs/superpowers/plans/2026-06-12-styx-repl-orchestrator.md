@@ -1222,14 +1222,14 @@ var Cards = []Card{
 	{
 		CLI: "claude",
 		Bin: "claude",
-		Condensed: "claude — Claude Code CLI. Models by tier: opus (deep planning, architecture, hard debugging, complex implementation — the top callable tier), sonnet (default implementation/review), haiku (cheap classify/distill). Best for: multi-file implementation, debugging with repo context, planning, code review. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work. (A 'fable' tier exists for the most demanding work but is currently suspended and maps to opus — prefer opus.)",
+		Condensed: "claude — Claude Code CLI. Models by tier: opus (deep planning, architecture, hard debugging, complex/ambiguous implementation — the top callable tier), sonnet (reviews and claude-side implementation/refactors), haiku (cheap classify/distill). Best for: planning, architecture, debugging with repo context, ambiguous or multi-file work, and code review. Hand well-scoped implementation from a clear plan to codex (it is faster to a first diff); keep ambiguous/architectural implementation here. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work. (A 'fable' tier exists for the most demanding work but is currently suspended and maps to opus — prefer opus.)",
 		ExpectedFlags: []string{"--resume", "--output-format", "--model", "--add-dir", "--dangerously-skip-permissions"},
 		ResumeProbe:   "--resume",
 	},
 	{
 		CLI: "codex",
 		Bin: "codex",
-		Condensed: "codex — OpenAI Codex CLI (gpt-5 class). Best for: sandboxed script checks, quick second-opinion code reviews, algorithmic one-shots, cross-checking claude's work. Headless `codex exec`. No interactive handoff.",
+		Condensed: "codex — OpenAI Codex CLI (gpt-5 class). PRIMARY IMPLEMENTER: best for applying well-scoped work from a clear plan or spec (fast to a first diff) — fixing tests, writing/refactoring functions, single-file or tightly-scoped multi-file edits; also algorithmic one-shots, sandboxed script checks, and second-opinion reviews. Headless `codex exec` (applies edits autonomously with `--sandbox workspace-write`). No interactive handoff; route ambiguous or architectural implementation to claude instead.",
 		ExpectedFlags: []string{"exec", "--model"},
 		ResumeProbe:   "resume",
 	},
@@ -1287,7 +1287,8 @@ Actions:
 - remember: the user states a durable fact, decision, or preference to keep ("note this", "remember that..."). Put it in "remember". If the user is correcting a routing choice you made, prefix it with "routing-preference: ".
 - escalate: you are genuinely unsure how to route.
 
-Model tiers for claude dispatches: opus = judgment-heavy work (brainstorm, architecture, planning, hard debugging) and complex implementation. sonnet = normal implementation, refactors, review. haiku = trivial classification. (There is also a "fable" tier for the most demanding work, but it is currently suspended and maps to opus — prefer opus.)
+Implementation routing: send well-scoped implementation from a clear plan/spec to codex (it is faster to a first diff); send ambiguous, architectural, or multi-file-judgment implementation to claude.
+Model tiers for claude dispatches: opus = judgment-heavy work (brainstorm, architecture, planning, hard debugging) and complex/ambiguous implementation. sonnet = claude-side implementation, refactors, review. haiku = trivial classification. (There is also a "fable" tier for the most demanding work, but it is currently suspended and maps to opus — prefer opus.)
 Set "confidence" to your honest routing confidence (0-1). Respect routing-preference memories — they are corrections from this user.
 
 Capability cards:
@@ -4803,6 +4804,11 @@ git commit -m "feat(repl): conversational frontend — bare styx, one-shot turns
 
 - [ ] **Use it.** Run `styx` in the styx repo and drive one small real change
   end to end (a tiny refactor or a doc fix) through dispatch + a pipeline.
+  Implementation dispatches should land on **codex** (the primary implementer
+  per the v0.3 `implement` rework — see the decisions-log entry below); the brain
+  routes well-scoped code-work to codex and reserves claude for ambiguous/
+  architectural work. Confirm the dogfood run actually dispatches code-work to
+  codex, not claude — if it doesn't, that is a brain-preamble miss to record.
 - [ ] **Inspect by hand afterward:**
   - every memory row written: `sqlite3 ~/.config/styx/state/memory/styx.db 'select kind,text,source from memory'`
   - thread state JSON under the threads dir; `/why` output; `styx budget` rows
@@ -5976,3 +5982,46 @@ promptfoo harness now in `eval/promptfoo/` (dev tool, `npx`, no `go.mod` deps)
 that mirrors `brain.go`'s `/api/chat` request and `TestRoutingAccuracy`'s match
 logic exactly and generates its tests from the same `utterances.json`; the Go
 test stays canonical. Full writeup + miss buckets: `eval/promptfoo/RESULTS.md`.
+
+**Codex becomes the primary implementer — v0.3 `implement` verb (2026-06-15, pre-Checkpoint B):**
+
+A deep, adversarially-verified research pass (25 claims / 26 sources, 2025–2026)
+confirmed the differentiated split this plan assumed but had mis-encoded: Opus/
+Claude are the planners/architects (ambiguous, multi-file, long-context, hard
+debugging); **codex is the primary implementer for well-scoped work from a clear
+plan** ("faster to a first diff"). The justification is **task-fit, not cost** —
+the "codex is ~4× cheaper" and "planner-executor saves 60–80%" claims were
+*refuted* in verification, so they are deliberately not the rationale.
+
+Shipped in the verb-table system (branch `feat/codex-implementer`, PR #3), the
+authority for `styx auto`/`plan`/`execute`:
+
+- `channel.Request` gained a `Write` field for autonomous file access: codex →
+  `exec --sandbox workspace-write`; claude → `--dangerously-skip-permissions`.
+- New `implement` verb in `routing.toml`/`default_routing.go`: **codex primary,
+  claude fallback**; the `complex` signal (architecture/refactor/migrate/
+  redesign/rewrite) keeps the work on claude. `execute.Apply` takes an injected
+  channel (nil = built-in streaming claude path); `auto.go` routes the execute +
+  fix-loop stages through it. `config.EnsureImplementRules` injects the rules
+  into pre-v0.3 configs on next run, with a backup.
+
+Plan content updated to match: the **codex** and **claude** capability cards
+(`internal/brain/cards.go` block above) and the system-preamble tier guidance now
+position codex as the implementer and claude as the planner/architect/reviewer;
+Checkpoint B notes implementation dispatches should land on codex. Mechanical
+test fixtures that use `claude·sonnet/"implementation"` as generic plumbing
+samples (Action unmarshal, TUI render, `claudeArgs`) were left as-is — they
+exercise wiring, not routing policy, and several are claude-specific.
+
+**Open follow-up (required to make the REPL brain match):** the as-built brain
+preamble (`internal/brain/prompt.go`) and the `utterances.json` fixtures still
+encode the prior policy — the 96% routing-accuracy gate above was tuned with
+"send repo code-work to claude," and the entry above records that *forcing*
+routing changes onto a 3B brain **regressed** accuracy (e.g. one rule cost ~7
+points). So flipping the brain to route well-scoped implementation → codex is not
+free: it needs preamble rework + re-labeling `utterances.json` (the implementation
+utterances now expect `dispatch:codex`) + re-running `TestRoutingAccuracy` and the
+promptfoo harness to confirm the gate holds. Until that lands, the cards/guidance
+here state the intended policy but the live brain may still route code-work to
+claude — verify during Checkpoint B and record the deltas. The verb-table path
+(`styx auto`/`execute`) already routes to codex correctly today.
