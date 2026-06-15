@@ -92,6 +92,13 @@ func TestDispatchRecordsRealUsage(t *testing.T) {
 	if st.SessionCount != 1 {
 		t.Errorf("budget rows = %d, want 1 (real usage recorded)", st.SessionCount)
 	}
+	n, err := f.bud.ModelCount(context.Background(), "claude", "sonnet", budget.WindowWeek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("sonnet budget rows = %d, want 1", n)
+	}
 }
 
 func TestDispatchDistillsAtThreshold(t *testing.T) {

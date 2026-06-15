@@ -119,6 +119,7 @@ func (m *Manager) record(ctx context.Context, spec DispatchSpec, res TurnResult,
 	_ = m.Budget.Record(ctx, budget.Event{
 		Channel:   spec.CLI,
 		Verb:      "thread",
+		Model:     spec.Model,
 		TokensIn:  res.InputTokens,
 		TokensOut: res.OutputTokens,
 		Success:   sendErr == nil,

@@ -186,26 +186,27 @@ resume argument assertions and dead-session simulation.
 
 `Manager` owns a project's thread lifecycle. `Dispatch` resolves the adapter,
 creates the thread on first use, seeds fresh/restarted sessions with a project
-role line or last distillation, runs the turn, records real token usage to the
-budget log under verb `thread`, maintains rolling summaries for plain adapters,
-and saves the thread store. If a resume-capable CLI reports a dead session, the
-manager clears the session ID and retries once using the last distillation as
-the handoff seed. When a resume-capable thread crosses its configured context
-threshold, the manager asks the live session for a structured handoff using the
-distill model, writes that distillation to memory when an embedder/store are
-configured, clears the session ID, and starts the next turn fresh. `StatusLines`
-renders compact thread state for the brain and `/status`. `Handoff` opens an
-interactive Claude session for an existing Claude thread and then best-effort
-ingests a summary back into thread state and memory.
+role line or last distillation, runs the turn, records real token usage and the
+routed model to the budget log under verb `thread`, maintains rolling summaries
+for plain adapters, and saves the thread store. If a resume-capable CLI reports
+a dead session, the manager clears the session ID and retries once using the
+last distillation as the handoff seed. When a resume-capable thread crosses its
+configured context threshold, the manager asks the live session for a structured
+handoff using the distill model, writes that distillation to memory when an
+embedder/store are configured, clears the session ID, and starts the next turn
+fresh. `StatusLines` renders compact thread state for the brain and `/status`.
+`Handoff` opens an interactive Claude session for an existing Claude thread and
+then best-effort ingests a summary back into thread state and memory.
 
 ## Budget (internal/budget)
 
 Append-only SQLite log at `~/.config/styx/state/usage.db` (`usage` table:
-ts/channel/verb/tokens/success/error_kind; `cooldown` table). `Tracker`
+ts/channel/verb/model/tokens/success/error_kind; `cooldown` table). `Tracker`
 computes `State` per channel: legacy token percentages plus message counts in
 rolling 5h (`WindowSession`) and 168h (`WindowWeek`) windows against limits
-from routing.toml. `ShouldCircuitBreak(channel, threshold, window)` counts
-recent failures (wired into routing by the REPL-orchestrator plan).
+from routing.toml. `ModelCount(channel, model, window)` counts per-model rows
+for tier-aware degradation. `ShouldCircuitBreak(channel, threshold, window)`
+counts recent failures (wired into routing by the REPL-orchestrator plan).
 
 ## Projects & paths (internal/project, internal/config/projects.go, internal/paths)
 
