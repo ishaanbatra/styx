@@ -1810,22 +1810,25 @@ git commit -m "test(brain): env-gated routing accuracy suite with labeled fixtur
 > agrees with the 22 utterances *you wrote*. Prove it on inputs you did not
 > author before building threads/REPL on top of it.
 
-- [ ] **Expand the fixture from real usage.** Add 25–40 utterances drawn from
+- [x] **Expand the fixture from real usage.** Add 25–40 utterances drawn from
   how you actually talk to a dev assistant (skim recent shell history / Claude
   Code sessions) to `testdata/brain/utterances.json`, labeling
   `want_action`/`want_thread`/`want_pipeline` honestly *before* running the brain.
-- [ ] **Run for real and read every miss:**
+  *(Done: fixture set is now 99 labeled utterances.)*
+- [x] **Run for real and read every miss:**
   `ollama pull llama3.2:3b && STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy -v`
   Read each `MISS` line — do not just look at the ratio.
-- [ ] **Triage misses** into: prompt-fixable (tune `systemPreamble`),
+- [x] **Triage misses** into: prompt-fixable (tune `systemPreamble`),
   card-fixable (sharpen a capability card), or genuinely ambiguous (acceptable —
   the REPL escalates low-confidence turns to haiku anyway).
-- [ ] **Decision gate.** If accuracy on the *expanded* set stays < 80% after
+  *(Done: see `eval/promptfoo/RESULTS.md` for the per-miss triage.)*
+- [x] **Decision gate.** If accuracy on the *expanded* set stays < 80% after
   tuning, STOP and reconsider before Phase 4: raise `confidence_threshold` so
   more turns escalate to haiku, try a larger brain model, or accept a
   confirm-the-route UX. Record the achieved accuracy and the decision in the
   decisions-log addendum at the end of this plan.
-- [ ] **Commit** only the expanded fixtures + any prompt/card tuning:
+  *(Done: 96% — comfortably clears the gate; see the addendum follow-on entry.)*
+- [x] **Commit** only the expanded fixtures + any prompt/card tuning:
 
 ```bash
 git add testdata/brain/ internal/brain/
@@ -5931,5 +5934,45 @@ the single biggest miss bucket — and (b) sharpen thread selection
 Lesson for re-execution: the brain must be a *non-reasoning* instruct model.
 Some embedded code/test snippets above still show the original `qwen3:4b`; the
 as-built default and the `[brain] model`/`applyBrainDefaults`/test defaults are
-`llama3.2:3b`. The remaining ~15% misses are mostly debatable fixture labels and
-are the intended job of the haiku-escalation valve at low confidence.
+`llama3.2:3b`. The remaining misses were first assumed to be mostly debatable
+labels handled by the haiku-escalation valve — that assumption was **refined and
+partly corrected** by the preamble rework below.
+
+**Routing preamble rework — 85% → 96% (2026-06-15, Checkpoint A follow-on):**
+
+Building on the `llama3.2:3b` swap above, `systemPreamble` was reworked (prompt
+only — no model, dataset, or code-logic change) and re-validated on the canonical
+gate: **95/99 = 96%**, stable across two runs with identical misses (up from
+84/99). The baseline's dominant failure was *pipeline-verb leakage* (the 3B
+keyword-matched `intel`/`review`/`research` on any "codebase"/"find"/"context"/
+"diff" mention). The fix reserves pipeline verbs for the four exact styx ops and
+sends repo code-work to claude, plus crisp boundaries for `research` (answers
+that live *outside* the repo), `review` (the current diff/changes vs a PR/
+design), `handoff`, `remember` (store the fact, don't acknowledge via `reply`),
+and `agy` (size routes large-file explains), with a `parallel_dispatch` anchor
+example.
+
+Two corrections to the assumption in the entry above:
+
+- The residual misses are **not** mostly debatable labels recovered by escalation.
+  The 4 remaining are: 1 structured-output JSON-serialization limit (routing is
+  *correct* — `dispatch:codex` — but the 3B emits truncated JSON when the
+  utterance contains `()`), 2 genuinely debatable labels (`is this approach
+  sound?` / `what's the blast radius?` — reply vs dispatch:claude), and 1 real
+  `auto`-vs-dispatch miss. **All four are emitted at confidence 0.8–0.9**, so
+  raising `confidence_threshold` would *not* catch them — the haiku valve is for
+  *low-confidence* turns, of which the fixture set has none. The real levers for
+  the residual are JSON-repair reliability and dataset expansion, not the
+  threshold.
+- Prompt tuning has hit diminishing returns on a 3B: intermediate variants that
+  added more rules/examples regressed (destabilized `parallel_dispatch`/`auto`),
+  and one rule that forced analysis-questions to claude cost ~7 points of
+  collateral. Further accuracy should come from a bigger brain or more fixtures,
+  not more rules — consistent with Checkpoint A's decision-gate options.
+
+The two debatable labels are surfaced for adjudication (not tuned to, since
+forcing them regressed other cases). The prompt was iterated with a byte-faithful
+promptfoo harness now in `eval/promptfoo/` (dev tool, `npx`, no `go.mod` deps)
+that mirrors `brain.go`'s `/api/chat` request and `TestRoutingAccuracy`'s match
+logic exactly and generates its tests from the same `utterances.json`; the Go
+test stays canonical. Full writeup + miss buckets: `eval/promptfoo/RESULTS.md`.
