@@ -1,6 +1,5 @@
 package main
 
-
 func cmdDeepResearch(args []string) error {
 	logStatus("'deep-research' is now 'research --deep' in v0.2 — forwarding")
 	a, err := loadApp()

@@ -42,6 +42,11 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 
 func (c *Channel) sendOneShot(ctx context.Context, req channel.Request) (channel.Response, error) {
 	args := []string{"-p", req.Prompt}
+	if req.Write {
+		// Implement-class requests apply edits / run commands autonomously,
+		// mirroring execute.Apply's built-in claude path.
+		args = append([]string{"--dangerously-skip-permissions"}, args...)
+	}
 	if req.Model != "" {
 		args = append([]string{"--model", req.Model}, args...)
 	}

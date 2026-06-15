@@ -22,10 +22,15 @@ func cmdExecuteVerb(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := execute.Apply(context.Background(), execute.Options{
-		PlanContent: string(b),
-		ProjectPath: proj.Path,
-	}, newProgress())
+	a, err := loadApp()
+	if err != nil {
+		return err
+	}
+	defer a.tracker.Close()
+	// Route through the implement verb so codex applies well-scoped plans and
+	// claude handles complex ones; signals are derived from the plan content.
+	opts := implementOptions(a, string(b), string(b), proj.Path)
+	out, err := execute.Apply(context.Background(), opts, newProgress())
 	if err != nil {
 		return err
 	}

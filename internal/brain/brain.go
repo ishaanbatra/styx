@@ -112,7 +112,7 @@ func (b *Ollama) Decide(ctx context.Context, t Turn) (Action, error) {
 
 func (b *Ollama) chat(ctx context.Context, system, user string) (string, error) {
 	body, err := json.Marshal(brainChatRequest{
-		Model: b.Model,
+		Model:  b.Model,
 		Stream: false,
 		// Disable reasoning-model thinking (qwen3, r1, …). Routing is a
 		// schema-constrained classification, not a reasoning task; thinking adds

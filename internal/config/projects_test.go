@@ -13,16 +13,16 @@ func TestSaveAndLoadProjects(t *testing.T) {
 
 	want := []Project{
 		{
-			Name: "hoot-backend",
-			Path: "/Users/x/Documents/GitHub/ai-ta-backend",
-			Language: "python",
-			ResearchDir: "docs/research",
-			PlansDir: "docs/plans",
+			Name:         "hoot-backend",
+			Path:         "/Users/x/Documents/GitHub/ai-ta-backend",
+			Language:     "python",
+			ResearchDir:  "docs/research",
+			PlansDir:     "docs/plans",
 			DefaultVerbs: []string{"plan", "build", "review"},
 		},
 		{
-			Name: "voiceresumebot",
-			Path: "/Users/x/Documents/GitHub/VoiceResumeBot",
+			Name:     "voiceresumebot",
+			Path:     "/Users/x/Documents/GitHub/VoiceResumeBot",
 			Language: "python",
 		},
 	}

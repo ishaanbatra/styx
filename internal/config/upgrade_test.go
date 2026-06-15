@@ -7,6 +7,45 @@ import (
 	"testing"
 )
 
+func TestEnsureImplementRules_InjectsWhenAbsent(t *testing.T) {
+	src := `[[rule]]
+verb = "plan"
+use  = "claude:sonnet-4-6"
+fallback = ["codex:gpt-5"]
+`
+	got, changed := EnsureImplementRules(src)
+	if !changed {
+		t.Fatal("expected changed=true when implement rule is absent")
+	}
+	if !strings.Contains(got, `verb = "implement"`) {
+		t.Errorf("implement verb not injected:\n%s", got)
+	}
+	if !strings.Contains(got, "codex:gpt-5") {
+		t.Error("expected codex as the primary implementer")
+	}
+	// The complex-signal rule must precede the catch-all so first-match picks it.
+	complexIdx := strings.Index(got, `signals = ["complex"]`)
+	catchAllIdx := strings.LastIndex(got, `verb = "implement"`)
+	if complexIdx == -1 || complexIdx > catchAllIdx {
+		t.Error("complex-signal implement rule must come before the catch-all implement rule")
+	}
+}
+
+func TestEnsureImplementRules_IdempotentWhenPresent(t *testing.T) {
+	src := `[[rule]]
+verb = "implement"
+use  = "codex:gpt-5"
+fallback = ["claude:sonnet-4-6"]
+`
+	got, changed := EnsureImplementRules(src)
+	if changed {
+		t.Error("expected changed=false when implement rule already present")
+	}
+	if got != src {
+		t.Error("content must be unchanged when implement rule already present")
+	}
+}
+
 func TestRewriteRoutingGeminiToAgy(t *testing.T) {
 	src := `[budget]
 claude.cap_pct = 80
@@ -68,7 +107,7 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, err := UpgradeRoutingFile(routingPath)
+	n, _, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}

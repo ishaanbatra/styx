@@ -36,12 +36,12 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 
 | Verb | What it does |
 |---|---|
-| `auto <goal>` | Full pipeline: research -> intel -> plan -> execute -> test -> review -> ship |
+| `auto <goal>` | Full pipeline: research -> intel -> plan -> execute -> test -> review -> ship. Plans on Claude, implements on Codex (Claude for `complex` goals) |
 | `auto --deep <goal>` | Pipeline with citation chasing in research stage |
 | `auto --no-pr <goal>` | Stop at push (don't open PR) |
 | `auto --no-push <goal>` | Stop at commit (don't push) |
 | `auto --resume <run-id>` | Resume an interrupted pipeline |
-| `execute <plan-file>` | Apply a plan via Claude non-interactively |
+| `execute <plan-file>` | Apply a plan non-interactively via the `implement` route (Codex for well-scoped plans, Claude for `complex` ones) |
 
 ### Context + inspection
 
@@ -67,7 +67,7 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 | `route --explain <verb> "..."` | Why did styx pick that channel? |
 | `project ls/add/rm/rename` | Manage project registry |
 | `migrate-secrets` | Move env-var secrets to macOS Keychain |
-| `upgrade` | Re-run the v0.1->v0.2 routing rewrite manually |
+| `upgrade` | Re-run routing migrations manually (v0.1->v0.2 gemini->agy; v0.3 adds the `implement` verb) |
 
 ## Configuration
 

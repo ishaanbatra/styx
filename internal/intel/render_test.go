@@ -54,9 +54,9 @@ func TestToMarkdown_ContainsAllSections(t *testing.T) {
 
 func TestToMarkdown_EmptySectionsOmitted(t *testing.T) {
 	idx := &Index{
-		Project:  "minimal",
-		Language: "go",
-		BuiltAt:  time.Now(),
+		Project:     "minimal",
+		Language:    "go",
+		BuiltAt:     time.Now(),
 		Conventions: Conventions{TestFramework: "go test"},
 	}
 	out := ToMarkdown(idx)

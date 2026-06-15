@@ -32,13 +32,20 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 }
 
 func (c *Channel) sendOneShot(ctx context.Context, req channel.Request) (channel.Response, error) {
-	// Codex CLI invocation: `codex --model <model> exec "<prompt>"`.
+	// Codex CLI invocation: `codex --model <model> exec [--sandbox workspace-write] "<prompt>"`.
 	// If the actual CLI uses a different verb, this is the single spot to adjust.
 	args := []string{}
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
-	args = append(args, "exec", req.Prompt)
+	args = append(args, "exec")
+	if req.Write {
+		// Implement-class requests must apply edits and run commands autonomously.
+		// workspace-write lets codex write within the repo without per-action prompts,
+		// mirroring the claude `--dangerously-skip-permissions` implement path.
+		args = append(args, "--sandbox", "workspace-write")
+	}
+	args = append(args, req.Prompt)
 	cmd := exec.CommandContext(ctx, "codex", args...)
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
