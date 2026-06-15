@@ -138,7 +138,9 @@ Long-term memory is stored in SQLite databases under
 `routing-preference`) with source metadata, creation time, and a float32
 embedding packed as a little-endian blob. The initial store API supports open,
 close, insert, and newest-first full scans; later recall layers can rank those
-items by brute-force similarity at personal scale.
+items by brute-force similarity at personal scale. `Embedder` abstracts text to
+float32 vectors; the production `OllamaEmbedder` posts to `/api/embed` with a
+30s HTTP client timeout and caller-provided context.
 
 ## Pipelines (internal/pipeline + cmd/styx/auto.go)
 
