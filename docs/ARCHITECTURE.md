@@ -103,7 +103,11 @@ brain tier names to claude CLI model aliases, with `fable` currently mapped to
 
 ## Brain (internal/brain)
 
-The REPL brain emits schema-constrained `Action` JSON from a local ollama model.
+The REPL brain emits schema-constrained `Action` JSON from a small, fast,
+non-reasoning local ollama instruct model (default `llama3.2:3b`; reasoning
+models such as qwen3 are deliberately avoided — they add many seconds per turn).
+`BuildPrompt`'s preamble includes few-shot examples to steer a 3B model's thread
+and action choices and to ensure `remember` actions populate the memory field.
 Task-level actions are structural decisions: direct reply, single or parallel
 agent dispatch, pipeline invocation, interactive handoff, memory write, or
 confidence escalation. `Action.Valid` performs local structural validation
@@ -116,8 +120,12 @@ status, and memory hits. The installed Codex CLI exposes `exec`, `--model`,
 `--add-dir`, and `resume`; styx v1 still presents codex to the brain as a
 headless `codex exec` dispatch target rather than an interactive handoff target.
 `Ollama.Decide` posts the prompt to `/api/chat` with `ActionSchema` as the
-structured-output format, retries once on invalid JSON/action output, and
-returns `ErrNeedUser` when local routing cannot produce a decision. Low
+structured-output format and `think: false` (routing is schema-constrained
+classification, not a reasoning task; reasoning-model thinking — qwen3, r1 —
+adds many seconds per turn, blowing the sub-second target and the request
+timeout, and bleeds into the structured output, mis-slotting fields). It
+retries once on invalid JSON/action output, and returns `ErrNeedUser` when
+local routing cannot produce a decision. Low
 confidence or explicit `escalate` actions can route the same prompt through
 `ClaudeEscalator` on the haiku tier; escalation failures fall back to the local
 valid action so the REPL can keep moving.
@@ -225,7 +233,7 @@ tests use in-memory stubs (`BudgetSource`, fake channels); `testdata/` holds
 fixtures (`routing/`, `brain/`, plus `fakeagent` once agent threads land).
 `TestRoutingAccuracy` is env-gated behind `STYX_BRAIN_IT=1` and runs the real
 local ollama brain against `testdata/brain/utterances.json`; it should be run
-only where ollama is up and `qwen3:4b` is pulled. `make test` = `go test ./...`.
+only where ollama is up and the brain model (`llama3.2:3b`) is pulled. `make test` = `go test ./...`.
 
 ## Planned work (not yet built)
 

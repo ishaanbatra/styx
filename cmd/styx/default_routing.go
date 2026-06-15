@@ -92,7 +92,7 @@ fallback = ["claude:sonnet-4-6", "ollama:qwen2.5-coder:14b"]
 
 # ── REPL brain ──
 [brain]
-model                 = "qwen3:4b"
+model                 = "llama3.2:3b"
 embed_model           = "nomic-embed-text"
 confidence_threshold  = 0.5
 context_threshold_pct = 70

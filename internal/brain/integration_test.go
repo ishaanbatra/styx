@@ -32,7 +32,7 @@ func TestRoutingAccuracy(t *testing.T) {
 
 	model := os.Getenv("STYX_BRAIN_MODEL")
 	if model == "" {
-		model = "qwen3:4b"
+		model = "llama3.2:3b"
 	}
 	b := &Ollama{BaseURL: "http://localhost:11434", Model: model}
 

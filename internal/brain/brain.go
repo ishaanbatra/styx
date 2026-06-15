@@ -43,7 +43,7 @@ type Escalator interface {
 // Ollama is the production brain: a small local model with structured output.
 type Ollama struct {
 	BaseURL             string  // e.g. http://localhost:11434
-	Model               string  // e.g. qwen3:4b
+	Model               string  // e.g. llama3.2:3b (a fast non-reasoning instruct model)
 	ConfidenceThreshold float64 // escalate below this (0 disables)
 	Escalator           Escalator
 
@@ -65,6 +65,7 @@ type brainChatMessage struct {
 type brainChatRequest struct {
 	Model    string             `json:"model"`
 	Stream   bool               `json:"stream"`
+	Think    bool               `json:"think"`
 	Format   json.RawMessage    `json:"format"`
 	Options  map[string]any     `json:"options"`
 	Messages []brainChatMessage `json:"messages"`
@@ -111,8 +112,13 @@ func (b *Ollama) Decide(ctx context.Context, t Turn) (Action, error) {
 
 func (b *Ollama) chat(ctx context.Context, system, user string) (string, error) {
 	body, err := json.Marshal(brainChatRequest{
-		Model:   b.Model,
-		Stream:  false,
+		Model: b.Model,
+		Stream: false,
+		// Disable reasoning-model thinking (qwen3, r1, …). Routing is a
+		// schema-constrained classification, not a reasoning task; thinking adds
+		// many seconds per turn (blowing the sub-second target and the request
+		// timeout) and bleeds into the structured output, mis-slotting fields.
+		Think:   false,
 		Format:  ActionSchema,
 		Options: map[string]any{"temperature": 0},
 		Messages: []brainChatMessage{

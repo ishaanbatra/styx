@@ -46,7 +46,7 @@ type BrainConfig struct {
 // before this section existed keep working.
 func applyBrainDefaults(r *Routing) {
 	if r.Brain.Model == "" {
-		r.Brain.Model = "qwen3:4b"
+		r.Brain.Model = "llama3.2:3b"
 	}
 	if r.Brain.EmbedModel == "" {
 		r.Brain.EmbedModel = "nomic-embed-text"
