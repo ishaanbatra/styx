@@ -108,7 +108,13 @@ Task-level actions are structural decisions: direct reply, single or parallel
 agent dispatch, pipeline invocation, interactive handoff, memory write, or
 confidence escalation. `Action.Valid` performs local structural validation
 before the REPL trusts a model response; `ActionSchema` is sent to ollama as the
-structured-output format.
+structured-output format. Capability cards describe claude, codex, agy, and
+ollama on every brain turn; they also define the future `doctor` drift probes
+for expected CLI flags and resume support. `BuildPrompt` combines those cards
+with the current user utterance, rolling summary, recent turns, live-thread
+status, and memory hits. The installed Codex CLI exposes `exec`, `--model`,
+`--add-dir`, and `resume`; styx v1 still presents codex to the brain as a
+headless `codex exec` dispatch target rather than an interactive handoff target.
 
 ## Budget (internal/budget)
 
