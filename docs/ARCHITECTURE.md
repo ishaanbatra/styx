@@ -173,6 +173,17 @@ conversations with a CLI, optional Claude session ID, rolling summary for
 non-resume CLIs, last distillation checkpoint, context-token meter, turn count,
 and update timestamp. Stores are created lazily and saved with tmp+rename.
 
+`Runner` executes one turn by spawning the adapter's CLI with an optional
+timeout and working directory. For stream-capable adapters it scans stdout
+line-by-line, emits parsed events to the caller, captures Claude session IDs,
+and records real input/output token counts from the final result. For plain
+adapters it treats full stdout as the result and falls back to len/4 token
+estimates until those CLIs expose structured usage. Every successful turn
+updates the thread's context meter, turn count, and timestamp in memory; callers
+persist the store after lifecycle decisions. `testdata/fakeagent` is an
+executable stream-json fixture for runner and manager lifecycle tests, including
+resume argument assertions and dead-session simulation.
+
 ## Budget (internal/budget)
 
 Append-only SQLite log at `~/.config/styx/state/usage.db` (`usage` table:
@@ -298,6 +309,6 @@ The remaining REPL orchestrator work — persistent conversational `styx` with
 per-turn `--resume`, frontend loop, and `styx doctor` — is specced in
 `docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-design.md` and
 planned task-by-task in `docs/superpowers/plans/
-2026-06-12-styx-repl-orchestrator.md`. It still needs agent runners/managers,
+2026-06-12-styx-repl-orchestrator.md`. It still needs the agent manager,
 `cmd/styx/repl.go`, and `styx doctor`. When those land, keep the agent section
 current and update the overview diagram.
