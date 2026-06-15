@@ -170,6 +170,8 @@ func dispatch(verb string, args []string) error {
 		return cmdRoute(args)
 	case "budget":
 		return cmdBudget(args)
+	case "doctor":
+		return cmdDoctor(args)
 	case "check":
 		return cmdCheck(args)
 	case "deep-research":
