@@ -49,16 +49,18 @@ cause empty-content responses that don't reflect real (sequential) styx behavior
 
 | path | role |
 |------|------|
-| `promptfooconfig.yaml` | matrix config (default: `baseline` vs `v5`) |
+| `promptfooconfig.yaml` | matrix config (default: `v5` vs `v7`) |
 | `prompt.js` | builds `[system,user]`; one named export per variant |
 | `provider.js` | byte-faithful ollama `/api/chat` client |
 | `gate.js`, `gate-assert.js` | gate-equivalent scoring |
 | `gen-tests.js` | tests from `testdata/brain/utterances.json` |
 | `variants/baseline.txt` | **frozen** pre-iteration preamble (84.8%) |
-| `variants/v1..v6.txt` | iteration history (see `RESULTS.md`) |
-| `variants/v5.txt` | **what ships** — equals `prompt.go`'s `systemPreamble` |
+| `variants/v1..v6.txt` | iteration history (see `RESULTS.md`); `v5` = previous shipped (pre-codex-implementer) |
+| `variants/v7.txt` | **what ships** -- equals `prompt.go`'s `systemPreamble` (codex-as-implementer, re-tuned to 91% on the 190-case gate) |
+| `variants/v8..v14.txt` | 190-case re-tune trail (see `RESULTS.md`); `v14` == `v7` (the shipped winner) |
 | `generated/` | code-mirrored: `cards_block.txt`, `schema.json`, `preamble_shipped.txt` |
 | `braindump/main.go` | regenerates `generated/` from Go source |
+| `buckets.py` | groups a run's misses by want-label (`python3 buckets.py /tmp/out.json [variant]`) -- the per-bucket view used to drive iteration |
 | `RESULTS.md` | the iteration writeup + escalation recommendation |
 
 ## Regenerate after editing `prompt.go` / `cards.go`
@@ -66,5 +68,5 @@ cause empty-content responses that don't reflect real (sequential) styx behavior
 ```bash
 go run ./eval/promptfoo/braindump -outdir eval/promptfoo/generated
 # fidelity check: the shipped prompt should equal the shipped variant
-diff <(cat eval/promptfoo/generated/preamble_shipped.txt) eval/promptfoo/variants/v5.txt
+diff <(cat eval/promptfoo/generated/preamble_shipped.txt) eval/promptfoo/variants/v7.txt
 ```

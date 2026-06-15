@@ -120,19 +120,12 @@ models such as qwen3 are deliberately avoided — they add many seconds per turn
 `BuildPrompt`'s preamble is an example-led routing spec tuned for a 3B model: it
 defines each action, draws the high-confusion boundaries explicitly (pipeline
 verbs are reserved for the four exact styx operations and never general code
-work; repo code-work — even "find every…", "explain what X does", or code that
-mentions "context"/routing — is `dispatch:claude`; `research` is for answers that
+work; well-scoped implementation from a clear plan/spec is `dispatch:codex` (codex is the primary implementer), while ambiguous/architectural/refactor work, debugging with repo context, plan/design critique, and "explain what X does" are `dispatch:claude`; `research` is for answers that
 live *outside* the repo; `review` is the current diff/changes vs a PR/design;
 status questions are `reply`; "remember/note" facts are `remember`, not an
 acknowledging `reply`; size routes large-file explains to `agy`), and carries
-~24 few-shot examples (including a `parallel_dispatch` anchor) that empirically
-matter more than prose rules for steering a 3B. This preamble scores **96% on
-`TestRoutingAccuracy`** (up from 84.8%); the remaining misses are a structured-
-output JSON-serialization limit, two debatable labels, and one `auto`-vs-dispatch
-case — not low-confidence turns, so the haiku escalation valve does not address
-them. The prompt was iterated with the byte-faithful promptfoo harness in
-`eval/promptfoo/` (see its `README.md`/`RESULTS.md`); that harness reproduces the
-Go gate's request shape and match logic exactly, but the Go test stays canonical.
+~40 few-shot examples (including codex-implementation, reply/review/intel/auto, handoff, and `parallel_dispatch` anchors) that empirically
+matter more than prose rules for steering a 3B. This preamble previously scored **96% on `TestRoutingAccuracy`** (up from 84.8%) on the original 99-utterance set under the prior code-work->claude policy. Adopting codex-as-implementer (2026-06-15) reworked the preamble/cards AND the labelled set: `testdata/brain/utterances.json` was expanded to **190 utterances** (well-scoped implementation fixtures relabelled to `codex`, plus new fixtures for how the user actually prompts -- exa/websearch/deep `research`, superpowers handoff-vs-plan -- and previously-untested `escalate` and internal-vs-external "find out" boundaries). On the expanded set the pre-rework prompt scored 80% (it routes the new/relabelled `codex` cases to claude by the old policy); the reworked-but-untuned preamble scored 83.7% (159/190). Re-tuning it with **few-shot example anchors only** (no model/dataset/code/label change, no new prose rules) brought the shipped preamble to **91% (173/190) on `TestRoutingAccuracy`**, stable across two runs with an identical 17-miss set. The re-tune was driven by the byte-faithful promptfoo harness in `eval/promptfoo/` (see its `README.md`/`RESULTS.md`), which reproduces the Go gate's request shape and match logic exactly and predicted the gate's miss set byte-for-byte -- but the Go test stays canonical. Residual misses are dominated by the codex/claude implementation frontier and a handful of documented-hard/contentious cases (the `cosine()` structured-output limit, the 2 `escalate` exemplars, compound terminal-intent, and label disputes); the 3B has a hard "example budget" where anchoring one bucket destabilizes another, so further accuracy needs a bigger brain or more fixtures, not more rules.
 Task-level actions are structural decisions: direct reply, single or parallel
 agent dispatch, pipeline invocation, interactive handoff, memory write, or
 confidence escalation. `Action.Valid` performs local structural validation
@@ -264,7 +257,7 @@ Table-driven tests with `t.Run`; `httptest` fakes for ollama; channel/router
 tests use in-memory stubs (`BudgetSource`, fake channels); `testdata/` holds
 fixtures (`routing/`, `brain/`, plus `fakeagent` once agent threads land).
 `TestRoutingAccuracy` is env-gated behind `STYX_BRAIN_IT=1` and runs the real
-local ollama brain against `testdata/brain/utterances.json`; it should be run
+local ollama brain against `testdata/brain/utterances.json` (190 labelled utterances); it should be run
 only where ollama is up and the brain model (`llama3.2:3b`) is pulled. `make test` = `go test ./...`.
 It is the **canonical** routing-accuracy gate. For fast prompt iteration only,
 `eval/promptfoo/` holds a byte-faithful promptfoo harness (dev tool, run via

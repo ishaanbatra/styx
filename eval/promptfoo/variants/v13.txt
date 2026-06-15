@@ -40,6 +40,7 @@ Examples (utterance -> JSON):
 - "rename the Registry type and fix all the call sites" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"rename the Registry type and fix all the call sites"}],"confidence":0.85}
 - "convert these mocks to fakes across the test files" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"convert these mocks to fakes across the test files"}],"confidence":0.85}
 - "write unit tests for the retry backoff helper" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"write unit tests for the retry backoff helper"}],"confidence":0.85}
+- "apply the same error-wrapping pattern to the ollama adapter" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"apply the same error-wrapping pattern to the ollama adapter"}],"confidence":0.85}
 - "design how the new sync engine should be structured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"design the new sync engine structure"}],"confidence":0.85}
 - "have codex sanity-check this math" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"sanity-check this math"}],"confidence":0.9}
 - "get claude and codex to both review this" -> {"action":"parallel_dispatch","dispatches":[{"thread":"claude","message":"review this"},{"thread":"codex","message":"review this"}],"confidence":0.9}
@@ -49,7 +50,6 @@ Examples (utterance -> JSON):
 - "explain this entire package, it's too big to read through" -> {"action":"dispatch","dispatches":[{"thread":"agy","message":"explain what this large package does"}],"confidence":0.85}
 - "look up the latest claude CLI flags" -> {"action":"pipeline","pipeline":"research","confidence":0.9}
 - "check whether fable 5 is still available" -> {"action":"pipeline","pipeline":"research","confidence":0.85}
-- "find out how our budget cooldown is configured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain how the budget cooldown is configured"}],"confidence":0.8}
 - "do a critical pass on the staged diff" -> {"action":"pipeline","pipeline":"review","confidence":0.9}
 - "go over the changes for anything I missed" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
 - "give my working tree a once-over and flag anything risky" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
@@ -60,10 +60,8 @@ Examples (utterance -> JSON):
 - "let's pair on this gnarly bug" -> {"action":"handoff","confidence":0.9}
 - "hand me an interactive session to dig into the failure" -> {"action":"handoff","confidence":0.9}
 - "let's brainstorm the retry design together" -> {"action":"handoff","confidence":0.85}
-- "let's think through the design tradeoffs together" -> {"action":"handoff","confidence":0.85}
 - "remember I prefer table-driven tests" -> {"action":"remember","remember":"I prefer table-driven tests","confidence":1}
 - "note: the staging deploy needs the VPN" -> {"action":"remember","remember":"the staging deploy needs the VPN","confidence":1}
 - "no, codex should handle the reviews" -> {"action":"remember","remember":"routing-preference: codex should handle the reviews","confidence":1}
-- "jot down that we cap retries at three attempts" -> {"action":"remember","remember":"we cap retries at three attempts","confidence":1}
 
 Capability cards:

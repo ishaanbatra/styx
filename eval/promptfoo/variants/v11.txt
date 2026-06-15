@@ -52,7 +52,7 @@ Examples (utterance -> JSON):
 - "find out how our budget cooldown is configured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain how the budget cooldown is configured"}],"confidence":0.8}
 - "do a critical pass on the staged diff" -> {"action":"pipeline","pipeline":"review","confidence":0.9}
 - "go over the changes for anything I missed" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
-- "give my working tree a once-over and flag anything risky" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
+- "give my working tree a once-over before i commit" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
 - "rebuild the codebase index, it's stale" -> {"action":"pipeline","pipeline":"intel","confidence":0.9}
 - "regenerate context.md, the index is missing some packages" -> {"action":"pipeline","pipeline":"intel","confidence":0.85}
 - "take this all the way to a PR" -> {"action":"pipeline","pipeline":"auto","confidence":0.85}
@@ -60,10 +60,8 @@ Examples (utterance -> JSON):
 - "let's pair on this gnarly bug" -> {"action":"handoff","confidence":0.9}
 - "hand me an interactive session to dig into the failure" -> {"action":"handoff","confidence":0.9}
 - "let's brainstorm the retry design together" -> {"action":"handoff","confidence":0.85}
-- "let's think through the design tradeoffs together" -> {"action":"handoff","confidence":0.85}
 - "remember I prefer table-driven tests" -> {"action":"remember","remember":"I prefer table-driven tests","confidence":1}
 - "note: the staging deploy needs the VPN" -> {"action":"remember","remember":"the staging deploy needs the VPN","confidence":1}
 - "no, codex should handle the reviews" -> {"action":"remember","remember":"routing-preference: codex should handle the reviews","confidence":1}
-- "jot down that we cap retries at three attempts" -> {"action":"remember","remember":"we cap retries at three attempts","confidence":1}
 
 Capability cards:

@@ -1,5 +1,97 @@
 # Routing-brain prompt iteration — results
 
+> **Update (2026-06-15) — codex-as-implementer rework + dataset expansion.** The
+> brain was flipped to route well-scoped implementation to **codex** (claude =
+> planner/architect/reviewer), and `testdata/brain/utterances.json` was expanded
+> **99 → 190** (91 new user-voice utterances + 8 audited `claude`→`codex` flips;
+> 4 borderline flips kept on claude). `prompt.go`/`cards.go` were reworked and
+> `variants/v7.txt` is the new shipped preamble. **The reworked preamble has now
+> been re-tuned on the 190-case gate: 83.7% (untuned) → 91.1% (173/190) on the
+> canonical Go gate, stable across two runs — see the next section.** The
+> 84.8%→96.0% numbers further below are the prior 99-case, pre-codex-policy
+> result — kept as the iteration-method reference.
+
+## 190-case re-tune (codex-as-implementer policy) — 83.7% → 91.1%
+
+**TL;DR:** after the codex-as-implementer flip and the 99→190 dataset expansion,
+the reworked-but-untuned preamble (`v7`) scored **83.7% (159/190)**. Iterating
+**few-shot examples only** (no model/dataset/code/label change, no new prose
+rules) brought the shipped preamble to **91.1% (173/190)** on the canonical Go
+gate (`TestRoutingAccuracy`), **stable across two runs with an identical 17-miss
+set**, and byte-matching the promptfoo harness exactly. Shipped prompt is
+`variants/v7.txt`, ported verbatim into `internal/brain/prompt.go`.
+
+### Numbers (190-case, faithful promptfoo == Go gate)
+
+| Variant | What changed vs the previous kept variant | Accuracy |
+|---------|-------------------------------------------|----------|
+| v7 (untuned) | codex-as-implementer cards/preamble, **not yet tuned** | **83.7%** (159/190) |
+| v8 | + **5 generalizing codex few-shot anchors** (add-col+migration, add-flag+thread, rename-sweep, mocks→fakes, write-tests) | 87.9% (167/190) |
+| v9 | v8 + ollama-stub/review/intel examples | 87.9% (167/190) — **rejected** (destabilized codex) |
+| v10 | v8 + reword test example + 1 handoff anchor | 87.9% (167/190) |
+| v11 | v10 + **reply/review/intel/auto anchors** | 90.0% (171/190) |
+| v12 | v11 + review-anchor reword (drop "before i commit") | 90.0% (171/190) |
+| v13 | v12 + budget-neutral codex probe (−find-out, +apply-pattern) | 88.9% (169/190) — **rejected** |
+| **v14** | **v12 + jot-down→remember + "think through together"→handoff** | **91.1%** (173/190) ← **shipped** |
+
+**Canonical Go gate on v14 (== shipped `v7.txt`/`prompt.go`):** `173/190 = 91%`,
+run twice, **identical 17-miss sets**; the Go-gate miss set equals the promptfoo
+miss set byte-for-byte.
+
+### What the 190-case search taught us (3B-specific, re-confirmed)
+
+1. **Examples >> prose rules, again.** Every point of the +14 came from few-shot
+   anchors; not one prose rule was added. The biggest single lever was the 5
+   codex verb-class anchors (codex miss bucket 13→5).
+2. **The 3B has a hard "example budget."** Adding anchors to one bucket
+   *deterministically* knocked over cases in another: `v9` (ollama/review/intel
+   batch) and `v13` (a budget-neutral swap that dropped the load-bearing
+   `find out how our cooldown is configured → claude` example) both regressed the
+   hard-won codex bucket and were discarded. The win came from anchoring
+   *distinct, high-confidence* buckets (reply/review/intel/auto) rather than
+   ollama, which sits adjacent to codex.
+3. **The model is deterministic at temperature 0** — a control variant's 17-miss
+   set was byte-identical across two separate runs — so collateral was
+   attributable signal, not noise. This is also why the Go gate reproduces the
+   promptfoo number and is stable across runs.
+
+### Misses fixed (untuned v7 → v14): 16
+
+7 codex policy-flip cases (provenance-columns+migration, both mocks→fakes,
+rename-ParseClaudeEvent, distill@70%, --since flag), both review novel-phrasings,
+intel-regenerate-context.md, 2 reply status questions, 2 handoff brainstorm
+cases, the jot-down→remember case, the split→parallel case, and the
+risk-tier-field claude case.
+
+### Residual 17 misses — bucketed
+
+| Bucket | Cases | Disposition |
+|--------|-------|-------------|
+| **True regressions vs untuned v7** (2) | `build…ship ollama HTTP adapter`→auto; `research…codex cli…`→research | jittery keyword casualties of the codex anchors ("ollama adapter"/"codex"); net is +14 so **left** rather than re-destabilize codex |
+| **codex/claude frontier** (6) | ship-risk-gate, per-channel-timeouts, fix-off-by-one-budget, apply-ClassifiedError, dry-run-flag, ParseClaudeEvent-tests | all want codex; the 3B reads them as architectural/systemy → claude. Won't move without collateral |
+| **model/decoding limit** (1) | `have codex double-check … cosine()` | routing is *correct* (codex); the 3B emits truncated/empty JSON on `()`. No prompt fixes it |
+| **escalate** (2) | the 2 escalate exemplars | inherently hard for a 3B (it answers confidently as research/handoff) |
+| **label dispute** (1) | `is this routing approach sound…?` | model answers `reply`; forcing claude cost ~7pts on the 99-set — **needs adjudication** |
+| **contentious / OOD** (5) | brainstorming-*skill*→claude (token clash, lands intel); compound `do…and ship it`→auto; `exa:` mcp-auth; `stub…implementation of the Channel interface`→ollama; `wanna riff…together?`→handoff | left; chasing risks the codex gains |
+
+### Labels surfaced for adjudication (not tuned to)
+
+Unchanged from the 99-case analysis, plus two new families introduced by the
+expansion: the 2 `escalate` exemplars and the compound "do X **and ship it**"
+(terminal intent = auto) are inherently hard for a 3B to disambiguate — forcing
+them regressed other cases, so they are reported, not encoded. `utterances.json`
+labels were treated as the user's fixed gate and **not** changed. Per Checkpoint
+A, the real levers beyond ~91% are a bigger brain or more/clearer fixtures, not
+more prompt rules.
+
+---
+
+## (Reference) original 99-case iteration — 84.8% → 96.0%
+
+The section below is the prior, pre-codex-policy result on the 99-utterance set.
+It is kept as the **iteration-method reference** (it is not comparable to the
+190-case numbers above — different policy and dataset).
+
 **TL;DR:** the `llama3.2:3b` routing brain went from **84.8% → 96.0%** on the
 canonical Go gate (`TestRoutingAccuracy`, 99 labeled utterances) by rewriting
 `systemPreamble` only (no model change, no dataset change, no code-logic change).
