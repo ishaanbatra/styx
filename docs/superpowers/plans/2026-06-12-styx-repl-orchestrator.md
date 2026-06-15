@@ -47,12 +47,14 @@ cmd/styx/repl.go                  replSession: turn loop, action execution, slas
 cmd/styx/repl_test.go
 testdata/fakeagent                executable shell script speaking claude stream-json
 testdata/brain/utterances.json    labeled fixture set for routing accuracy
+internal/audit/log.go             append-only per-session JSONL trail (Phase 8)
+internal/audit/log_test.go
 ```
 
 Modified files:
 
 ```
-internal/paths/paths.go           + MemoryDir(), ThreadsDir()
+internal/paths/paths.go           + MemoryDir(), ThreadsDir(), AuditDir() (Phase 8)
 internal/config/routing.go        + BrainConfig, Tiers, ChannelCap.TimeoutMinutes, defaults
 internal/budget/budget.go         + Event.Model, model column migration, ModelCount()
 internal/router/router.go         + BreakerSource, unavailable() (circuit breaker wiring)
@@ -63,6 +65,12 @@ cmd/styx/dispatch.go              defaultChannels timeout wiring, doctor verb, u
 cmd/styx/main.go                  bare `styx` -> REPL
 cmd/styx/default_routing.go       + [brain] and [tiers] sections
 cmd/styx/help.go                  document new verbs
+internal/brain/action.go          + RiskLevel, per-dispatch/action risk, schema, EffectiveRisk (Phase 8)
+internal/brain/prompt.go          + risk-setting guidance in the preamble (Phase 8)
+internal/agent/adapter.go         + DispatchSpec.ReadOnly → omit --dangerously-skip-permissions (Phase 8)
+internal/memory/store.go          + provenance columns (project/scope/confidence/last_used_at) + migration (Phase 8)
+internal/memory/recall.go         + confidence·recency decay scoring (Phase 8)
+cmd/styx/repl.go                  + ship-risk confirmation gate, memory provenance, audit wiring, /audit (Phase 8)
 ```
 
 Conventions to follow (from this codebase): table-driven tests with `t.Run`, errors wrapped with `fmt.Errorf("context: %w", err)`, `channel.ClassifiedError` for channel errors, atomic file writes via tmp+rename, `paths.EnsureDir` for directories. Run `go build ./... && go vet ./...` before every commit.
@@ -218,7 +226,7 @@ func TestBrainDefaultsAppliedWhenSectionMissing(t *testing.T) {
 	if r.Brain.FableWeeklyCap != 80 {
 		t.Errorf("default fable cap = %d, want 80", r.Brain.FableWeeklyCap)
 	}
-	if r.Tiers["fable"] != "fable" || r.Tiers["haiku"] != "haiku" {
+	if r.Tiers["fable"] != "opus" || r.Tiers["haiku"] != "haiku" {
 		t.Errorf("default tiers = %v", r.Tiers)
 	}
 }
@@ -291,7 +299,9 @@ func applyBrainDefaults(r *Routing) {
 		r.Tiers = map[string]string{}
 	}
 	for tier, model := range map[string]string{
-		"fable": "fable", "opus": "opus", "sonnet": "sonnet", "haiku": "haiku",
+		// fable -> opus: Fable 5 is suspended worldwide (2026-06-12 US export
+		// directive). Opus 4.8 is the top callable model. Restore "fable" if it returns.
+		"fable": "opus", "opus": "opus", "sonnet": "sonnet", "haiku": "haiku",
 	} {
 		if r.Tiers[tier] == "" {
 			r.Tiers[tier] = model
@@ -326,11 +336,15 @@ model                 = "qwen3:4b"
 embed_model           = "nomic-embed-text"
 confidence_threshold  = 0.5
 context_threshold_pct = 70
-fable_weekly_cap      = 80
+fable_weekly_cap      = 80   # vestigial while fable maps to opus (see [tiers] note); kept for easy restore
 
 # Tier -> claude CLI model alias. The brain emits tiers; the REPL maps them here.
+# NOTE (2026-06-12): Claude Fable 5 and Mythos 5 are suspended worldwide under a
+# US export-control directive, so the "fable" tier maps to opus until access is
+# restored. Opus 4.8 is the most capable model currently callable. Flip fable
+# back to "fable" if/when Anthropic restores it.
 [tiers]
-fable  = "fable"
+fable  = "opus"
 opus   = "opus"
 sonnet = "sonnet"
 haiku  = "haiku"
@@ -1208,7 +1222,7 @@ var Cards = []Card{
 	{
 		CLI: "claude",
 		Bin: "claude",
-		Condensed: "claude — Claude Code CLI. Models by tier: fable (deep planning, architecture, hard debugging — expensive, use sparingly), opus (complex implementation), sonnet (default implementation/review), haiku (cheap classify/distill). Best for: multi-file implementation, debugging with repo context, planning, code review. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work.",
+		Condensed: "claude — Claude Code CLI. Models by tier: opus (deep planning, architecture, hard debugging, complex implementation — the top callable tier), sonnet (default implementation/review), haiku (cheap classify/distill). Best for: multi-file implementation, debugging with repo context, planning, code review. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work. (A 'fable' tier exists for the most demanding work but is currently suspended and maps to opus — prefer opus.)",
 		ExpectedFlags: []string{"--resume", "--output-format", "--model", "--add-dir", "--dangerously-skip-permissions"},
 		ResumeProbe:   "--resume",
 	},
@@ -1273,7 +1287,7 @@ Actions:
 - remember: the user states a durable fact, decision, or preference to keep ("note this", "remember that..."). Put it in "remember". If the user is correcting a routing choice you made, prefix it with "routing-preference: ".
 - escalate: you are genuinely unsure how to route.
 
-Model tiers for claude dispatches: fable = judgment-heavy (brainstorm, architecture, planning, hard debugging). opus = complex implementation. sonnet = normal implementation, refactors, review. haiku = trivial classification.
+Model tiers for claude dispatches: opus = judgment-heavy work (brainstorm, architecture, planning, hard debugging) and complex implementation. sonnet = normal implementation, refactors, review. haiku = trivial classification. (There is also a "fable" tier for the most demanding work, but it is currently suspended and maps to opus — prefer opus.)
 Set "confidence" to your honest routing confidence (0-1). Respect routing-preference memories — they are corrections from this user.
 
 Capability cards:
@@ -1785,6 +1799,37 @@ Expected: PASS with logged accuracy ≥ 80%. If it fails, tune `systemPreamble` 
 ```bash
 git add internal/brain/ testdata/brain/
 git commit -m "test(brain): env-gated routing accuracy suite with labeled fixtures"
+```
+
+---
+
+### Checkpoint A — Dogfood the routing brain (gate before Phase 4)
+
+> Not a code task — a reality gate. The single biggest risk in this whole plan
+> is "can a 4b local brain actually route well?" Task 9 only proves the brain
+> agrees with the 22 utterances *you wrote*. Prove it on inputs you did not
+> author before building threads/REPL on top of it.
+
+- [ ] **Expand the fixture from real usage.** Add 25–40 utterances drawn from
+  how you actually talk to a dev assistant (skim recent shell history / Claude
+  Code sessions) to `testdata/brain/utterances.json`, labeling
+  `want_action`/`want_thread`/`want_pipeline` honestly *before* running the brain.
+- [ ] **Run for real and read every miss:**
+  `ollama pull qwen3:4b && STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy -v`
+  Read each `MISS` line — do not just look at the ratio.
+- [ ] **Triage misses** into: prompt-fixable (tune `systemPreamble`),
+  card-fixable (sharpen a capability card), or genuinely ambiguous (acceptable —
+  the REPL escalates low-confidence turns to haiku anyway).
+- [ ] **Decision gate.** If accuracy on the *expanded* set stays < 80% after
+  tuning, STOP and reconsider before Phase 4: raise `confidence_threshold` so
+  more turns escalate to haiku, try a larger brain model, or accept a
+  confirm-the-route UX. Record the achieved accuracy and the decision in the
+  decisions-log addendum at the end of this plan.
+- [ ] **Commit** only the expanded fixtures + any prompt/card tuning:
+
+```bash
+git add testdata/brain/ internal/brain/
+git commit -m "test(brain): expand routing fixtures from real usage; tune prompt"
 ```
 
 ---
@@ -3788,6 +3833,60 @@ func ioDiscardIfQuiet() io.Writer {
 
 (Add `"os"` to imports.)
 
+- [ ] **Step 3b: Probe model-tier availability** — a model can be pulled out from under styx even when the CLI is healthy (e.g. the 2026-06-12 worldwide suspension of Fable 5 / Mythos 5 under a US export directive). Each distinct claude `--model` alias in `[tiers]` is probed with a one-token call; an unavailable alias is flagged so the user remaps it in `routing.toml`.
+
+Append to `cmd/styx/doctor.go`:
+
+```go
+// claudeModelOK reports whether `claude --model <alias>` can serve a trivial
+// request. Used to catch models that exist in the card but are not currently
+// callable (suspended, deprecated, or absent from the user's subscription).
+func claudeModelOK(alias string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// -p one-shot, cheapest possible: a single token, permissions pre-granted.
+	cmd := exec.CommandContext(ctx, "claude", "-p", "ok",
+		"--model", alias, "--dangerously-skip-permissions")
+	return cmd.Run() == nil
+}
+
+// checkTiers probes each distinct tier->alias mapping for a callable claude
+// model. Returns false if any mapped alias is unavailable.
+func checkTiers(tiers map[string]string) bool {
+	if _, err := exec.LookPath("claude"); err != nil {
+		return true // claude absence already reported by the card loop
+	}
+	seen := map[string]bool{}
+	ok := true
+	for tier, alias := range tiers {
+		if seen[alias] {
+			continue
+		}
+		seen[alias] = true
+		if claudeModelOK(alias) {
+			fmt.Printf("✓ tier %s -> claude --model %s — callable\n", tier, alias)
+		} else {
+			fmt.Printf("✗ tier %s -> claude --model %s — NOT callable (suspended/deprecated/not on your plan); remap it in ~/.config/styx/routing.toml [tiers]\n", tier, alias)
+			ok = false
+		}
+	}
+	return ok
+}
+```
+
+Call it from `cmdDoctor` just before `return reportDoctor(healthy)`:
+
+```go
+	if !checkTiers(r.Tiers) {
+		healthy = false
+	}
+	return reportDoctor(healthy)
+```
+
+Add a test to `cmd/styx/doctor_test.go` that exercises the dedup/aggregation logic against a fake `claudeModelOK` (inject it as a package var or pass a probe func) so the suite stays CLI-free; the live probe runs only under the manual smoke test below.
+
+> Note: with the default `[tiers]` (`fable -> opus`), doctor probes `opus`, `sonnet`, `haiku` — it will not flag the suspended `fable` model because the tier no longer maps to it. If a user restores `fable = "fable"` while the suspension is in effect, doctor will correctly flag it as not callable.
+
 - [ ] **Step 4: Wire the verb** — in `cmd/styx/dispatch.go`, add to the first (no-app) switch in `dispatch`:
 
 ```go
@@ -4693,6 +4792,942 @@ git add cmd/styx/
 git commit -m "feat(repl): conversational frontend — bare styx, one-shot turns, slash commands"
 ```
 
+### Checkpoint B — Dogfood the REPL on real work (gate before hardening)
+
+> You now have a runnable `styx`. Use it for real *before* building the safety
+> layer (Phase 8) — what you observe should shape the risk gate, the audit
+> trail, and what memory needs to forget.
+
+- [ ] **Use it.** Run `styx` in the styx repo and drive one small real change
+  end to end (a tiny refactor or a doc fix) through dispatch + a pipeline.
+- [ ] **Inspect by hand afterward:**
+  - every memory row written: `sqlite3 ~/.config/styx/state/memory/styx.db 'select kind,text,source from memory'`
+  - thread state JSON under the threads dir; `/why` output; `styx budget` rows
+- [ ] **Write down the friction:** wrong routes, dispatches you did not want,
+  memories you would never want recalled again, and — critically — anything that
+  committed/pushed/opened a PR without you expecting it.
+- [ ] **Decision gate.** Feed these observations into Phase 8 scope (which
+  actions are ship-risk, what is worth auditing, what memory must decay). Record
+  the findings in the decisions-log addendum. No commit required.
+
+---
+
+## Phase 8 — Safety, provenance & trust
+
+These three tasks close the gaps a design review flagged: the REPL makes
+brain-dispatch the *default* path, which silently widens the autonomy surface
+versus today's explicit `styx auto`/`execute`. They are deliberately small and
+spec-consistent (the brain proposes; the REPL — not the model — enforces).
+Run them after Checkpoint B so the design is informed by real use.
+
+### Task 19.1: risk tiers on the Action + REPL ship-confirmation gate
+
+A coarse risk class (`read` | `edit` | `ship`) rides on every dispatch and
+action. The brain sets it; the REPL enforces it: `ship` actions
+(commit/push/PR/deploy and the `auto` pipeline) confirm with the user first,
+and `read` dispatches drop the pre-granted write permission.
+
+**Files:**
+- Modify: `internal/brain/action.go`
+- Modify: `internal/brain/prompt.go`
+- Modify: `internal/agent/adapter.go` (add `DispatchSpec.ReadOnly`; claude arg builder)
+- Modify: `cmd/styx/repl.go`
+- Test: `internal/brain/action_test.go` (append), `cmd/styx/repl_test.go` (append)
+
+- [ ] **Step 1: Write the failing tests** — append to `internal/brain/action_test.go` (add `"bytes"` to imports):
+
+```go
+func TestEffectiveRisk(t *testing.T) {
+	tests := []struct {
+		name string
+		a    Action
+		want RiskLevel
+	}{
+		{"default edit when unset", Action{Action: ActionDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "x"}}}, RiskEdit},
+		{"explicit read", Action{Action: ActionDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: RiskRead}}}, RiskRead},
+		{"max across dispatches", Action{Action: ActionParallelDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "a", Risk: RiskRead}, {Thread: "codex", Message: "b", Risk: RiskShip}}}, RiskShip},
+		{"auto pipeline is ship", Action{Action: ActionPipeline, Pipeline: "auto"}, RiskShip},
+		{"research pipeline defaults edit", Action{Action: ActionPipeline, Pipeline: "research"}, RiskEdit},
+		{"action-level ship", Action{Action: ActionHandoff, Risk: RiskShip}, RiskShip},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.EffectiveRisk(); got != tt.want {
+				t.Errorf("EffectiveRisk() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActionValidRisk(t *testing.T) {
+	good := Action{Action: ActionDispatch, Confidence: 0.7, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: RiskShip}}}
+	if !good.Valid() {
+		t.Error("valid risk rejected")
+	}
+	bad := Action{Action: ActionDispatch, Confidence: 0.7, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: "nuke"}}}
+	if bad.Valid() {
+		t.Error("invalid risk accepted")
+	}
+}
+
+func TestRiskInSchema(t *testing.T) {
+	if !bytes.Contains(ActionSchema, []byte(`"risk"`)) {
+		t.Error("ActionSchema missing risk property")
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/brain/ -run 'TestEffectiveRisk|TestActionValidRisk|TestRiskInSchema' -v`
+Expected: FAIL — `undefined: RiskLevel`, `EffectiveRisk`
+
+- [ ] **Step 3: Implement risk in `internal/brain/action.go`**
+
+Add the type and constants near `ActionType`:
+
+```go
+// RiskLevel is the coarse risk class of an action. The brain proposes it; the
+// REPL enforces it. Default (empty) is treated as edit — never silently ship.
+type RiskLevel string
+
+const (
+	RiskRead RiskLevel = "read" // no writes: research, explain, review, status
+	RiskEdit RiskLevel = "edit" // edits files in an interruptible thread (default)
+	RiskShip RiskLevel = "ship" // commit/push/PR/deploy — confirm first
+)
+```
+
+Add `Risk` to both `Dispatch` and `Action`:
+
+```go
+type Dispatch struct {
+	Thread     string    `json:"thread"`
+	Model      string    `json:"model,omitempty"`
+	Message    string    `json:"message"`
+	CLIOptions []string  `json:"cli_options,omitempty"`
+	Rationale  string    `json:"rationale,omitempty"`
+	Risk       RiskLevel `json:"risk,omitempty"`
+}
+
+type Action struct {
+	Action     ActionType `json:"action"`
+	Dispatches []Dispatch `json:"dispatches,omitempty"`
+	Pipeline   string     `json:"pipeline,omitempty"`
+	Reply      string     `json:"reply,omitempty"`
+	Remember   string     `json:"remember,omitempty"`
+	Risk       RiskLevel  `json:"risk,omitempty"`
+	Confidence float64    `json:"confidence"`
+}
+```
+
+Add helpers and validation:
+
+```go
+func validRisk(r RiskLevel) bool {
+	switch r {
+	case "", RiskRead, RiskEdit, RiskShip:
+		return true
+	default:
+		return false
+	}
+}
+
+func riskRank(r RiskLevel) int {
+	switch r {
+	case RiskRead:
+		return 1
+	case RiskEdit:
+		return 2
+	case RiskShip:
+		return 3
+	default:
+		return 0
+	}
+}
+
+// EffectiveRisk returns the highest risk class implied by the action,
+// defaulting to edit. The `auto` pipeline can commit/push/PR, so it is always
+// ship-class regardless of what the model claimed.
+func (a Action) EffectiveRisk() RiskLevel {
+	r := a.Risk
+	for _, d := range a.Dispatches {
+		if riskRank(d.Risk) > riskRank(r) {
+			r = d.Risk
+		}
+	}
+	if a.Action == ActionPipeline && a.Pipeline == "auto" && riskRank(RiskShip) > riskRank(r) {
+		r = RiskShip
+	}
+	if r == "" {
+		return RiskEdit
+	}
+	return r
+}
+```
+
+In `Valid()`, reject unknown risk values. Add at the top of the method:
+
+```go
+	if !validRisk(a.Risk) {
+		return false
+	}
+```
+
+and inside the dispatch loop, extend the guard:
+
+```go
+		for _, d := range a.Dispatches {
+			if !validThreads[d.Thread] || d.Message == "" || !validRisk(d.Risk) {
+				return false
+			}
+		}
+```
+
+In `ActionSchema`, add a `risk` enum to the dispatch item properties and to the
+top-level properties (both: `"risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}`).
+
+- [ ] **Step 4: Teach the brain to set risk** — in `internal/brain/prompt.go`, insert into `systemPreamble` just before the `Capability cards:` line:
+
+```
+Risk: set "risk" on each dispatch (and on pipeline/handoff actions) to "read" (no writes — research, explain, review, status), "edit" (modifies files; the default), or "ship" (commits, pushes, opens PRs, deploys). When unsure, choose "edit". styx confirms with the user before any "ship" action, so never use "ship" to mean "important".
+```
+
+- [ ] **Step 5: Read-class permission drop (adapter)** — add `ReadOnly bool` to `agent.DispatchSpec`, thread it through `Manager.Dispatch` → runner, and in the claude arg builder (Task 11) append the write-permission flag conditionally. Extract the builder if needed so it is unit-testable:
+
+```go
+// claudeArgs builds the headless claude invocation. Read-only turns omit the
+// pre-granted write permission.
+func claudeArgs(sessionID, model, msg string, extra []string, readOnly bool) []string {
+	args := []string{ /* --resume sessionID, --model model, extra, ... as in Task 11 */ }
+	args = append(args, "-p", msg, "--output-format", "stream-json", "--verbose")
+	if !readOnly {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	return args
+}
+```
+
+Append a test to `internal/agent/adapter_test.go`:
+
+```go
+func TestClaudeArgsReadOnlyDropsSkipPermissions(t *testing.T) {
+	rw := claudeArgs("s", "sonnet", "do it", nil, false)
+	if !containsArg(rw, "--dangerously-skip-permissions") {
+		t.Error("read-write dispatch should pre-grant permissions")
+	}
+	ro := claudeArgs("s", "sonnet", "explain", nil, true)
+	if containsArg(ro, "--dangerously-skip-permissions") {
+		t.Error("read-only dispatch must NOT pre-grant permissions")
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
+}
+```
+
+- [ ] **Step 6: Enforce in the REPL** — in `cmd/styx/repl.go`, add a field to `replSession`:
+
+```go
+	assumeYes bool // --yes / non-interactive: skip ship-risk confirmations
+```
+
+Gate at the very top of `execute`:
+
+```go
+	if act.EffectiveRisk() == brain.RiskShip && !s.confirmRisk(act) {
+		s.println("◆ cancelled — ship-risk action declined")
+		s.pushRecent(utterance, "(cancelled: ship-risk)")
+		return nil
+	}
+```
+
+Set `ReadOnly` when dispatching (in `runOneDispatch`, the `mgr.Dispatch` call):
+
+```go
+		Extra: d.CLIOptions, ReadOnly: d.Risk == brain.RiskRead,
+```
+
+Add the helpers:
+
+```go
+func (s *replSession) confirmRisk(act brain.Action) bool {
+	if s.assumeYes {
+		return true
+	}
+	s.print(fmt.Sprintf("⚠ this will %s — proceed? [y/N]: ", riskSummary(act)))
+	line, err := s.in.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func riskSummary(act brain.Action) string {
+	if act.Action == brain.ActionPipeline {
+		return "run the " + act.Pipeline + " pipeline (may commit/push/open a PR)"
+	}
+	return "perform a ship-risk action (commit/push/deploy)"
+}
+```
+
+- [ ] **Step 7: Write the REPL gate tests** — append to `cmd/styx/repl_test.go`:
+
+```go
+func TestShipRiskConfirmationDeclined(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionPipeline, Pipeline: "auto", Confidence: 0.9}}}
+	s, out := newTestSession(t, b, "n\n")
+	ranAuto := false
+	s.pipelines = map[string]func(ctx context.Context, arg string) error{
+		"auto": func(ctx context.Context, _ string) error { ranAuto = true; return nil },
+	}
+	if err := s.turn(context.Background(), "ship the rate limiting feature"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	if ranAuto {
+		t.Error("auto pipeline ran despite declined ship-risk confirmation")
+	}
+	if !strings.Contains(out.String(), "cancelled") {
+		t.Errorf("expected cancellation notice:\n%s", out.String())
+	}
+}
+
+func TestShipRiskAutoApproved(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionPipeline, Pipeline: "auto", Confidence: 0.9}}}
+	s, _ := newTestSession(t, b, "")
+	s.assumeYes = true
+	ranAuto := false
+	s.pipelines = map[string]func(ctx context.Context, arg string) error{
+		"auto": func(ctx context.Context, _ string) error { ranAuto = true; return nil },
+	}
+	if err := s.turn(context.Background(), "ship it"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	if !ranAuto {
+		t.Error("auto pipeline did not run under assumeYes")
+	}
+}
+```
+
+- [ ] **Step 8: Run and commit**
+
+Run: `go build ./... && go vet ./... && go test ./internal/brain/ ./internal/agent/ ./cmd/styx/`
+Expected: PASS
+
+```bash
+git add internal/brain/ internal/agent/ cmd/styx/repl.go cmd/styx/repl_test.go
+git commit -m "feat(safety): risk tiers on actions; REPL confirms ship-risk, read drops write perms"
+```
+
+### Task 19.2: memory provenance & decay
+
+Add `project`, `scope`, and `confidence` to memory items, and weight recall by
+confidence × recency so a one-off routing correction fades instead of
+overfitting routing forever.
+
+**Files:**
+- Modify: `internal/memory/store.go`
+- Modify: `internal/memory/recall.go`
+- Modify: `cmd/styx/repl.go` (`saveMemoryText`, `renderHits`)
+- Test: `internal/memory/store_test.go` (append), `internal/memory/recall_test.go` (append), `cmd/styx/repl_test.go` (append)
+
+- [ ] **Step 1: Write the failing tests** — append to `internal/memory/store_test.go`:
+
+```go
+func TestStoreProvenanceRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if _, err := s.Add(ctx, Item{
+		Kind: KindRoutingPreference, Text: "codex for reviews",
+		Project: "styx", Scope: "reviews", Confidence: 0.6, Embedding: []float32{0.1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.All(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items", len(items))
+	}
+	it := items[0]
+	if it.Project != "styx" || it.Scope != "reviews" || it.Confidence != 0.6 {
+		t.Errorf("provenance round-trip = %+v", it)
+	}
+}
+```
+
+and to `internal/memory/recall_test.go` (add `"math"` and `"time"` to imports):
+
+```go
+func TestDecayedScore(t *testing.T) {
+	base := decayedScore(1.0, 1.0, 0)
+	older := decayedScore(1.0, 1.0, recallHalfLife)
+	lowConf := decayedScore(1.0, 0.5, 0)
+	if base <= older {
+		t.Errorf("older memory not decayed: base=%v older=%v", base, older)
+	}
+	if math.Abs(older-0.5) > 1e-9 {
+		t.Errorf("half-life decay = %v, want ~0.5", older)
+	}
+	if math.Abs(lowConf-0.5) > 1e-9 {
+		t.Errorf("confidence weighting = %v, want 0.5", lowConf)
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/memory/ -run 'TestStoreProvenance|TestDecayedScore' -v`
+Expected: FAIL — unknown `Item` fields / `undefined: decayedScore`
+
+- [ ] **Step 3: Implement provenance in `internal/memory/store.go`**
+
+Extend `Item`:
+
+```go
+type Item struct {
+	ID         int64
+	Kind       Kind
+	Text       string
+	Source     string
+	Project    string    // owning project ("" = global)
+	Scope      string    // optional applicability hint, e.g. "reviews" or "general"
+	Confidence float64   // 0..1; explicit facts high, one-off corrections low
+	Embedding  []float32
+	CreatedAt  time.Time
+	LastUsedAt time.Time // bumped on recall; reserved for future eviction
+}
+```
+
+Update `schema` to the new columns (fresh DBs):
+
+```go
+const schema = `
+CREATE TABLE IF NOT EXISTS memory (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT    NOT NULL,
+    text         TEXT    NOT NULL,
+    source       TEXT    NOT NULL DEFAULT '',
+    project      TEXT    NOT NULL DEFAULT '',
+    scope        TEXT    NOT NULL DEFAULT '',
+    confidence   REAL    NOT NULL DEFAULT 1,
+    embedding    BLOB    NOT NULL,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL DEFAULT 0
+);
+`
+```
+
+Add a migration for DBs created by Task 3's earlier schema (mirrors the budget
+DB's model-column migration) and call it from `Open` after the schema exec:
+
+```go
+// migrate adds provenance columns to memory DBs created before they existed.
+func migrate(db *sql.DB) error {
+	want := map[string]string{
+		"project":      "TEXT NOT NULL DEFAULT ''",
+		"scope":        "TEXT NOT NULL DEFAULT ''",
+		"confidence":   "REAL NOT NULL DEFAULT 1",
+		"last_used_at": "INTEGER NOT NULL DEFAULT 0",
+	}
+	rows, err := db.Query(`PRAGMA table_info(memory)`)
+	if err != nil {
+		return fmt.Errorf("inspect memory schema: %w", err)
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan memory schema: %w", err)
+		}
+		have[name] = true
+	}
+	rows.Close()
+	for name, def := range want {
+		if !have[name] {
+			if _, err := db.Exec("ALTER TABLE memory ADD COLUMN " + name + " " + def); err != nil {
+				return fmt.Errorf("add memory column %s: %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+```
+
+Update `Add` (default confidence to 1, insert the new columns) and `All`
+(select and scan them). `Add`:
+
+```go
+func (s *Store) Add(ctx context.Context, it Item) (int64, error) {
+	if it.Confidence == 0 {
+		it.Confidence = 1
+	}
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO memory (kind, text, source, project, scope, confidence, embedding, created_at, last_used_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(it.Kind), it.Text, it.Source, it.Project, it.Scope, it.Confidence,
+		encodeVec(it.Embedding), time.Now().Unix(), 0)
+	if err != nil {
+		return 0, fmt.Errorf("insert memory item: %w", err)
+	}
+	return res.LastInsertId()
+}
+```
+
+`All` selects `id, kind, text, source, project, scope, confidence, embedding, created_at, last_used_at`
+and scans the new fields (decode `last_used_at` via `time.Unix`, treating 0 as zero time).
+
+- [ ] **Step 4: Implement decay in `internal/memory/recall.go`** (add `"time"` to imports):
+
+```go
+// recallHalfLife is how fast an item's recall weight halves with age — old
+// memories (and low-confidence ones) lose to fresh, certain ones.
+const recallHalfLife = 90 * 24 * time.Hour
+
+// decayedScore weights raw cosine similarity by confidence and recency.
+func decayedScore(cos, confidence float64, age time.Duration) float64 {
+	if confidence <= 0 {
+		confidence = 1
+	}
+	rec := math.Pow(0.5, float64(age)/float64(recallHalfLife))
+	return cos * confidence * rec
+}
+```
+
+In `Recall`, build each hit with the decayed score:
+
+```go
+		for _, it := range items {
+			cos := cosine(qv, it.Embedding)
+			score := decayedScore(cos, it.Confidence, time.Since(it.CreatedAt))
+			hits = append(hits, Hit{Item: it, Score: score})
+		}
+```
+
+(Task 5's `TestRecallTopKAcrossStores` still passes: items are added with
+default confidence 1 and ~0 age, so decay ≈ 1 and the ranking is unchanged.)
+
+- [ ] **Step 5: Populate provenance at write sites** — in `cmd/styx/repl.go`, rewrite `saveMemoryText` and `renderHits`:
+
+```go
+func (s *replSession) saveMemoryText(ctx context.Context, text string) error {
+	kind := memory.KindFact
+	scope := "general"
+	confidence := 1.0
+	if rest, ok := strings.CutPrefix(text, "routing-preference:"); ok {
+		kind = memory.KindRoutingPreference
+		// One-off corrections start low and decay; the brain only leans on them
+		// when they recur. An optional "scope: <x>" hint narrows them.
+		confidence = 0.6
+		scope = parseScope(rest)
+	}
+	vec, err := s.emb.Embed(ctx, text)
+	if err != nil {
+		return fmt.Errorf("embed memory: %w", err)
+	}
+	if _, err := s.mem.Add(ctx, memory.Item{
+		Kind: kind, Text: text, Source: "repl",
+		Project: s.proj.Name, Scope: scope, Confidence: confidence, Embedding: vec,
+	}); err != nil {
+		return fmt.Errorf("save memory: %w", err)
+	}
+	s.println("◆ remembered")
+	return nil
+}
+
+// parseScope pulls an optional "scope: <tag>" hint out of a routing preference
+// ("...scope: reviews"); defaults to "general".
+func parseScope(s string) string {
+	i := strings.Index(s, "scope:")
+	if i < 0 {
+		return "general"
+	}
+	tag := strings.TrimSpace(s[i+len("scope:"):])
+	if j := strings.IndexAny(tag, ".\n;"); j >= 0 {
+		tag = tag[:j]
+	}
+	if tag = strings.TrimSpace(tag); tag == "" {
+		return "general"
+	}
+	return tag
+}
+
+func renderHits(hits []memory.Hit) []string {
+	var out []string
+	for _, h := range hits {
+		meta := string(h.Item.Kind)
+		if h.Item.Scope != "" && h.Item.Scope != "general" {
+			meta += "; scope " + h.Item.Scope
+		}
+		if h.Item.Confidence > 0 && h.Item.Confidence < 1 {
+			meta += fmt.Sprintf("; conf %.1f", h.Item.Confidence)
+		}
+		out = append(out, fmt.Sprintf("[%s] %s", meta, h.Item.Text))
+	}
+	return out
+}
+```
+
+Also set provenance on the **distillation** write (Task 13): `Project: proj.Name,
+Scope: "thread", Confidence: 0.8`, and on session-end summaries (Task 19):
+`Confidence: 0.9`. (Three-field additions; no structural change.)
+
+- [ ] **Step 6: Test the write path** — append to `cmd/styx/repl_test.go`:
+
+```go
+func TestRoutingPreferenceIsLowConfidenceAndScoped(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionRemember,
+		Remember: "routing-preference: codex handles algorithm reviews; scope: reviews", Confidence: 1}}}
+	s, _ := newTestSession(t, b, "")
+	if err := s.turn(context.Background(), "no, codex should do reviews"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	items, err := s.mem.All(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items", len(items))
+	}
+	it := items[0]
+	if it.Kind != memory.KindRoutingPreference {
+		t.Errorf("kind = %s", it.Kind)
+	}
+	if it.Confidence >= 1 {
+		t.Errorf("routing-pref confidence = %v, want < 1", it.Confidence)
+	}
+	if it.Scope != "reviews" {
+		t.Errorf("scope = %q, want reviews", it.Scope)
+	}
+}
+```
+
+- [ ] **Step 7: Run and commit**
+
+Run: `go build ./... && go vet ./... && go test ./internal/memory/ ./cmd/styx/`
+Expected: PASS (including Task 3/5 tests — provenance is additive)
+
+```bash
+git add internal/memory/ cmd/styx/repl.go cmd/styx/repl_test.go
+git commit -m "feat(memory): provenance (project/scope/confidence) + confidence·recency decay"
+```
+
+### Task 19.3: per-session audit trail + /audit
+
+An append-only JSONL log per session records every brain decision, dispatch,
+pipeline run, memory write, and risk prompt, so the user can always answer
+"what did you do?" — important now that the REPL can commit/push/PR.
+
+**Files:**
+- Create: `internal/audit/log.go`, `internal/audit/log_test.go`
+- Modify: `internal/paths/paths.go` (`AuditDir`), `internal/paths/paths_test.go`
+- Modify: `cmd/styx/repl.go` (wire logger, `/audit`), `cmd/styx/help.go`
+- Test: `cmd/styx/repl_test.go` (append)
+
+- [ ] **Step 1: Write the failing tests** — create `internal/audit/log_test.go`:
+
+```go
+package audit
+
+import (
+	"path/filepath"
+	"testing"
+)
+
+func TestAppendAndTail(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.jsonl")
+	l, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	for i := 0; i < 3; i++ {
+		if err := l.Append(Record{Kind: KindTurn, Detail: "u"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := l.Append(Record{Kind: KindDecision, Detail: "dispatch"}); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := l.Tail(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 {
+		t.Fatalf("tail = %d, want 2", len(recs))
+	}
+	if recs[1].Kind != KindDecision || recs[1].Detail != "dispatch" {
+		t.Errorf("last record = %+v", recs[1])
+	}
+	if recs[0].At.IsZero() {
+		t.Error("At not stamped")
+	}
+}
+```
+
+and append to `internal/paths/paths_test.go`:
+
+```go
+func TestAuditDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
+	ad, err := AuditDir()
+	if err != nil {
+		t.Fatalf("AuditDir: %v", err)
+	}
+	if ad != "/tmp/xdg-test/styx/state/audit" {
+		t.Errorf("AuditDir = %q, want /tmp/xdg-test/styx/state/audit", ad)
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `go test ./internal/audit/ ./internal/paths/ -run 'TestAppendAndTail|TestAuditDir' -v`
+Expected: FAIL — package/symbol missing
+
+- [ ] **Step 3: Implement `internal/audit/log.go`**
+
+```go
+// Package audit records an append-only, per-session trail of everything styx
+// did — brain decisions, dispatches, pipeline runs, memory writes, and risk
+// prompts — so the user can always answer "what did you do, and why?".
+package audit
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sync"
+	"time"
+)
+
+// Kind labels an audit record.
+type Kind string
+
+const (
+	KindTurn        Kind = "turn"
+	KindDecision    Kind = "decision"
+	KindDispatch    Kind = "dispatch"
+	KindPipeline    Kind = "pipeline"
+	KindMemoryWrite Kind = "memory_write"
+	KindRiskPrompt  Kind = "risk_prompt"
+	KindError       Kind = "error"
+)
+
+// Record is one audited event.
+type Record struct {
+	At     time.Time         `json:"at"`
+	Kind   Kind              `json:"kind"`
+	Detail string            `json:"detail"`
+	Meta   map[string]string `json:"meta,omitempty"`
+}
+
+// Logger appends records to one session's JSONL file.
+type Logger struct {
+	mu   sync.Mutex
+	f    *os.File
+	path string
+}
+
+// Open opens (creating if needed) the session log at path in append mode.
+func Open(path string) (*Logger, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open audit log %s: %w", path, err)
+	}
+	return &Logger{f: f, path: path}, nil
+}
+
+// Append writes one record (stamping the time if unset).
+func (l *Logger) Append(r Record) error {
+	if r.At.IsZero() {
+		r.At = time.Now()
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("marshal audit record: %w", err)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, err := l.f.Write(append(b, '\n')); err != nil {
+		return fmt.Errorf("write audit record: %w", err)
+	}
+	return nil
+}
+
+// Tail returns the last n records in chronological order.
+func (l *Logger) Tail(n int) ([]Record, error) {
+	data, err := os.ReadFile(l.path)
+	if err != nil {
+		return nil, fmt.Errorf("read audit log: %w", err)
+	}
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	var recs []Record
+	for sc.Scan() {
+		if len(bytes.TrimSpace(sc.Bytes())) == 0 {
+			continue
+		}
+		var r Record
+		if err := json.Unmarshal(sc.Bytes(), &r); err != nil {
+			continue // tolerate a torn final line
+		}
+		recs = append(recs, r)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("scan audit log: %w", err)
+	}
+	if len(recs) > n {
+		recs = recs[len(recs)-n:]
+	}
+	return recs, nil
+}
+
+// Close releases the file handle.
+func (l *Logger) Close() error { return l.f.Close() }
+```
+
+Add `AuditDir` to `internal/paths/paths.go` (next to `MemoryDir`):
+
+```go
+// AuditDir returns the directory holding per-project session audit logs.
+func AuditDir() (string, error) {
+	s, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s, "audit"), nil
+}
+```
+
+- [ ] **Step 4: Wire it into the REPL** — in `cmd/styx/repl.go`:
+
+Add a field to `replSession`:
+
+```go
+	audit *audit.Logger
+```
+
+In `newREPLSession`, after the threads load, open a per-session log and fold it
+into `cleanup`:
+
+```go
+	auditDir, err := paths.AuditDir()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	projAudit := filepath.Join(auditDir, proj.Name)
+	if err := paths.EnsureDir(projAudit); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	al, err := audit.Open(filepath.Join(projAudit, time.Now().Format("20060102-150405")+".jsonl"))
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	// extend cleanup to also close the audit log
+```
+
+Add a helper and emit records along the turn path:
+
+```go
+func (s *replSession) auditf(kind audit.Kind, detail string, meta map[string]string) {
+	if s.audit == nil {
+		return
+	}
+	_ = s.audit.Append(audit.Record{Kind: kind, Detail: detail, Meta: meta})
+}
+```
+
+- in `turn`: `s.auditf(audit.KindTurn, utterance, nil)` on entry, and after a
+  successful decision `s.auditf(audit.KindDecision, string(act.Action), map[string]string{"risk": string(act.EffectiveRisk()), "confidence": fmt.Sprintf("%.2f", act.Confidence)})`.
+- in `runOneDispatch`: `s.auditf(audit.KindDispatch, d.Thread+"·"+model, map[string]string{"msg": d.Message})`.
+- in the pipeline branch of `execute`: `s.auditf(audit.KindPipeline, act.Pipeline, nil)`.
+- in `saveMemoryText`: `s.auditf(audit.KindMemoryWrite, text, nil)` after a successful add.
+- in the ship-risk gate (Task 19.1): `s.auditf(audit.KindRiskPrompt, riskSummary(act), map[string]string{"result": "declined"})`.
+
+Add the `/audit` slash command (in `slash`):
+
+```go
+	case "/audit":
+		recs, err := s.audit.Tail(20)
+		if err != nil {
+			s.println("(audit unavailable: " + err.Error() + ")")
+			return false
+		}
+		for _, r := range recs {
+			s.println(fmt.Sprintf("%s  %-12s %s", r.At.Format("15:04:05"), r.Kind, r.Detail))
+		}
+		return false
+```
+
+Add `/audit` to the banner, the unknown-command hint, and `cmd/styx/help.go`.
+
+- [ ] **Step 5: Wire the test helper** — in `newTestSession` (the Task 18 helper), give the session an audit logger so REPL tests exercise the trail:
+
+```go
+	al, _ := audit.Open(filepath.Join(t.TempDir(), "audit.jsonl"))
+	s.audit = al
+	t.Cleanup(func() { al.Close() })
+```
+
+Append the test to `cmd/styx/repl_test.go`:
+
+```go
+func TestAuditTrail(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionReply, Reply: "hi", Confidence: 0.9}}}
+	s, out := newTestSession(t, b, "")
+	if err := s.turn(context.Background(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if quit := s.slash("/audit"); quit {
+		t.Fatal("/audit should not quit")
+	}
+	got := out.String()
+	for _, want := range []string{"turn", "decision"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("/audit output missing %q:\n%s", want, got)
+		}
+	}
+}
+```
+
+- [ ] **Step 6: Run and commit**
+
+Run: `go build ./... && go vet ./... && go test ./internal/audit/ ./internal/paths/ ./cmd/styx/`
+Expected: PASS
+
+```bash
+git add internal/audit/ internal/paths/ cmd/styx/
+git commit -m "feat(audit): append-only per-session trail and /audit command"
+```
+
+---
+
 ### Task 20: E2E scripted REPL session + final verification
 
 **Files:**
@@ -4807,9 +5842,73 @@ Checked against `2026-06-12-styx-repl-orchestrator-design.md`:
 - Verb mapping: doctor new (Task 17); slash commands (Task 19); build/execute unchanged (absorbed = handoff covers the interactive case; verbs still work).
 - Reliability: circuit breaker wired (Task 15), subprocess timeouts (Task 15), silent swallows surfaced (Task 16), real token accounting from stream-json (Tasks 12–14; ollama keeps len/4 estimates per spec).
 - Testing strategy: fake agent CLI (Task 12), brain behind interface + scripted fake (Tasks 8, 18), env-gated ollama integration with labeled fixtures (Task 9), deterministic memory tests (Tasks 3–5), scripted E2E (Task 20).
+- Safety (Phase 8): coarse risk class on every action (read/edit/ship); ship-class confirmed before running, read-class drops pre-granted write permissions → Task 19.1.
+- Trust (Phase 8): memory provenance (project/scope/confidence) + confidence·recency decay so one-off routing corrections fade instead of overfitting → Task 19.2.
+- Auditability (Phase 8): append-only per-session JSONL trail + `/audit` ("what did you do?") → Task 19.3.
+- Reality gates: dogfood the brain before Phase 4 (Checkpoint A) and the REPL before hardening (Checkpoint B) — the plan is no longer 20 linear tasks with no real-use checkpoint.
 - Out of scope respected: no long-lived agent processes, no styx tool loop, no token-level cost optimization, ollama never routes implementation work (encoded in its capability card).
 
 Known deviations (intentional, called out inline):
 - codex runs as a plain adapter in v1 (no stream-json/resume); doctor reports its mode. Upgrading it to native `codex exec resume` is a follow-up once probed flags are verified against the installed CLI.
 - Interactive handoff ingest is best-effort because claude's interactive `--resume` forks the session (noted in `Manager.Handoff`).
-- Fixture set starts at 22 labeled utterances, not 50 — the accuracy test is ratio-based; extend the JSON freely.
+- Fixture set starts at 22 labeled utterances, not 50 — the accuracy test is ratio-based; extend the JSON freely (Checkpoint A makes this mandatory before Phase 4).
+- Read-class permission drop (Task 19.1) depends on the claude adapter honoring `DispatchSpec.ReadOnly`; codex/agy keep their existing permission posture until probed (doctor reports mode). The ship-confirmation gate is enforced regardless of adapter.
+
+---
+
+## Decisions-log addendum (2026-06-14)
+
+Added after design-review feedback on this plan. The review pushed to recenter
+styx as a general task/policy/tool operating system; we kept the spec's thinner
+thesis (**the channels are the agents; styx aims them**) and folded in only the
+in-scope safety/trust gaps it correctly surfaced.
+
+**Accepted (now Phase 8 + Checkpoints A/B):**
+
+1. **Dogfood checkpoints.** The plan was 20 linear TDD tasks with no "use it for
+   real" gate, yet the brain's real-world routing quality is the project's #1
+   risk. Checkpoint A gates Phase 4 on expanded-fixture routing accuracy;
+   Checkpoint B dogfoods the REPL before the safety layer is designed.
+2. **Coarse risk tiers (read/edit/ship), brain-proposed and REPL-enforced.** The
+   REPL makes brain-dispatch the *default* path, widening the autonomy surface
+   versus today's explicit `styx auto`/`execute`. Ship-class actions now confirm
+   first; read-class drops the pre-granted write permission.
+3. **Memory provenance + decay.** Distillations and routing corrections are
+   auto-recalled into every turn; without confidence/scope/decay a single wrong
+   correction overfits routing permanently.
+4. **Per-session audit trail (`/audit`).** styx can commit/push/PR via handoff
+   and the auto pipeline; the user must be able to ask "what did you do?".
+
+**Explicitly declined (out of scope for v1 — recorded so they are not
+re-litigated):**
+
+- **A first-class `internal/task` state machine** (plans/steps/artifacts/
+  verification). The channel CLIs already own planning, execution, and
+  verification; styx re-implementing that loop is precisely the trap the spec
+  avoids ("styx never grows its own agentic tool loop").
+- **A generalized external-tool registry** (calendar/email/browser/etc.). styx
+  is a conversational dev-work orchestrator, not a general assistant; "no styx
+  tool loop" stands. If the scope ever widens, that is a new spec, not a patch
+  to this plan.
+- **A standalone task-completion eval harness** beyond routing accuracy. The
+  dogfood gates (A/B) are the cheap substitute; per-feature unit tests (e.g. the
+  risk gate's) cover the rest at v1 scale.
+
+**Model availability — the "fable" tier (2026-06-12):**
+
+Anthropic suspended **Claude Fable 5 and Mythos 5 worldwide** on 2026-06-12 to
+comply with a US government export-control directive (no public access for any
+user, including paying enterprises). The original spec/plan named `fable` as the
+premium judgment tier; that tier is currently uncallable.
+
+Resolution (applied across this plan): the tier→alias indirection in
+`routing.toml` absorbs this without a structural change. `[tiers] fable` now
+maps to `opus` (Opus 4.8 is the most capable model currently callable);
+`applyBrainDefaults`, the seeded `default_routing.toml`, the brain preamble, and
+the claude capability card all prefer `opus` and describe `fable` as suspended.
+The `fable_weekly_cap` / `fableHot` degradation is left in place but vestigial
+(you cannot run hot on a model you can't call) — kept so the tier is a one-line
+restore if Anthropic brings Fable back. Task 17's `doctor` now probes each
+distinct tier alias for callability (Step 3b), so a future suspension — or a
+restored `fable = "fable"` during an ongoing one — is surfaced automatically
+rather than failing mid-dispatch.
