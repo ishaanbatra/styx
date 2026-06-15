@@ -101,6 +101,15 @@ the planned local ollama routing brain and memory embedding model; `Tiers` maps
 brain tier names to claude CLI model aliases, with `fable` currently mapped to
 `opus` while the fable tier is suspended.
 
+## Brain (internal/brain)
+
+The REPL brain emits schema-constrained `Action` JSON from a local ollama model.
+Task-level actions are structural decisions: direct reply, single or parallel
+agent dispatch, pipeline invocation, interactive handoff, memory write, or
+confidence escalation. `Action.Valid` performs local structural validation
+before the REPL trusts a model response; `ActionSchema` is sent to ollama as the
+structured-output format.
+
 ## Budget (internal/budget)
 
 Append-only SQLite log at `~/.config/styx/state/usage.db` (`usage` table:
@@ -206,10 +215,10 @@ fixtures (`routing/`, plus `fakeagent` + `brain/` once the REPL plan lands).
 
 ## Planned work (not yet built)
 
-The REPL orchestrator — persistent conversational `styx` with an ollama
-routing brain, durable agent threads (per-turn `--resume`), and embedding
-memory — is specced in `docs/superpowers/specs/2026-06-12-styx-repl-
-orchestrator-design.md` and planned task-by-task in `docs/superpowers/plans/
-2026-06-12-styx-repl-orchestrator.md`. It adds `internal/brain`,
-`internal/agent`, `internal/memory`, `cmd/styx/repl.go`, and `styx doctor`.
-When those land, add sections here and update the overview diagram.
+The remaining REPL orchestrator work — persistent conversational `styx` with
+durable agent threads (per-turn `--resume`), frontend loop, and `styx doctor`
+— is specced in `docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-
+design.md` and planned task-by-task in `docs/superpowers/plans/
+2026-06-12-styx-repl-orchestrator.md`. It still needs `internal/agent`,
+`cmd/styx/repl.go`, and `styx doctor`. When those land, add sections here and
+update the overview diagram.
