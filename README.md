@@ -22,6 +22,13 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 
 ## Verbs
 
+### Conversational
+
+| Verb | What it does |
+|---|---|
+| `styx` | Open the conversational REPL in the current project |
+| `styx "<anything>"` | Run one brain-routed turn, then exit |
+
 ### Deep research + planning
 
 | Verb | What it does |
@@ -64,6 +71,7 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 | `critique <text>` | Devil's-advocate critique (Codex) |
 | `check` | Dashboard: git status, latest briefs/plans |
 | `budget` | Per-channel usage summary |
+| `doctor [--fix]` | Preflight CLIs, capability-card drift, callable Claude tiers, and required Ollama models |
 | `route --explain <verb> "..."` | Why did styx pick that channel? |
 | `project ls/add/rm/rename` | Manage project registry |
 | `migrate-secrets` | Move env-var secrets to macOS Keychain |

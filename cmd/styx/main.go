@@ -26,7 +26,23 @@ func main() {
 	rest, quiet, verbose := parseGlobalFlags(os.Args[1:])
 
 	if len(rest) == 0 {
-		printHelp()
+		// Bare `styx` opens the REPL in the current project.
+		globalQuiet = quiet
+		globalVerbose = verbose
+		if err := ensureFirstRun(); err != nil {
+			fmt.Fprintf(os.Stderr, "styx: setup error: %v\n", err)
+			os.Exit(1)
+		}
+		a, err := loadApp()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "styx: %v\n", err)
+			os.Exit(1)
+		}
+		defer a.tracker.Close()
+		if err := cmdREPL(a); err != nil {
+			fmt.Fprintf(os.Stderr, "styx: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 

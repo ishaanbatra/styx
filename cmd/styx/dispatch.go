@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
@@ -170,6 +171,8 @@ func dispatch(verb string, args []string) error {
 		return cmdRoute(args)
 	case "budget":
 		return cmdBudget(args)
+	case "doctor":
+		return cmdDoctor(args)
 	case "check":
 		return cmdCheck(args)
 	case "deep-research":
@@ -204,7 +207,10 @@ func dispatch(verb string, args []string) error {
 	case "grunt", "think", "explain", "summarize", "critique":
 		return cmdOneShot(a, verb, args)
 	}
-	return fmt.Errorf("unknown verb %q (run `styx help`)", verb)
+	// Anything that isn't a verb is an utterance: `styx "fix the flaky test"`
+	// runs one brain turn and exits.
+	utterance := strings.TrimSpace(strings.Join(append([]string{verb}, args...), " "))
+	return cmdBrainTurn(a, utterance)
 }
 
 // ensureFirstRun creates the config dir and seeds routing.toml on first run.

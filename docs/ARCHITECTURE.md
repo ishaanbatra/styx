@@ -22,10 +22,11 @@ Styx is a Go CLI that routes dev work between four AI channels — claude
 
 ```
 argv ──► cmd/styx/main.go (global flags: --quiet --verbose)
-              │ ensureFirstRun(): seed ~/.config/styx/routing.toml, v0.1→v0.2 upgrade
+              │ bare `styx` opens the REPL; otherwise ensureFirstRun():
+              │ seed ~/.config/styx/routing.toml, v0.1→v0.2 upgrade
               ▼
         cmd/styx/dispatch.go
-              │ no-app verbs (help, doctor*, project, route, budget, check, runs, execute…)
+              │ no-app verbs (help, doctor, project, route, budget, check, runs, execute…)
               │ app verbs → loadApp(): routing.toml + budget.Tracker + router + channels
               ▼
         internal/router.Route(verb, signals) ──► Decision{channel, model, fallback…}
@@ -42,16 +43,16 @@ argv ──► cmd/styx/main.go (global flags: --quiet --verbose)
 Every send is recorded in the budget DB; routing degrades down each rule's
 fallback chain when a channel is over its message caps.
 
-(* `doctor` exists once the REPL-orchestrator plan lands — see "Planned work".)
-
 ## cmd/styx — verbs and app wiring
 
 One file per verb (`research.go`, `plan.go`, `build.go`, `review.go`,
-`auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `runs.go`, …).
+`auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
+`repl.go`, `runs.go`, …).
 Shared pieces:
 
 - `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose`; `ensureFirstRun`
-  seeds config; errors exit 1 with a `styx:` prefix.
+  seeds config; bare `styx` constructs the app and opens the REPL; errors exit
+  1 with a `styx:` prefix.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first; the rest construct `app{routing, tracker, router, channels,
   progress}` via `loadApp()`. `loadApp()` shares the budget tracker with the
@@ -59,11 +60,28 @@ Shared pieces:
   `rawChannel()` unwraps the progress decorator for orchestration verbs that
   narrate themselves, leaving timeout protection in place. `seedMessageLimits`
   applies routing.toml message caps (with built-in fallbacks) to the budget
-  tracker.
+  tracker. Unknown verbs fall through to one-shot brain turns, so
+  `styx "fix the flaky test"` is treated as an utterance rather than an error.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
   attempt in the budget DB with a classified error kind.
+- `doctor.go` — `cmdDoctor` preflights local CLIs against the brain capability
+  cards, reports whether each CLI runs with native resume or styx-maintained
+  continuity, checks distinct configured Claude tier aliases with a cheap
+  one-shot call, and verifies that Ollama has both the brain model
+  (`llama3.2:3b` by default) and embedding model pulled. `--fix` pulls missing
+  Ollama models.
+- `repl.go` — the conversational frontend and session core. `cmdREPL` runs the
+  persistent bare-`styx` loop with `/status`, `/budget`, `/threads`, `/why`,
+  and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
+  recalls project/global memory, asks the local brain for an action, then
+  replies, dispatches to persistent agent threads, runs a wired pipeline,
+  performs an interactive handoff, or stores explicit memory. If the brain is
+  unavailable, the session asks the user for a manual thread choice instead of
+  failing closed. It also resolves brain tier names through `[tiers]` and
+  degrades hot fable usage to opus via `budget.Tracker.ModelCount`. Session
+  cleanup stores a best-effort distillation back to project memory.
 - `logStatus()` writes `[styx]` status lines to stderr unless `--quiet`;
   final results go to stdout and are never suppressed.
 
@@ -137,7 +155,7 @@ agent dispatch, pipeline invocation, interactive handoff, memory write, or
 confidence escalation. `Action.Valid` performs local structural validation
 before the REPL trusts a model response; `ActionSchema` is sent to ollama as the
 structured-output format. Capability cards describe claude, codex, agy, and
-ollama on every brain turn; they also define the future `doctor` drift probes
+ollama on every brain turn; `styx doctor` uses the same cards as drift probes
 for expected CLI flags and resume support. `BuildPrompt` combines those cards
 with the current user utterance, rolling summary, recent turns, live-thread
 status, and memory hits. The installed Codex CLI exposes `exec`, `--model`,
@@ -327,12 +345,7 @@ it can't disagree with the gate. `eval/promptfoo/braindump` regenerates the
 harness's code-mirrored artifacts from `cards.go`/`action.go`/`prompt.go`; rerun
 it after editing those so the eval never drifts.
 
-## Planned work (not yet built)
+## Planned work
 
-The remaining REPL orchestrator work — persistent conversational `styx` with
-per-turn `--resume`, frontend loop, and `styx doctor` — is specced in
-`docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-design.md` and
-planned task-by-task in `docs/superpowers/plans/
-2026-06-12-styx-repl-orchestrator.md`. It still needs `cmd/styx/repl.go` and
-`styx doctor`. When those land, keep the agent section current and update the
-overview diagram.
+Checkpoint B dogfooding and later safety/provenance/trust hardening are tracked
+in `docs/superpowers/plans/2026-06-12-styx-repl-orchestrator.md`.
