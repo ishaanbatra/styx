@@ -12,11 +12,11 @@ import (
 
 // fakeInner is a minimal Channel double used only in decorator tests.
 type fakeInner struct {
-	name       string
-	sendErr    error
-	respText   string
-	lastReq    Request
-	callCount  int
+	name      string
+	sendErr   error
+	respText  string
+	lastReq   Request
+	callCount int
 }
 
 func (f *fakeInner) Name() string { return f.name }
@@ -35,9 +35,10 @@ func (f *fakeInner) BudgetState(_ context.Context) (Budget, error) {
 }
 
 // TestWithProgress_NarratesSendAndForwards verifies that a non-interactive Send:
-//   (a) forwards the exact request to the inner channel,
-//   (b) returns the inner channel's Response unchanged,
-//   (c) the buffer contains a start line and a done line mentioning the label.
+//
+//	(a) forwards the exact request to the inner channel,
+//	(b) returns the inner channel's Response unchanged,
+//	(c) the buffer contains a start line and a done line mentioning the label.
 func TestWithProgress_NarratesSendAndForwards(t *testing.T) {
 	var buf bytes.Buffer
 	tr := progress.New(&buf, false, true) // verbose so Info shows too

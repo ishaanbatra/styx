@@ -19,8 +19,8 @@ func (s *stubBudget) UsedPct(_ context.Context, channel string) (float64, error)
 
 func newRouter(rules []config.Rule, caps config.BudgetCaps, used map[string]float64) *Router {
 	return &Router{
-		Rules: rules,
-		Caps:  caps,
+		Rules:  rules,
+		Caps:   caps,
 		Budget: &stubBudget{used: used},
 	}
 }

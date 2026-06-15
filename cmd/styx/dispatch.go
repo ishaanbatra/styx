@@ -208,11 +208,17 @@ func ensureFirstRun() error {
 		}
 		logStatus("wrote default routing.toml to %s", routingPath)
 	}
-	// v0.2 auto-upgrade: rewrite gemini:* -> agy:default if present.
-	if n, err := config.UpgradeRoutingFile(routingPath); err != nil {
+	// Auto-upgrade: v0.2 rewrites gemini:* -> agy:default; v0.3 injects the
+	// `implement` verb rules. Both back up to routing.v0.1.toml.bak.
+	if n, injected, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
-	} else if n > 0 {
-		logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", n)
+	} else {
+		if n > 0 {
+			logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", n)
+		}
+		if injected {
+			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")
+		}
 	}
 	return nil
 }
@@ -237,4 +243,3 @@ func resolveTarget(arg string) (project.Project, error) {
 	}
 	return project.Current()
 }
-

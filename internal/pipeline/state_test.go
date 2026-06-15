@@ -119,7 +119,9 @@ func newStubRunner(t *testing.T, projectPath, goal string) *Runner {
 		RunFixTests:  func(ctx context.Context, r *Runner, out string, n int) error { return nil },
 		RunReview:    func(ctx context.Context, r *Runner) (int, int, string, error) { return 0, 0, "clean", nil },
 		RunFixReview: func(ctx context.Context, r *Runner, fnd string, n int) error { return nil },
-		RunShip:      func(ctx context.Context, r *Runner) (string, bool, error) { return "https://example.com/pr/1", true, nil },
+		RunShip: func(ctx context.Context, r *Runner) (string, bool, error) {
+			return "https://example.com/pr/1", true, nil
+		},
 	}
 }
 

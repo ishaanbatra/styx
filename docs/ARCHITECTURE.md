@@ -68,13 +68,17 @@ Shared pieces:
 
 `channel.Channel` is the provider abstraction: `Name()`, `Send(ctx, Request)`,
 `BudgetState(ctx)`. `Request` carries model, system, prompt, attachments,
-`Interactive` (hand the TTY to the child — build verb), and `WorkingDir`.
-Token counts in `Response` are `len/4` estimates.
+`Interactive` (hand the TTY to the child — build verb), `WorkingDir`, and
+`Write` (let the channel edit files / run commands autonomously — the
+`implement` verb). Token counts in `Response` are `len/4` estimates.
 
 - Subprocess adapters (claude, codex, agy) classify exec failures into
   `channel.ClassifiedError{Kind: timeout|429|5xx|other}` so the router/budget
   can label them. agy is headless-only and always passes
   `--dangerously-skip-permissions`.
+- `Write` requests grant autonomous file access: claude prepends
+  `--dangerously-skip-permissions`; codex runs `exec --sandbox workspace-write`.
+  This is what lets the router send `implement` work to codex.
 - `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the macOS
   Ollama app with a 20s wait if it's down.
 - `decorator.go` — `WithProgress` narrates each Send as a progress stage;
@@ -88,6 +92,12 @@ Brain, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
 No match defaults to `ollama:qwen2.5-coder:14b`.
+
+The `implement` verb routes autonomous plan application: codex is primary
+(well-scoped execution), claude is the fallback, and the `complex` signal
+(architecture/refactor/migrate/redesign/rewrite) keeps the work on claude.
+`config.UpgradeRoutingFile` injects these rules into pre-v0.3 configs
+(`EnsureImplementRules`) on next run, alongside the v0.2 gemini→agy rewrite.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -195,7 +205,11 @@ after every stage; a lock file prevents concurrent runs; `auto --resume`
 re-enters at the first non-completed stage. Stage behaviors are closures on
 `Runner` injected by `auto.go` (e.g. `RunReview` = git diff → synthesized
 claude+codex review → `research.Parse` counts blocking/important findings;
-failed reviews loop through fix attempts via `execute.Apply`).
+failed reviews loop through fix attempts via `execute.Apply`). The execute and
+fix-loop stages route through the `implement` verb: `implementOptions` resolves
+the channel (codex for well-scoped work, claude for `complex` goals) and injects
+it into `execute.Options.Channel` — except claude, which is left nil so `Apply`
+uses its built-in live-streaming claude path.
 
 ## Research (internal/research, internal/brief)
 
@@ -210,9 +224,12 @@ configured dirs and resolves the most recent brief.
 
 ## Execute (internal/execute)
 
-`Apply` runs claude headless (`--dangerously-skip-permissions -p`) with an
-"implement this plan" prompt. `Ship` handles commit/push/PR (via `gh`),
-honoring `--no-pr`/`--no-push`.
+`Apply` applies a plan autonomously with an "implement this plan" prompt. When
+`Options.Channel` is set (the router picked codex for `implement`), it routes
+through that channel with `Write: true` and captures output; when nil it uses
+the built-in claude path (`--dangerously-skip-permissions -p`), which streams
+claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
+`--no-pr`/`--no-push`.
 
 ## Progress (internal/progress)
 

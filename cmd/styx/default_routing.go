@@ -38,6 +38,22 @@ verb = "plan"
 use  = "claude:sonnet-4-6"
 fallback = ["codex:gpt-5", "ollama:qwen2.5-coder:14b"]
 
+# ── implement (autonomous code application from a plan) ──
+# A detailed plan already exists by this point, so the work is well-scoped:
+# codex is the primary implementer ("faster to a first diff"). Ambiguous /
+# multi-file architectural work (the "complex" signal) stays on claude, which
+# reasons more before acting. claude is always the fallback.
+[[rule]]
+verb = "implement"
+signals = ["complex"]
+use  = "claude:sonnet-4-6"
+fallback = ["codex:gpt-5", "claude:opus-4-7"]
+
+[[rule]]
+verb = "implement"
+use  = "codex:gpt-5"
+fallback = ["claude:sonnet-4-6"]
+
 # ── build (interactive) ──
 [[rule]]
 verb = "build"

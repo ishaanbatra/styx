@@ -70,10 +70,10 @@ var budgetMsgDefaults = []struct {
 }
 
 // rewriteBudgetBlock processes lines of a [budget] section:
-// - drops gemini_free.cap_pct and gemini_paid.cap_pct lines
-// - inserts agy.cap_pct = 80 after the [budget] header line if not already present
-// - injects <channel>.messages_per_5h and <channel>.messages_per_week for each
-//   of claude/codex/agy if those keys are not already present
+//   - drops gemini_free.cap_pct and gemini_paid.cap_pct lines
+//   - inserts agy.cap_pct = 80 after the [budget] header line if not already present
+//   - injects <channel>.messages_per_5h and <channel>.messages_per_week for each
+//     of claude/codex/agy if those keys are not already present
 func rewriteBudgetBlock(lines []string) []string {
 	hasAgy := false
 	for _, l := range lines {
@@ -123,6 +123,43 @@ func rewriteBudgetBlock(lines []string) []string {
 
 	return out
 }
+
+// implementRulesBlock is the v0.3 `implement` verb routing, injected into
+// pre-v0.3 configs by EnsureImplementRules. Kept byte-identical to the block in
+// cmd/styx/default_routing.go so seeded and upgraded configs agree.
+const implementRulesBlock = `
+# ── implement (autonomous code application from a plan) ──
+# Added in v0.3. A detailed plan already exists by this point, so the work is
+# well-scoped: codex is the primary implementer ("faster to a first diff").
+# Ambiguous / multi-file architectural work (the "complex" signal) stays on
+# claude, which reasons more before acting. claude is always the fallback.
+[[rule]]
+verb = "implement"
+signals = ["complex"]
+use  = "claude:sonnet-4-6"
+fallback = ["codex:gpt-5", "claude:opus-4-7"]
+
+[[rule]]
+verb = "implement"
+use  = "codex:gpt-5"
+fallback = ["claude:sonnet-4-6"]
+`
+
+// EnsureImplementRules appends the `implement` verb rules (v0.3) when the config
+// has no `implement` rule yet. Returns the new content and whether it changed.
+// Idempotent: a config that already routes `implement` is returned untouched.
+// Appending is safe because routing is first-match and only `implement` requests
+// match these rules, so their position relative to other verbs is irrelevant.
+func EnsureImplementRules(content string) (string, bool) {
+	if implementVerbRE.MatchString(content) {
+		return content, false
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	return trimmed + "\n" + implementRulesBlock, true
+}
+
+// implementVerbRE matches a routing rule whose verb is "implement".
+var implementVerbRE = regexp.MustCompile(`(?m)^\s*verb\s*=\s*"implement"`)
 
 // RewriteRoutingGeminiToAgy substitutes gemini:flash and gemini:pro with
 // agy:default in the input. It also cleans up [budget] blocks (drops stale
@@ -201,33 +238,35 @@ func RewriteRoutingGeminiToAgy(content string) (string, int) {
 	return result, count
 }
 
-// UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default,
-// cleans stale budget keys, dedupes fallback arrays,
-// backs up the original to routing.v0.1.toml.bak, and atomically writes the new content.
-// Returns the gemini-rule substitution count. Missing-file is not an error (returns 0, nil).
-func UpgradeRoutingFile(routingPath string) (int, error) {
+// UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
+// injects the `implement` verb rules if missing (v0.3), cleans stale budget keys,
+// dedupes fallback arrays, backs up the original to routing.v0.1.toml.bak, and
+// atomically writes the new content. Returns the gemini-rule substitution count
+// and whether implement rules were injected. Missing-file is not an error.
+func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected bool, err error) {
 	b, err := os.ReadFile(routingPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
+			return 0, false, nil
 		}
-		return 0, fmt.Errorf("read routing: %w", err)
+		return 0, false, fmt.Errorf("read routing: %w", err)
 	}
 	newContent, n := RewriteRoutingGeminiToAgy(string(b))
+	newContent, injected := EnsureImplementRules(newContent)
 	// Use content comparison: skip write if nothing changed at all
 	if newContent == string(b) {
-		return 0, nil
+		return 0, false, nil
 	}
 	backup := filepath.Join(filepath.Dir(routingPath), "routing.v0.1.toml.bak")
 	if err := os.WriteFile(backup, b, 0o644); err != nil {
-		return 0, fmt.Errorf("write backup %s: %w", backup, err)
+		return 0, false, fmt.Errorf("write backup %s: %w", backup, err)
 	}
 	tmp := routingPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
-		return 0, fmt.Errorf("write tmp: %w", err)
+		return 0, false, fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, routingPath); err != nil {
-		return 0, fmt.Errorf("atomic rename: %w", err)
+		return 0, false, fmt.Errorf("atomic rename: %w", err)
 	}
-	return n, nil
+	return n, injected, nil
 }

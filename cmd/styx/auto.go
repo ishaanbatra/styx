@@ -220,10 +220,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		}
 		// Snapshot HEAD so we can list exactly the commits Apply added.
 		preHead, _ := gitRevParse(proj.Path, "HEAD")
-		_, err = execute.Apply(ctx, execute.Options{
-			PlanContent: string(planContent),
-			ProjectPath: proj.Path,
-		}, progress.Quiet())
+		_, err = execute.Apply(ctx, implementOptions(a, rr.State.Goal, string(planContent), proj.Path), progress.Quiet())
 		if err != nil {
 			return nil, err
 		}
@@ -252,10 +249,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 
 	r.RunFixTests = func(ctx context.Context, rr *pipeline.Runner, output string, attempt int) error {
 		fixPrompt := fmt.Sprintf("Tests failed (attempt %d). Diagnose and fix. Commit fixes as separate commits.\n\n--- TEST OUTPUT ---\n%s", attempt, output)
-		_, err := execute.Apply(ctx, execute.Options{
-			PlanContent: fixPrompt,
-			ProjectPath: proj.Path,
-		}, progress.Quiet())
+		_, err := execute.Apply(ctx, implementOptions(a, rr.State.Goal, fixPrompt, proj.Path), progress.Quiet())
 		return err
 	}
 
@@ -277,10 +271,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 
 	r.RunFixReview = func(ctx context.Context, rr *pipeline.Runner, findings string, attempt int) error {
 		fixPrompt := fmt.Sprintf("Review findings (attempt %d). Fix every BLOCKING and IMPORTANT item. Commit fixes.\n\n--- FINDINGS ---\n%s", attempt, findings)
-		_, err := execute.Apply(ctx, execute.Options{
-			PlanContent: fixPrompt,
-			ProjectPath: proj.Path,
-		}, progress.Quiet())
+		_, err := execute.Apply(ctx, implementOptions(a, rr.State.Goal, fixPrompt, proj.Path), progress.Quiet())
 		return err
 	}
 
@@ -332,6 +323,19 @@ func routeChannel(a *app, verb string, args []string) *routedChannel {
 		return &routedChannel{ch: a.channels["ollama"], model: "qwen2.5-coder:14b", id: "ollama:qwen2.5-coder:14b"}
 	}
 	return &routedChannel{ch: ch, model: dec.Model, id: dec.Channel + ":" + dec.Model}
+}
+
+// implementOptions resolves the `implement` verb to execute.Options. A claude
+// route returns Channel=nil so execute.Apply uses its built-in claude path
+// (which streams claude's stderr live); any other channel (e.g. codex) is
+// injected so the apply routes through it with Write enabled.
+func implementOptions(a *app, goal, planContent, projectPath string) execute.Options {
+	rc := routeChannel(a, "implement", []string{goal})
+	opts := execute.Options{PlanContent: planContent, ProjectPath: projectPath, Model: rc.model}
+	if rc.ch != a.channels["claude"] {
+		opts.Channel = rc.ch
+	}
+	return opts
 }
 
 // gitCheckoutNewBranch creates and switches to a new branch from current HEAD.

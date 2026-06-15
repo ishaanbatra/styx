@@ -22,6 +22,7 @@ type Request struct {
 	Attachments []Attachment // file contents to inline-include
 	Interactive bool         // if true, exec interactively (build verb); response will be empty
 	WorkingDir  string       // execute relative to this dir (used for interactive verbs)
+	Write       bool         // if true, the channel may autonomously edit files / run commands (implement verb)
 }
 
 // Attachment is a file the channel should consider as context.
