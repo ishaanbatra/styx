@@ -3,6 +3,7 @@ owns:
   - "cmd/styx/**"
   - "internal/**"
   - "testdata/**"
+  - "eval/**"
 last_verified: 2026-06-15
 ---
 
@@ -106,8 +107,22 @@ brain tier names to claude CLI model aliases, with `fable` currently mapped to
 The REPL brain emits schema-constrained `Action` JSON from a small, fast,
 non-reasoning local ollama instruct model (default `llama3.2:3b`; reasoning
 models such as qwen3 are deliberately avoided — they add many seconds per turn).
-`BuildPrompt`'s preamble includes few-shot examples to steer a 3B model's thread
-and action choices and to ensure `remember` actions populate the memory field.
+`BuildPrompt`'s preamble is an example-led routing spec tuned for a 3B model: it
+defines each action, draws the high-confusion boundaries explicitly (pipeline
+verbs are reserved for the four exact styx operations and never general code
+work; repo code-work — even "find every…", "explain what X does", or code that
+mentions "context"/routing — is `dispatch:claude`; `research` is for answers that
+live *outside* the repo; `review` is the current diff/changes vs a PR/design;
+status questions are `reply`; "remember/note" facts are `remember`, not an
+acknowledging `reply`; size routes large-file explains to `agy`), and carries
+~24 few-shot examples (including a `parallel_dispatch` anchor) that empirically
+matter more than prose rules for steering a 3B. This preamble scores **96% on
+`TestRoutingAccuracy`** (up from 84.8%); the remaining misses are a structured-
+output JSON-serialization limit, two debatable labels, and one `auto`-vs-dispatch
+case — not low-confidence turns, so the haiku escalation valve does not address
+them. The prompt was iterated with the byte-faithful promptfoo harness in
+`eval/promptfoo/` (see its `README.md`/`RESULTS.md`); that harness reproduces the
+Go gate's request shape and match logic exactly, but the Go test stays canonical.
 Task-level actions are structural decisions: direct reply, single or parallel
 agent dispatch, pipeline invocation, interactive handoff, memory write, or
 confidence escalation. `Action.Valid` performs local structural validation
@@ -234,6 +249,13 @@ fixtures (`routing/`, `brain/`, plus `fakeagent` once agent threads land).
 `TestRoutingAccuracy` is env-gated behind `STYX_BRAIN_IT=1` and runs the real
 local ollama brain against `testdata/brain/utterances.json`; it should be run
 only where ollama is up and the brain model (`llama3.2:3b`) is pulled. `make test` = `go test ./...`.
+It is the **canonical** routing-accuracy gate. For fast prompt iteration only,
+`eval/promptfoo/` holds a byte-faithful promptfoo harness (dev tool, run via
+`npx`, no `go.mod` deps) that replicates the brain's `/api/chat` request and the
+gate's match logic and generates its tests from the same `utterances.json` — so
+it can't disagree with the gate. `eval/promptfoo/braindump` regenerates the
+harness's code-mirrored artifacts from `cards.go`/`action.go`/`prompt.go`; rerun
+it after editing those so the eval never drifts.
 
 ## Planned work (not yet built)
 
