@@ -3,7 +3,7 @@ owns:
   - "cmd/styx/**"
   - "internal/**"
   - "testdata/**"
-last_verified: 2026-06-12
+last_verified: 2026-06-15
 ---
 
 # Styx Architecture
@@ -111,8 +111,9 @@ recent failures (wired into routing by the REPL-orchestrator plan).
 `project.Current()` walks up to the git root and auto-registers unknown repos
 into `~/.config/styx/projects.toml` (slugged name, sniffed language, default
 `styx/research` + `styx/plans` dirs). `paths` resolves XDG-style locations:
-ConfigDir, StateDir, CacheDir, LogDir, RoutingPath, ProjectsPath, UsageDBPath.
-All file writes in config/brief/intel use atomic tmp+rename.
+ConfigDir, StateDir, CacheDir, LogDir, RoutingPath, ProjectsPath, UsageDBPath,
+MemoryDir, and ThreadsDir. All file writes in config/brief/intel use atomic
+tmp+rename.
 
 ## Intel (internal/intel)
 
@@ -170,6 +171,8 @@ vars out of shell rc files.
 ~/.config/styx/routing.toml                 routing rules + caps (user-edited)
 ~/.config/styx/projects.toml                project registry (auto-managed)
 ~/.config/styx/state/usage.db               sqlite usage log
+~/.config/styx/state/memory/                per-project memory databases
+~/.config/styx/state/threads/               agent-thread state
 ~/.config/styx/state/intel/<proj>/index.json
 <project>/.claude/context.md                rendered intel (Claude Code loads it)
 <project>/.styx/runs/<run-id>/state.json    pipeline state

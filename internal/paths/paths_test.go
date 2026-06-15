@@ -53,3 +53,21 @@ func TestUsageDBPath(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestMemoryAndThreadsDirs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
+	md, err := MemoryDir()
+	if err != nil {
+		t.Fatalf("MemoryDir: %v", err)
+	}
+	if md != "/tmp/xdg-test/styx/state/memory" {
+		t.Errorf("MemoryDir = %q, want /tmp/xdg-test/styx/state/memory", md)
+	}
+	td, err := ThreadsDir()
+	if err != nil {
+		t.Fatalf("ThreadsDir: %v", err)
+	}
+	if td != "/tmp/xdg-test/styx/state/threads" {
+		t.Errorf("ThreadsDir = %q, want /tmp/xdg-test/styx/state/threads", td)
+	}
+}

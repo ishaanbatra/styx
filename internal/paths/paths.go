@@ -82,6 +82,24 @@ func UsageDBPath() (string, error) {
 	return filepath.Join(d, "usage.db"), nil
 }
 
+// MemoryDir returns the directory holding per-project memory databases.
+func MemoryDir() (string, error) {
+	s, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s, "memory"), nil
+}
+
+// ThreadsDir returns the directory holding per-project agent-thread state.
+func ThreadsDir() (string, error) {
+	s, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s, "threads"), nil
+}
+
 // EnsureDir creates dir (and parents) with 0755.
 func EnsureDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)
