@@ -73,7 +73,10 @@ func Loop(ctx context.Context, query string, drafter, critic Channel, prog *prog
 			stCrit.Fail(err)
 			return nil, fmt.Errorf("round %d critique: %w", round, err)
 		}
-		c, _ := Parse(critRaw)
+		c, err := Parse(critRaw)
+		if err != nil {
+			stCrit.Info("critique parse degraded: %v (raw text treated as one IMPORTANT finding)", err)
+		}
 		b.Critiques = append(b.Critiques, c)
 
 		critSummary := fmt.Sprintf("%d BLOCKING, %d IMPORTANT, %d NITs", len(c.Blocking), len(c.Important), len(c.Nits))

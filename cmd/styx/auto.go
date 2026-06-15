@@ -265,7 +265,10 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		if err != nil {
 			return 0, 0, "", err
 		}
-		c, _ := research.Parse(text)
+		c, err := research.Parse(text)
+		if err != nil {
+			logStatus("review parse degraded: %v (raw text treated as one IMPORTANT finding)", err)
+		}
 		return len(c.Blocking), len(c.Important), text, nil
 	}
 

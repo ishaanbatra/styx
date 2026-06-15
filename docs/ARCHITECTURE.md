@@ -255,12 +255,13 @@ review → ship. State persists at `<project>/.styx/runs/<run-id>/state.json`
 after every stage; a lock file prevents concurrent runs; `auto --resume`
 re-enters at the first non-completed stage. Stage behaviors are closures on
 `Runner` injected by `auto.go` (e.g. `RunReview` = git diff → synthesized
-claude+codex review → `research.Parse` counts blocking/important findings;
-failed reviews loop through fix attempts via `execute.Apply`). The execute and
-fix-loop stages route through the `implement` verb: `implementOptions` resolves
-the channel (codex for well-scoped work, claude for `complex` goals) and injects
-it into `execute.Options.Channel` — except claude, which is left nil so `Apply`
-uses its built-in live-streaming claude path.
+claude+codex review → `research.Parse` counts blocking/important findings and
+logs when parsing degrades to the raw-text fallback; failed reviews loop through
+fix attempts via `execute.Apply`). The execute and fix-loop stages route through
+the `implement` verb: `implementOptions` resolves the channel (codex for
+well-scoped work, claude for `complex` goals) and injects it into
+`execute.Options.Channel` — except claude, which is left nil so `Apply` uses its
+built-in live-streaming claude path.
 
 ## Research (internal/research, internal/brief)
 
@@ -269,9 +270,10 @@ Convergence loop: drafter (agy) drafts, critic (codex) critiques as structured
 blocking/important), oscillation detected by draft-hash comparison, max 6
 rounds. `Parse` accepts strict JSON, embedded JSON, or keyword sections, and
 falls back to treating garbage as one IMPORTANT finding (never silently
-converges). `deep.go` extracts cited URLs, fetches (80KB cap), and appends a
-Sources Appendix. `brief` writes timestamped briefs/plans into the project's
-configured dirs and resolves the most recent brief.
+converges); parse fallback errors are surfaced through progress/status instead
+of being swallowed. `deep.go` extracts cited URLs, fetches (80KB cap), and
+appends a Sources Appendix. `brief` writes timestamped briefs/plans into the
+project's configured dirs and resolves the most recent brief.
 
 ## Execute (internal/execute)
 
