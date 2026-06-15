@@ -46,7 +46,7 @@ fallback chain when a channel is over its message caps.
 
 One file per verb (`research.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
-`runs.go`, …).
+`repl.go`, `runs.go`, …).
 Shared pieces:
 
 - `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose`; `ensureFirstRun`
@@ -69,6 +69,13 @@ Shared pieces:
   one-shot call, and verifies that Ollama has both the brain model
   (`llama3.2:3b` by default) and embedding model pulled. `--fix` pulls missing
   Ollama models.
+- `repl.go` — the conversational session core: each turn recalls project/global
+  memory, asks the local brain for an action, then replies, dispatches to
+  persistent agent threads, runs a wired pipeline, performs an interactive
+  handoff, or stores explicit memory. If the brain is unavailable, the session
+  asks the user for a manual thread choice instead of failing closed. It also
+  resolves brain tier names through `[tiers]` and degrades hot fable usage to
+  opus via `budget.Tracker.ModelCount`.
 - `logStatus()` writes `[styx]` status lines to stderr unless `--quiet`;
   final results go to stdout and are never suppressed.
 
@@ -334,10 +341,9 @@ it after editing those so the eval never drifts.
 
 ## Planned work (not yet built)
 
-The remaining REPL orchestrator work — persistent conversational `styx` with
-per-turn `--resume` and frontend loop — is specced in
+The remaining REPL orchestrator work — bare `styx`, one-shot utterances, and
+slash-command frontend wiring — is specced in
 `docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-design.md` and
 planned task-by-task in `docs/superpowers/plans/
-2026-06-12-styx-repl-orchestrator.md`. It still needs `cmd/styx/repl.go`.
-When that lands, keep the agent section current and update the overview
-diagram.
+2026-06-12-styx-repl-orchestrator.md`. When that lands, keep the command
+section current and update the overview diagram.
