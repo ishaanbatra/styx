@@ -222,8 +222,10 @@ vars out of shell rc files.
 
 Table-driven tests with `t.Run`; `httptest` fakes for ollama; channel/router
 tests use in-memory stubs (`BudgetSource`, fake channels); `testdata/` holds
-fixtures (`routing/`, plus `fakeagent` + `brain/` once the REPL plan lands).
-`make test` = `go test ./...`.
+fixtures (`routing/`, `brain/`, plus `fakeagent` once agent threads land).
+`TestRoutingAccuracy` is env-gated behind `STYX_BRAIN_IT=1` and runs the real
+local ollama brain against `testdata/brain/utterances.json`; it should be run
+only where ollama is up and `qwen3:4b` is pulled. `make test` = `go test ./...`.
 
 ## Planned work (not yet built)
 
