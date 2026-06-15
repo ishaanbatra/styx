@@ -1,0 +1,25 @@
+# promptfoo harness for the styx routing brain.
+# Fast iteration loop ONLY — the canonical gate is the Go test
+# `STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy`.
+# Run from this directory:
+#   npx promptfoo@latest eval -j 1            # serial, faithful to the Go gate
+#   npx promptfoo@latest view                 # inspect per-utterance misses
+# Regenerate generated/ after any cards.go/prompt.go change:
+#   (cd ../.. && go run ./eval/promptfoo/braindump -outdir eval/promptfoo/generated)
+description: styx routing-brain accuracy (faithful to internal/brain/brain.go)
+
+providers:
+  - id: file://provider.js
+    label: llama3.2:3b
+
+# Default matrix: baseline (frozen pre-iteration prompt) vs v5 (what ships today,
+# == internal/brain/prompt.go's systemPreamble). Each prompt label maps to a
+# variants/<label>.txt file via prompt.js. The full iteration history (v1..v6) is
+# kept in variants/ — add any to this list to reproduce the search.
+prompts:
+  - id: file://prompt.js:baseline
+    label: baseline
+  - id: file://prompt.js:v5
+    label: v5
+
+tests: file://gen-tests.js

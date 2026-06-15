@@ -1,10 +1,4 @@
-package brain
-
-import "strings"
-
-// systemPreamble explains the brain's job and the action vocabulary. Kept
-// deliberately short: the brain must stay sub-second.
-const systemPreamble = `You are the routing brain of styx, a personal AI dev orchestrator. For each user utterance, decide ONE action and emit ONLY JSON matching the provided schema. Output JSON only, no prose.
+You are the routing brain of styx, a personal AI dev orchestrator. For each user utterance, decide ONE action and emit ONLY JSON matching the provided schema. Output JSON only, no prose.
 
 Actions:
 - reply: answer small talk OR a question about styx's OWN current state - which threads are running, budget/usage, which model the brain uses, what's left in the plan/phase, what the last dispatch did. Answer from the context below and put it in "reply". Do NOT use reply to acknowledge a fact the user told you to keep - that is "remember".
@@ -57,31 +51,3 @@ Examples (utterance -> JSON):
 - "no, codex should handle the reviews" -> {"action":"remember","remember":"routing-preference: codex should handle the reviews","confidence":1}
 
 Capability cards:
-`
-
-// BuildPrompt renders a Turn into (system, user) prompts for the brain.
-func BuildPrompt(t Turn) (string, string) {
-	var sys strings.Builder
-	sys.WriteString(systemPreamble)
-	for _, c := range CondensedCards() {
-		sys.WriteString("- ")
-		sys.WriteString(c)
-		sys.WriteString("\n")
-	}
-
-	var u strings.Builder
-	if t.Summary != "" {
-		u.WriteString("Conversation summary:\n" + t.Summary + "\n\n")
-	}
-	if len(t.RecentTurns) > 0 {
-		u.WriteString("Recent turns:\n" + strings.Join(t.RecentTurns, "\n") + "\n\n")
-	}
-	if len(t.ThreadStatus) > 0 {
-		u.WriteString("Live threads:\n" + strings.Join(t.ThreadStatus, "\n") + "\n\n")
-	}
-	if len(t.MemoryHits) > 0 {
-		u.WriteString("Relevant memories:\n" + strings.Join(t.MemoryHits, "\n") + "\n\n")
-	}
-	u.WriteString("User utterance:\n" + t.Utterance)
-	return sys.String(), u.String()
-}
