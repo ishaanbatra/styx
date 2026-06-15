@@ -1791,7 +1791,7 @@ Expected: SKIP with the env-var message
 
 - [ ] **Step 4: (Optional, if ollama is running locally) run it for real**
 
-Run: `ollama pull qwen3:4b && STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy -v -timeout 30m`
+Run: `ollama pull llama3.2:3b && STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy -v -timeout 30m`
 Expected: PASS with logged accuracy ≥ 80%. If it fails, tune `systemPreamble` wording in `prompt.go` — not the test.
 
 - [ ] **Step 5: Commit**
@@ -1815,7 +1815,7 @@ git commit -m "test(brain): env-gated routing accuracy suite with labeled fixtur
   Code sessions) to `testdata/brain/utterances.json`, labeling
   `want_action`/`want_thread`/`want_pipeline` honestly *before* running the brain.
 - [ ] **Run for real and read every miss:**
-  `ollama pull qwen3:4b && STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy -v`
+  `ollama pull llama3.2:3b && STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy -v`
   Read each `MISS` line — do not just look at the ratio.
 - [ ] **Triage misses** into: prompt-fixable (tune `systemPreamble`),
   card-fixable (sharpen a capability card), or genuinely ambiguous (acceptable —
@@ -5912,3 +5912,24 @@ restore if Anthropic brings Fable back. Task 17's `doctor` now probes each
 distinct tier alias for callability (Step 3b), so a future suspension — or a
 restored `fable = "fable"` during an ongoing one — is surfaced automatically
 rather than failing mid-dispatch.
+
+**Brain model — qwen3:4b → llama3.2:3b (2026-06-15, found at Checkpoint A):**
+
+The spec/plan named `qwen3:4b` as the brain. At Checkpoint A it proved unusable:
+qwen3 is a *reasoning* model and ran ~25s per call on an M-series/16GB machine,
+blowing both the request timeout and the spec's sub-second target, and its
+reasoning bled into the structured output (mis-slotted dispatch fields). `think:
+false` did not suppress it on the installed ollama. First accuracy run: 52%.
+
+Fixes (committed in `fix(brain): use fast non-reasoning model …`): default brain
+model is now **`llama3.2:3b`** (a fast non-reasoning instruct model, ~1s/call);
+`Ollama.chat` always sends `think: false`; and `systemPreamble` gained few-shot
+examples that (a) force `remember` actions to populate the `remember` field —
+the single biggest miss bucket — and (b) sharpen thread selection
+(ollama/codex/agy vs claude). Re-run: **84/99 = 85%**, clearing the 80% gate.
+
+Lesson for re-execution: the brain must be a *non-reasoning* instruct model.
+Some embedded code/test snippets above still show the original `qwen3:4b`; the
+as-built default and the `[brain] model`/`applyBrainDefaults`/test defaults are
+`llama3.2:3b`. The remaining ~15% misses are mostly debatable fixture labels and
+are the intended job of the haiku-escalation valve at low confidence.
