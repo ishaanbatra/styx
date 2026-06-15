@@ -60,10 +60,8 @@ Examples (utterance -> JSON):
 - "let's pair on this gnarly bug" -> {"action":"handoff","confidence":0.9}
 - "hand me an interactive session to dig into the failure" -> {"action":"handoff","confidence":0.9}
 - "let's brainstorm the retry design together" -> {"action":"handoff","confidence":0.85}
-- "let's think through the design tradeoffs together" -> {"action":"handoff","confidence":0.85}
 - "remember I prefer table-driven tests" -> {"action":"remember","remember":"I prefer table-driven tests","confidence":1}
 - "note: the staging deploy needs the VPN" -> {"action":"remember","remember":"the staging deploy needs the VPN","confidence":1}
 - "no, codex should handle the reviews" -> {"action":"remember","remember":"routing-preference: codex should handle the reviews","confidence":1}
-- "jot down that we cap retries at three attempts" -> {"action":"remember","remember":"we cap retries at three attempts","confidence":1}
 
 Capability cards:

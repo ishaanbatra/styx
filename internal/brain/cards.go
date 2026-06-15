@@ -16,14 +16,14 @@ var Cards = []Card{
 	{
 		CLI:           "claude",
 		Bin:           "claude",
-		Condensed:     "claude - Claude Code CLI. Models by tier: opus (deep planning, architecture, hard debugging, complex implementation - the top callable tier), sonnet (default implementation/review), haiku (cheap classify/distill). Best for: multi-file implementation, debugging with repo context, planning, code review. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work. (A 'fable' tier exists for the most demanding work but is currently suspended and maps to opus - prefer opus.)",
+		Condensed:     "claude - Claude Code CLI. Models by tier: opus (deep planning, architecture, hard debugging, complex/ambiguous implementation - the top callable tier), sonnet (reviews and claude-side implementation/refactors), haiku (cheap classify/distill). Best for: planning, architecture, debugging with repo context, ambiguous or multi-file work, and code review. Hand well-scoped implementation from a clear plan to codex (it is faster to a first diff); keep ambiguous/architectural implementation here. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work. (A 'fable' tier exists for the most demanding work but is currently suspended and maps to opus - prefer opus.)",
 		ExpectedFlags: []string{"--resume", "--output-format", "--model", "--add-dir", "--dangerously-skip-permissions"},
 		ResumeProbe:   "--resume",
 	},
 	{
 		CLI:           "codex",
 		Bin:           "codex",
-		Condensed:     "codex - OpenAI Codex CLI (gpt-5 class). Best for: sandboxed script checks, quick second-opinion code reviews, algorithmic one-shots, cross-checking claude's work. Styx v1 dispatches it headlessly with `codex exec`; no interactive handoff from styx.",
+		Condensed:     "codex - OpenAI Codex CLI (gpt-5 class). PRIMARY IMPLEMENTER: best for applying well-scoped work from a clear plan or spec (fast to a first diff) - fixing tests, writing/refactoring functions, single-file or tightly-scoped multi-file edits; also algorithmic one-shots, sandboxed script checks, and second-opinion reviews. Headless `codex exec` (applies edits autonomously with `--sandbox workspace-write`). No interactive handoff; route ambiguous or architectural implementation to claude instead.",
 		ExpectedFlags: []string{"exec", "--model", "--add-dir"},
 		ResumeProbe:   "resume",
 	},

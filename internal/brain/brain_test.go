@@ -41,14 +41,14 @@ func min(a, b int) int {
 }
 
 func TestDecideHappyPath(t *testing.T) {
-	srv := fakeOllama(t, `{"action":"dispatch","dispatches":[{"thread":"claude","model":"sonnet","message":"do it","rationale":"impl"}],"confidence":0.9}`)
+	srv := fakeOllama(t, `{"action":"dispatch","dispatches":[{"thread":"codex","message":"implement the fix","rationale":"well-scoped implementation"}],"confidence":0.9}`)
 	defer srv.Close()
 	b := &Ollama{BaseURL: srv.URL, Model: "qwen3:4b", ConfidenceThreshold: 0.5}
 	a, err := b.Decide(context.Background(), Turn{Utterance: "implement the fix"})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if a.Action != ActionDispatch || a.Dispatches[0].Thread != "claude" {
+	if a.Action != ActionDispatch || a.Dispatches[0].Thread != "codex" {
 		t.Errorf("action = %+v", a)
 	}
 }

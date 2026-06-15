@@ -27,7 +27,6 @@ Set "confidence" to your honest routing confidence (0-1). Respect routing-prefer
 Examples (utterance -> JSON):
 - "what threads are running?" -> {"action":"reply","reply":"...","confidence":0.9}
 - "are we over budget for codex this month?" -> {"action":"reply","reply":"...","confidence":0.85}
-- "which threads are busy and what are they working on?" -> {"action":"reply","reply":"...","confidence":0.85}
 - "refactor the loader into smaller functions" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"refactor the loader into smaller functions"}],"confidence":0.9}
 - "walk me through what the signals package does" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain what the signals package does"}],"confidence":0.85}
 - "find every place we log to stderr and route it through progress" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"route every stderr log through progress"}],"confidence":0.85}
@@ -39,7 +38,7 @@ Examples (utterance -> JSON):
 - "add a --timeout flag to the dispatch command and thread it through" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"add a --timeout flag to the dispatch command and thread it through"}],"confidence":0.85}
 - "rename the Registry type and fix all the call sites" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"rename the Registry type and fix all the call sites"}],"confidence":0.85}
 - "convert these mocks to fakes across the test files" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"convert these mocks to fakes across the test files"}],"confidence":0.85}
-- "write unit tests for the retry backoff helper" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"write unit tests for the retry backoff helper"}],"confidence":0.85}
+- "write table-driven tests for the retry backoff helper" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"write table-driven tests for the retry backoff helper"}],"confidence":0.85}
 - "design how the new sync engine should be structured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"design the new sync engine structure"}],"confidence":0.85}
 - "have codex sanity-check this math" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"sanity-check this math"}],"confidence":0.9}
 - "get claude and codex to both review this" -> {"action":"parallel_dispatch","dispatches":[{"thread":"claude","message":"review this"},{"thread":"codex","message":"review this"}],"confidence":0.9}
@@ -52,18 +51,12 @@ Examples (utterance -> JSON):
 - "find out how our budget cooldown is configured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain how the budget cooldown is configured"}],"confidence":0.8}
 - "do a critical pass on the staged diff" -> {"action":"pipeline","pipeline":"review","confidence":0.9}
 - "go over the changes for anything I missed" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
-- "give my working tree a once-over and flag anything risky" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
 - "rebuild the codebase index, it's stale" -> {"action":"pipeline","pipeline":"intel","confidence":0.9}
-- "regenerate context.md, the index is missing some packages" -> {"action":"pipeline","pipeline":"intel","confidence":0.85}
 - "take this all the way to a PR" -> {"action":"pipeline","pipeline":"auto","confidence":0.85}
-- "run the full build cycle on this change" -> {"action":"pipeline","pipeline":"auto","confidence":0.85}
 - "let's pair on this gnarly bug" -> {"action":"handoff","confidence":0.9}
 - "hand me an interactive session to dig into the failure" -> {"action":"handoff","confidence":0.9}
-- "let's brainstorm the retry design together" -> {"action":"handoff","confidence":0.85}
-- "let's think through the design tradeoffs together" -> {"action":"handoff","confidence":0.85}
 - "remember I prefer table-driven tests" -> {"action":"remember","remember":"I prefer table-driven tests","confidence":1}
 - "note: the staging deploy needs the VPN" -> {"action":"remember","remember":"the staging deploy needs the VPN","confidence":1}
 - "no, codex should handle the reviews" -> {"action":"remember","remember":"routing-preference: codex should handle the reviews","confidence":1}
-- "jot down that we cap retries at three attempts" -> {"action":"remember","remember":"we cap retries at three attempts","confidence":1}
 
 Capability cards:

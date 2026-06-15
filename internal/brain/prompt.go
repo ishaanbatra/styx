@@ -21,22 +21,32 @@ Actions:
 - escalate: you are genuinely unsure how to route.
 
 Dispatch thread choice (detail in the capability cards):
-- claude: implementation, refactors, debugging, planning, reviewing a plan/design/PR or a whole module, explaining normal-sized repo code.
-- codex: running a script in a sandbox, or a quick second opinion / cross-check.
+- claude: ambiguous or architectural implementation, refactors and the "complex" work (refactor/redesign/rewrite/migrate/split a package), debugging with repo context ("debug why...", "figure out why..."), planning/architecture, reviewing a plan/design/PR or a whole module, explaining normal-sized repo code.
+- codex: PRIMARY IMPLEMENTER for well-scoped work from a clear plan/spec - fixing a named failing test, implementing a discussed/specced feature, a mechanical rename or mocks->fakes conversion, writing tests for a named target; also algorithmic one-shots, running a script in a sandbox, or a quick second opinion / cross-check.
 - agy: summarizing or explaining a VERY LARGE or whole file/package/diff - anything "huge", "the whole package/file", "too big to read", or thousands of lines. The size signal wins: a normal-sized explain goes to claude, but "too big to read" goes to agy.
 - ollama: trivial local one-shots ONLY - commit messages, boilerplate, stubs/scaffolding (getters, test stubs), trivial classification. Never real implementation.
 
-Model tiers for claude dispatches: opus = judgment-heavy work and complex implementation. sonnet = normal implementation, refactors, review. haiku = trivial. (A "fable" tier exists but is suspended and maps to opus - prefer opus.)
+Implementation routing: well-scoped implementation from a clear plan/spec -> codex (faster to a first diff); ambiguous, architectural, refactor, or multi-file-judgment implementation -> claude. When the user names a thread explicitly ("have codex ...", "hand it to codex"), route there.
+Model tiers for claude dispatches: opus = judgment-heavy work and complex/ambiguous implementation. sonnet = claude-side implementation, refactors, review. haiku = trivial. (A "fable" tier exists but is suspended and maps to opus - prefer opus.)
 Set "confidence" to your honest routing confidence (0-1). Respect routing-preference memories - they are corrections from this user.
 
 Examples (utterance -> JSON):
 - "what threads are running?" -> {"action":"reply","reply":"...","confidence":0.9}
 - "are we over budget for codex this month?" -> {"action":"reply","reply":"...","confidence":0.85}
+- "which threads are busy and what are they working on?" -> {"action":"reply","reply":"...","confidence":0.85}
 - "refactor the loader into smaller functions" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"refactor the loader into smaller functions"}],"confidence":0.9}
 - "walk me through what the signals package does" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain what the signals package does"}],"confidence":0.85}
 - "find every place we log to stderr and route it through progress" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"route every stderr log through progress"}],"confidence":0.85}
-- "make the distiller kick in at 80 percent context" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"trigger the distiller at 80% context"}],"confidence":0.85}
+- "make the distiller kick in at 80 percent context" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"trigger the distiller at 80% context"}],"confidence":0.85}
 - "tighten the preamble so the brain stops over-dispatching" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"tighten the preamble to reduce over-dispatching"}],"confidence":0.85}
+- "implement the retry logic we discussed in the loader" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"implement the discussed retry logic in the loader"}],"confidence":0.85}
+- "fix the failing TestRoute test" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"fix the failing TestRoute test"}],"confidence":0.85}
+- "add a created_at column to the usage table plus the migration" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"add a created_at column to the usage table plus the migration"}],"confidence":0.85}
+- "add a --timeout flag to the dispatch command and thread it through" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"add a --timeout flag to the dispatch command and thread it through"}],"confidence":0.85}
+- "rename the Registry type and fix all the call sites" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"rename the Registry type and fix all the call sites"}],"confidence":0.85}
+- "convert these mocks to fakes across the test files" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"convert these mocks to fakes across the test files"}],"confidence":0.85}
+- "write unit tests for the retry backoff helper" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"write unit tests for the retry backoff helper"}],"confidence":0.85}
+- "design how the new sync engine should be structured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"design the new sync engine structure"}],"confidence":0.85}
 - "have codex sanity-check this math" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"sanity-check this math"}],"confidence":0.9}
 - "get claude and codex to both review this" -> {"action":"parallel_dispatch","dispatches":[{"thread":"claude","message":"review this"},{"thread":"codex","message":"review this"}],"confidence":0.9}
 - "scaffold getters and setters for this struct" -> {"action":"dispatch","dispatches":[{"thread":"ollama","message":"scaffold getters and setters for this struct"}],"confidence":0.9}
@@ -48,13 +58,19 @@ Examples (utterance -> JSON):
 - "find out how our budget cooldown is configured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain how the budget cooldown is configured"}],"confidence":0.8}
 - "do a critical pass on the staged diff" -> {"action":"pipeline","pipeline":"review","confidence":0.9}
 - "go over the changes for anything I missed" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
+- "give my working tree a once-over and flag anything risky" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
 - "rebuild the codebase index, it's stale" -> {"action":"pipeline","pipeline":"intel","confidence":0.9}
+- "regenerate context.md, the index is missing some packages" -> {"action":"pipeline","pipeline":"intel","confidence":0.85}
 - "take this all the way to a PR" -> {"action":"pipeline","pipeline":"auto","confidence":0.85}
+- "run the full build cycle on this change" -> {"action":"pipeline","pipeline":"auto","confidence":0.85}
 - "let's pair on this gnarly bug" -> {"action":"handoff","confidence":0.9}
 - "hand me an interactive session to dig into the failure" -> {"action":"handoff","confidence":0.9}
+- "let's brainstorm the retry design together" -> {"action":"handoff","confidence":0.85}
+- "let's think through the design tradeoffs together" -> {"action":"handoff","confidence":0.85}
 - "remember I prefer table-driven tests" -> {"action":"remember","remember":"I prefer table-driven tests","confidence":1}
 - "note: the staging deploy needs the VPN" -> {"action":"remember","remember":"the staging deploy needs the VPN","confidence":1}
 - "no, codex should handle the reviews" -> {"action":"remember","remember":"routing-preference: codex should handle the reviews","confidence":1}
+- "jot down that we cap retries at three attempts" -> {"action":"remember","remember":"we cap retries at three attempts","confidence":1}
 
 Capability cards:
 `

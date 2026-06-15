@@ -12,14 +12,16 @@ providers:
   - id: file://provider.js
     label: llama3.2:3b
 
-# Default matrix: baseline (frozen pre-iteration prompt) vs v5 (what ships today,
-# == internal/brain/prompt.go's systemPreamble). Each prompt label maps to a
-# variants/<label>.txt file via prompt.js. The full iteration history (v1..v6) is
-# kept in variants/ — add any to this list to reproduce the search.
+# Default matrix: v5 (the previous, pre-codex-implementer shipped prompt) vs v7
+# (what ships now, == internal/brain/prompt.go's systemPreamble after the
+# codex-as-implementer rework). Each prompt label maps to a variants/<label>.txt
+# file via prompt.js. The full history (baseline, v1..v6) is kept in variants/ —
+# add any to this list to reproduce the search. gen-tests.js reads the expanded
+# testdata/brain/utterances.json (190 cases) at run time.
 prompts:
-  - id: file://prompt.js:baseline
-    label: baseline
   - id: file://prompt.js:v5
     label: v5
+  - id: file://prompt.js:v7
+    label: v7
 
 tests: file://gen-tests.js
