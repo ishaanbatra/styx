@@ -20,7 +20,7 @@
   {"utterance": "open claude so we can work through the migration interactively", "want_action": "handoff"},
   {"utterance": "remember that I prefer table-driven tests everywhere", "want_action": "remember"},
   {"utterance": "note for later: the staging deploy needs the VPN", "want_action": "remember"},
-  {"utterance": "no, codex should have handled that review", "want_action": "remember"}
+  {"utterance": "no, codex should have handled that review", "want_action": "remember"},
   {"utterance": "go through this plan and tell me what's actually weak about it", "want_action": "dispatch", "want_thread": "claude"},
   {"utterance": "is this routing approach sound or am I missing something?", "want_action": "dispatch", "want_thread": "claude"},
   {"utterance": "evaluate this design critically before I commit to it", "want_action": "dispatch", "want_thread": "claude"},
