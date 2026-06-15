@@ -130,6 +130,16 @@ index to markdown and writes `<project>/.claude/context.md` (or
 `context.styx.md` + `@import` when a user-authored context.md exists) so
 Claude Code auto-loads project context.
 
+## Memory (internal/memory)
+
+Long-term memory is stored in SQLite databases under
+`~/.config/styx/state/memory/`. Each store has a `memory` table of typed items
+(`decision`, `todo`, `distillation`, `brief`, `fact`, or
+`routing-preference`) with source metadata, creation time, and a float32
+embedding packed as a little-endian blob. The initial store API supports open,
+close, insert, and newest-first full scans; later recall layers can rank those
+items by brute-force similarity at personal scale.
+
 ## Pipelines (internal/pipeline + cmd/styx/auto.go)
 
 `styx auto <goal>` runs 7 stages: research → intel → plan → execute → test →
@@ -176,7 +186,7 @@ vars out of shell rc files.
                                              plus brain/tier defaults for REPL routing
 ~/.config/styx/projects.toml                project registry (auto-managed)
 ~/.config/styx/state/usage.db               sqlite usage log
-~/.config/styx/state/memory/                per-project memory databases
+~/.config/styx/state/memory/                per-project memory sqlite databases
 ~/.config/styx/state/threads/               agent-thread state
 ~/.config/styx/state/intel/<proj>/index.json
 <project>/.claude/context.md                rendered intel (Claude Code loads it)
