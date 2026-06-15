@@ -32,7 +32,7 @@ argv ──► cmd/styx/main.go (global flags: --quiet --verbose)
               │                                       ▲
               │                          internal/signals.Extract (pure tagger)
               ▼
-        internal/channel (decorated: WithProgress wrapping the raw adapter)
+        internal/channel (decorated: WithProgress wrapping WithTimeout/raw adapter)
               ├── channel/claude   exec `claude -p` / interactive
               ├── channel/codex    exec `codex exec`
               ├── channel/agy      exec `agy -p --dangerously-skip-permissions`
@@ -54,9 +54,12 @@ Shared pieces:
   seeds config; errors exit 1 with a `styx:` prefix.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first; the rest construct `app{routing, tracker, router, channels,
-  progress}` via `loadApp()`. `rawChannel()` unwraps the progress decorator for
-  orchestration verbs that narrate themselves. `seedMessageLimits` applies
-  routing.toml message caps (with built-in fallbacks) to the budget tracker.
+  progress}` via `loadApp()`. `loadApp()` shares the budget tracker with the
+  router for both cap checks and 3-failures-in-10-minutes circuit breaking.
+  `rawChannel()` unwraps the progress decorator for orchestration verbs that
+  narrate themselves, leaving timeout protection in place. `seedMessageLimits`
+  applies routing.toml message caps (with built-in fallbacks) to the budget
+  tracker.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
@@ -83,6 +86,8 @@ Shared pieces:
   Ollama app with a 20s wait if it's down.
 - `decorator.go` — `WithProgress` narrates each Send as a progress stage;
   skipped for interactive sends (spinner would fight the child for the TTY).
+  `WithTimeout` gives non-interactive sends a deadline while leaving
+  interactive handoffs unbounded.
 - `gemini` is a registered alias for agy (v0.1 routing-rule compat).
 
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
@@ -104,13 +109,14 @@ The `implement` verb routes autonomous plan application: codex is primary
 rewrite keywords), etc. `styx route --explain` prints the full trace via
 `Router.Explain`.
 
-Budget degradation: if the chosen channel's `UsedPct` (max of 5h/weekly
-message percentages) ≥ its `cap_pct`, the router walks the fallback chain and
-marks the Decision `Degraded`. Per-channel caps also carry optional
-`timeout_minutes` for REPL/orchestrator subprocess budgets. `Brain` configures
-the planned local ollama routing brain and memory embedding model; `Tiers` maps
-brain tier names to claude CLI model aliases, with `fable` currently mapped to
-`opus` while the fable tier is suspended.
+Budget/reliability degradation: if the chosen channel's `UsedPct` (max of
+5h/weekly message percentages) ≥ its `cap_pct`, or its failure circuit is open,
+the router walks the fallback chain and marks the Decision `Degraded`.
+Per-channel caps also carry optional `timeout_minutes` for non-interactive
+subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
+wiring. `Brain` configures the planned local ollama routing brain and memory
+embedding model; `Tiers` maps brain tier names to claude CLI model aliases, with
+`fable` currently mapped to `opus` while the fable tier is suspended.
 
 ## Brain (internal/brain)
 
@@ -206,7 +212,8 @@ computes `State` per channel: legacy token percentages plus message counts in
 rolling 5h (`WindowSession`) and 168h (`WindowWeek`) windows against limits
 from routing.toml. `ModelCount(channel, model, window)` counts per-model rows
 for tier-aware degradation. `ShouldCircuitBreak(channel, threshold, window)`
-counts recent failures (wired into routing by the REPL-orchestrator plan).
+counts recent failures; app routing opens a channel circuit after 3 failures in
+10 minutes.
 
 ## Projects & paths (internal/project, internal/config/projects.go, internal/paths)
 

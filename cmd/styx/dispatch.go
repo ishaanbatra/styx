@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
@@ -101,17 +102,19 @@ func loadApp() (*app, error) {
 	// Create the progress tracker once and share it with both app.progress and
 	// defaultChannels so the decorator narrates the same tracker output.
 	p := newProgress()
-	rt := router.FromConfig(r, &budgetSource{t: t})
+	bs := &budgetSource{t: t}
+	rt := router.FromConfig(r, bs)
+	rt.Breaker = bs
 	return &app{
 		routing:  r,
 		tracker:  t,
 		router:   rt,
-		channels: defaultChannels(p),
+		channels: defaultChannels(p, r),
 		progress: p,
 	}, nil
 }
 
-func defaultChannels(prog *progress.Tracker) map[string]channel.Channel {
+func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channel.Channel {
 	a := agy.New()
 	raw := map[string]channel.Channel{
 		"claude": claude.New(),
@@ -120,9 +123,22 @@ func defaultChannels(prog *progress.Tracker) map[string]channel.Channel {
 		"gemini": a, // alias for backward-compatible routing rules
 		"ollama": ollama.New(),
 	}
+	timeouts := map[string]int{
+		"claude": r.Budget.Claude.TimeoutMinutes,
+		"codex":  r.Budget.Codex.TimeoutMinutes,
+		"agy":    r.Budget.Agy.TimeoutMinutes,
+		"gemini": r.Budget.Agy.TimeoutMinutes,
+	}
 	wrapped := make(map[string]channel.Channel, len(raw))
 	for name, ch := range raw {
-		wrapped[name] = &channel.WithProgress{Inner: ch, Tracker: prog, Label: name}
+		inner := ch
+		if mins, ok := timeouts[name]; ok {
+			if mins <= 0 {
+				mins = 10 // claude/codex previously had no timeout at all
+			}
+			inner = &channel.WithTimeout{Inner: inner, D: time.Duration(mins) * time.Minute}
+		}
+		wrapped[name] = &channel.WithProgress{Inner: inner, Tracker: prog, Label: name}
 	}
 	return wrapped
 }
@@ -132,6 +148,11 @@ type budgetSource struct{ t *budget.Tracker }
 
 func (b *budgetSource) UsedPct(ctx context.Context, ch string) (float64, error) {
 	return b.t.UsedPct(ctx, ch)
+}
+
+func (b *budgetSource) Broken(ctx context.Context, ch string) bool {
+	broken, err := b.t.ShouldCircuitBreak(ctx, ch, 3, 10*time.Minute)
+	return err == nil && broken
 }
 
 func dispatch(verb string, args []string) error {
