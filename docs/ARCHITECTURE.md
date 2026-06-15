@@ -148,6 +148,17 @@ confidence or explicit `escalate` actions can route the same prompt through
 `ClaudeEscalator` on the haiku tier; escalation failures fall back to the local
 valid action so the REPL can keep moving.
 
+## Agent threads (internal/agent)
+
+Agent threads are the durable conversation layer for the planned REPL
+orchestrator. The package currently defines the shared event shape and parses
+Claude's headless `stream-json` protocol: `system/init` captures session IDs,
+assistant text chunks stream intermediate output, and final `result` events
+carry the answer plus real usage. Context size counts normal input, cache
+creation input, and cache-read input tokens so future thread compaction is
+metered against the actual Claude context window rather than rough character
+estimates. Hook, tool-use-only, and malformed stream lines are ignored.
+
 ## Budget (internal/budget)
 
 Append-only SQLite log at `~/.config/styx/state/usage.db` (`usage` table:
@@ -270,9 +281,9 @@ it after editing those so the eval never drifts.
 ## Planned work (not yet built)
 
 The remaining REPL orchestrator work — persistent conversational `styx` with
-durable agent threads (per-turn `--resume`), frontend loop, and `styx doctor`
-— is specced in `docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-
-design.md` and planned task-by-task in `docs/superpowers/plans/
-2026-06-12-styx-repl-orchestrator.md`. It still needs `internal/agent`,
-`cmd/styx/repl.go`, and `styx doctor`. When those land, add sections here and
-update the overview diagram.
+per-turn `--resume`, frontend loop, and `styx doctor` — is specced in
+`docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-design.md` and
+planned task-by-task in `docs/superpowers/plans/
+2026-06-12-styx-repl-orchestrator.md`. It still needs agent adapters, durable
+thread stores, runners/managers, `cmd/styx/repl.go`, and `styx doctor`. When
+those land, keep the agent section current and update the overview diagram.
