@@ -7,14 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/agent"
 	"github.com/ishaanbatra/styx/internal/brain"
 	"github.com/ishaanbatra/styx/internal/budget"
+	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
+	"github.com/ishaanbatra/styx/internal/paths"
+	"github.com/ishaanbatra/styx/internal/project"
 )
 
 const maxRecentTurns = 8
@@ -112,7 +119,7 @@ func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []
 		model, degraded := s.resolveModel(requestedModel)
 		line := fmt.Sprintf("◆ %s·%s › %s", d.Thread, requestedModel, d.Rationale)
 		if degraded {
-			line += " (fable hot this week -> opus)"
+			line += " (fable hot this week → opus)"
 		}
 		s.println(line)
 		wg.Add(1)
@@ -276,4 +283,262 @@ func (s *replSession) lastActionJSON() string {
 		return fmt.Sprintf("(%v)", err)
 	}
 	return string(b)
+}
+
+// newREPLSession wires a production session for the current project. The
+// returned cleanup closes the memory stores.
+func newREPLSession(a *app) (*replSession, func(), error) {
+	proj, err := project.Current()
+	if err != nil {
+		return nil, nil, err
+	}
+	memDir, err := paths.MemoryDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := paths.EnsureDir(memDir); err != nil {
+		return nil, nil, err
+	}
+	mem, err := memory.Open(filepath.Join(memDir, proj.Name+".db"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("open project memory: %w", err)
+	}
+	glob, err := memory.Open(filepath.Join(memDir, "global.db"))
+	if err != nil {
+		mem.Close()
+		return nil, nil, fmt.Errorf("open global memory: %w", err)
+	}
+	cleanup := func() {
+		mem.Close()
+		glob.Close()
+	}
+
+	emb := memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel)
+	threads, err := agent.LoadThreads(proj.Name)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+
+	och := rawChannel(a.channels["ollama"])
+	summarize := func(ctx context.Context, text string) (string, error) {
+		resp, err := och.Send(ctx, channel.Request{
+			Model:  a.routing.Brain.Model,
+			Prompt: "Compress this conversation state into a dense summary preserving decisions, open questions, and file references:\n\n" + text,
+		})
+		return resp.Text, err
+	}
+
+	timeout := 10 * time.Minute
+	if a.routing.Budget.Claude.TimeoutMinutes > 0 {
+		timeout = time.Duration(a.routing.Budget.Claude.TimeoutMinutes) * time.Minute
+	}
+	mgr := &agent.Manager{
+		Project: proj,
+		Threads: threads,
+		Adapters: map[string]agent.Adapter{
+			"claude": agent.NewClaudeAdapter(),
+			"codex":  agent.NewCodexAdapter(),
+			"agy":    agent.NewAgyAdapter(),
+		},
+		Budget:       a.tracker,
+		Mem:          mem,
+		Emb:          emb,
+		Summarize:    summarize,
+		ThresholdPct: a.routing.Brain.ContextThresholdPct,
+		DistillModel: a.routing.Tiers["haiku"],
+		Timeout:      timeout,
+	}
+
+	b := &brain.Ollama{
+		BaseURL:             "http://localhost:11434",
+		Model:               a.routing.Brain.Model,
+		ConfidenceThreshold: a.routing.Brain.ConfidenceThreshold,
+		Escalator: &brain.ClaudeEscalator{
+			Channel: rawChannel(a.channels["claude"]),
+			Model:   a.routing.Tiers["haiku"],
+		},
+	}
+
+	s := &replSession{
+		proj:     proj,
+		brain:    b,
+		mgr:      mgr,
+		mem:      mem,
+		glob:     glob,
+		emb:      emb,
+		tiers:    a.routing.Tiers,
+		fableCap: a.routing.Brain.FableWeeklyCap,
+		tracker:  a.tracker,
+		pipelines: map[string]func(ctx context.Context, arg string) error{
+			"research": func(_ context.Context, arg string) error {
+				err := cmdResearch(a, []string{arg})
+				if err == nil {
+					indexNewestBrief(context.Background(), mem, emb, filepath.Join(proj.Path, proj.ResearchDir))
+				}
+				return err
+			},
+			"auto":   func(_ context.Context, arg string) error { return cmdAuto(a, []string{arg}) },
+			"review": func(_ context.Context, _ string) error { return cmdReview(a, nil) },
+			"intel":  func(_ context.Context, _ string) error { return cmdIntel(a, []string{proj.Name}) },
+		},
+		ollamaSend: func(ctx context.Context, model, prompt string) (string, error) {
+			resp, err := a.channels["ollama"].Send(ctx, channel.Request{Model: model, Prompt: prompt})
+			return resp.Text, err
+		},
+		in:  bufio.NewReader(os.Stdin),
+		out: os.Stdout,
+	}
+	mgr.OnCompact = func(name string) { s.println("↻ " + name + " thread compacted") }
+	return s, cleanup, nil
+}
+
+// indexNewestBrief stores the freshest research brief in memory (best-effort).
+func indexNewestBrief(ctx context.Context, mem *memory.Store, emb memory.Embedder, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	var newest os.DirEntry
+	var newestTime time.Time
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || e.IsDir() {
+			continue
+		}
+		if info.ModTime().After(newestTime) {
+			newest, newestTime = e, info.ModTime()
+		}
+	}
+	if newest == nil {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(dir, newest.Name()))
+	if err != nil {
+		return
+	}
+	text := string(b)
+	if len(text) > 4000 {
+		text = text[:4000]
+	}
+	vec, err := emb.Embed(ctx, text)
+	if err != nil {
+		return
+	}
+	_, _ = mem.Add(ctx, memory.Item{
+		Kind: memory.KindBrief, Text: text, Source: "pipeline/research:" + newest.Name(), Embedding: vec,
+	})
+}
+
+// cmdREPL is bare `styx`: the persistent conversational session.
+func cmdREPL(a *app) error {
+	s, cleanup, err := newREPLSession(a)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	fmt.Printf("styx — %s · /status /budget /threads /why /quit\n", s.proj.Name)
+	for {
+		fmt.Print("styx› ")
+		line, err := s.in.ReadString('\n')
+		if err != nil {
+			s.endSession()
+			fmt.Println()
+			return nil
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "/") {
+			if quit := s.slash(line); quit {
+				s.endSession()
+				return nil
+			}
+			continue
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		if err := s.turn(ctx, line); err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stderr, "✗ interrupted")
+			} else {
+				fmt.Fprintf(os.Stderr, "✗ %v\n", err)
+			}
+		}
+		stop()
+	}
+}
+
+// slash handles REPL slash commands; returns true to quit.
+func (s *replSession) slash(line string) bool {
+	switch strings.Fields(line)[0] {
+	case "/quit", "/exit":
+		return true
+	case "/status", "/threads":
+		lines := s.mgr.StatusLines()
+		if len(lines) == 0 {
+			s.println("no threads yet (they start lazily on first dispatch)")
+		}
+		for _, l := range lines {
+			s.println(meterize(l))
+		}
+	case "/budget":
+		if err := cmdBudget(nil); err != nil {
+			s.println("budget: " + err.Error())
+		}
+	case "/why":
+		s.println(s.lastActionJSON())
+	default:
+		s.println("unknown command (try /status /budget /threads /why /quit)")
+	}
+	return false
+}
+
+// meterize appends a 5-cell context meter to a "... context NN%" status line.
+func meterize(line string) string {
+	i := strings.LastIndex(line, "context ")
+	if i < 0 {
+		return line
+	}
+	var pct float64
+	if _, err := fmt.Sscanf(line[i:], "context %f%%", &pct); err != nil {
+		return line
+	}
+	filled := int(pct / 20)
+	if filled > 5 {
+		filled = 5
+	}
+	return line + "  " + strings.Repeat("▮", filled) + strings.Repeat("▯", 5-filled)
+}
+
+// endSession writes a session-end summary to project memory (best-effort).
+func (s *replSession) endSession() {
+	if len(s.recent) == 0 || s.mgr.Summarize == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sum, err := s.mgr.Summarize(ctx, strings.Join(s.recent, "\n"))
+	if err != nil || sum == "" {
+		return
+	}
+	vec, err := s.emb.Embed(ctx, sum)
+	if err != nil {
+		return
+	}
+	_, _ = s.mem.Add(ctx, memory.Item{
+		Kind: memory.KindDistillation, Text: sum, Source: "repl-session", Embedding: vec,
+	})
+}
+
+// cmdBrainTurn is `styx "..."`: one brain turn, then exit.
+func cmdBrainTurn(a *app, utterance string) error {
+	s, cleanup, err := newREPLSession(a)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return s.turn(ctx, utterance)
 }
