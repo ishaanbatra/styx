@@ -148,6 +148,56 @@ confidence or explicit `escalate` actions can route the same prompt through
 `ClaudeEscalator` on the haiku tier; escalation failures fall back to the local
 valid action so the REPL can keep moving.
 
+## Agent threads (internal/agent)
+
+Agent threads are the durable conversation layer for the planned REPL
+orchestrator. Adapters encode how styx invokes each CLI. Claude runs in
+headless `stream-json` mode with native session resume (`--resume`), a 200k
+token context window, verbose JSON output, and pre-granted permissions matching
+the existing execute path. Codex and agy are plain v1 adapters with no native
+resume/stream support from styx's perspective: codex runs `codex exec`, agy
+runs `agy -p --dangerously-skip-permissions`, and continuity will be maintained
+by styx summaries.
+
+The package defines the shared event shape and parses Claude's stream protocol:
+`system/init` captures session IDs, assistant text chunks stream intermediate
+output, and final `result` events carry the answer plus real usage. Context
+size counts normal input, cache creation input, and cache-read input tokens so
+future thread compaction is metered against the actual Claude context window
+rather than rough character estimates. Hook, tool-use-only, and malformed
+stream lines are ignored.
+
+Each project has a JSON thread store under
+`~/.config/styx/state/threads/<project>.json`. Threads are named durable
+conversations with a CLI, optional Claude session ID, rolling summary for
+non-resume CLIs, last distillation checkpoint, context-token meter, turn count,
+and update timestamp. Stores are created lazily and saved with tmp+rename.
+
+`Runner` executes one turn by spawning the adapter's CLI with an optional
+timeout and working directory. For stream-capable adapters it scans stdout
+line-by-line, emits parsed events to the caller, captures Claude session IDs,
+and records real input/output token counts from the final result. For plain
+adapters it treats full stdout as the result and falls back to len/4 token
+estimates until those CLIs expose structured usage. Every successful turn
+updates the thread's context meter, turn count, and timestamp in memory; callers
+persist the store after lifecycle decisions. `testdata/fakeagent` is an
+executable stream-json fixture for runner and manager lifecycle tests, including
+resume argument assertions and dead-session simulation.
+
+`Manager` owns a project's thread lifecycle. `Dispatch` resolves the adapter,
+creates the thread on first use, seeds fresh/restarted sessions with a project
+role line or last distillation, runs the turn, records real token usage to the
+budget log under verb `thread`, maintains rolling summaries for plain adapters,
+and saves the thread store. If a resume-capable CLI reports a dead session, the
+manager clears the session ID and retries once using the last distillation as
+the handoff seed. When a resume-capable thread crosses its configured context
+threshold, the manager asks the live session for a structured handoff using the
+distill model, writes that distillation to memory when an embedder/store are
+configured, clears the session ID, and starts the next turn fresh. `StatusLines`
+renders compact thread state for the brain and `/status`. `Handoff` opens an
+interactive Claude session for an existing Claude thread and then best-effort
+ingests a summary back into thread state and memory.
+
 ## Budget (internal/budget)
 
 Append-only SQLite log at `~/.config/styx/state/usage.db` (`usage` table:
@@ -270,9 +320,9 @@ it after editing those so the eval never drifts.
 ## Planned work (not yet built)
 
 The remaining REPL orchestrator work — persistent conversational `styx` with
-durable agent threads (per-turn `--resume`), frontend loop, and `styx doctor`
-— is specced in `docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-
-design.md` and planned task-by-task in `docs/superpowers/plans/
-2026-06-12-styx-repl-orchestrator.md`. It still needs `internal/agent`,
-`cmd/styx/repl.go`, and `styx doctor`. When those land, add sections here and
-update the overview diagram.
+per-turn `--resume`, frontend loop, and `styx doctor` — is specced in
+`docs/superpowers/specs/2026-06-12-styx-repl-orchestrator-design.md` and
+planned task-by-task in `docs/superpowers/plans/
+2026-06-12-styx-repl-orchestrator.md`. It still needs `cmd/styx/repl.go` and
+`styx doctor`. When those land, keep the agent section current and update the
+overview diagram.
