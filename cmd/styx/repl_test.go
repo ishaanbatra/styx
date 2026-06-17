@@ -279,3 +279,65 @@ func TestAuditTrail(t *testing.T) {
 		}
 	}
 }
+
+// TestScriptedSession drives several turns through one session end-to-end:
+// reply -> dispatch (fake CLI) -> remember -> recall influences the next turn.
+func TestScriptedSession(t *testing.T) {
+	t.Setenv("FAKEAGENT_TEXT", "implemented and tested")
+	t.Setenv("FAKEAGENT_SESSION", "sess-e2e")
+	b := &scriptedBrain{actions: []brain.Action{
+		{Action: brain.ActionReply, Reply: "hello! ready to work", Confidence: 0.95},
+		{Action: brain.ActionDispatch, Confidence: 0.9,
+			Dispatches: []brain.Dispatch{{Thread: "claude", Model: "sonnet", Message: "add retry logic", Rationale: "implementation"}}},
+		{Action: brain.ActionRemember, Remember: "we retry 3 times with backoff", Confidence: 1},
+	}}
+	s, out := newTestSession(t, b, "")
+	ctx := context.Background()
+
+	for _, utterance := range []string{
+		"hey styx",
+		"add retry logic to the loader",
+		"remember: we retry 3 times with backoff",
+	} {
+		if err := s.turn(ctx, utterance); err != nil {
+			t.Fatalf("turn %q: %v", utterance, err)
+		}
+	}
+
+	got := out.String()
+	for _, want := range []string{
+		"hello! ready to work",
+		"◆ claude·sonnet › implementation",
+		"implemented and tested",
+		"◆ remembered",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("session output missing %q:\n%s", want, got)
+		}
+	}
+
+	// The dispatch persisted a durable thread with the CLI's session id.
+	th := s.mgr.Threads.Get("claude", "claude")
+	if th.SessionID != "sess-e2e" || th.Turns != 1 {
+		t.Errorf("thread after session = %+v", th)
+	}
+	// The remember landed in project memory and is recallable.
+	hits, err := memory.Recall(ctx, s.emb, "what's our retry policy?", 1, s.mem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || !strings.Contains(hits[0].Item.Text, "retry 3 times") {
+		t.Errorf("recall = %+v", hits)
+	}
+	// /why explains the last decision.
+	if !strings.Contains(s.lastActionJSON(), "remember") {
+		t.Errorf("lastActionJSON = %s", s.lastActionJSON())
+	}
+	// /status shows the live thread with a context meter.
+	if quit := s.slash("/status"); quit {
+		t.Fatal("/status should not quit")
+	}
+	if !strings.Contains(out.String(), "claude (claude): 1 turns") {
+		t.Errorf("status output missing thread line:\n%s", out.String())
+	}
+}
