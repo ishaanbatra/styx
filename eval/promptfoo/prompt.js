@@ -43,3 +43,4 @@ module.exports.v11 = make('v11');
 module.exports.v12 = make('v12');
 module.exports.v13 = make('v13');
 module.exports.v14 = make('v14');
+module.exports.v15 = make('v15');

@@ -195,3 +195,37 @@ func TestResolveModelFableDegradation(t *testing.T) {
 		t.Errorf("passthrough = %q", m)
 	}
 }
+
+func TestShipRiskConfirmationDeclined(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionPipeline, Pipeline: "auto", Confidence: 0.9}}}
+	s, out := newTestSession(t, b, "n\n")
+	ranAuto := false
+	s.pipelines = map[string]func(ctx context.Context, arg string) error{
+		"auto": func(ctx context.Context, _ string) error { ranAuto = true; return nil },
+	}
+	if err := s.turn(context.Background(), "ship the rate limiting feature"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	if ranAuto {
+		t.Error("auto pipeline ran despite declined ship-risk confirmation")
+	}
+	if !strings.Contains(out.String(), "cancelled") {
+		t.Errorf("expected cancellation notice:\n%s", out.String())
+	}
+}
+
+func TestShipRiskAutoApproved(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionPipeline, Pipeline: "auto", Confidence: 0.9}}}
+	s, _ := newTestSession(t, b, "")
+	s.assumeYes = true
+	ranAuto := false
+	s.pipelines = map[string]func(ctx context.Context, arg string) error{
+		"auto": func(ctx context.Context, _ string) error { ranAuto = true; return nil },
+	}
+	if err := s.turn(context.Background(), "ship it"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	if !ranAuto {
+		t.Error("auto pipeline did not run under assumeYes")
+	}
+}

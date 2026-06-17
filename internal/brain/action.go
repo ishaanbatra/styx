@@ -18,13 +18,24 @@ const (
 	ActionEscalate         ActionType = "escalate"          // brain is unsure; escalate routing
 )
 
+// RiskLevel is the coarse risk class of an action. The brain proposes it; the
+// REPL enforces it. Default (empty) is treated as edit - never silently ship.
+type RiskLevel string
+
+const (
+	RiskRead RiskLevel = "read" // no writes: research, explain, review, status
+	RiskEdit RiskLevel = "edit" // edits files in an interruptible thread (default)
+	RiskShip RiskLevel = "ship" // commit/push/PR/deploy - confirm first
+)
+
 // Dispatch is one outbound message to an agent thread.
 type Dispatch struct {
-	Thread     string   `json:"thread"`                // claude | codex | agy | ollama
-	Model      string   `json:"model,omitempty"`       // tier (fable|opus|sonnet|haiku) or ollama model
-	Message    string   `json:"message"`               // what to send the agent
-	CLIOptions []string `json:"cli_options,omitempty"` // extra CLI flags, e.g. --add-dir
-	Rationale  string   `json:"rationale,omitempty"`   // one line, shown to the user
+	Thread     string    `json:"thread"`                // claude | codex | agy | ollama
+	Model      string    `json:"model,omitempty"`       // tier (fable|opus|sonnet|haiku) or ollama model
+	Message    string    `json:"message"`               // what to send the agent
+	CLIOptions []string  `json:"cli_options,omitempty"` // extra CLI flags, e.g. --add-dir
+	Rationale  string    `json:"rationale,omitempty"`   // one line, shown to the user
+	Risk       RiskLevel `json:"risk,omitempty"`
 }
 
 // Action is the brain's full decision for one turn.
@@ -34,15 +45,60 @@ type Action struct {
 	Pipeline   string     `json:"pipeline,omitempty"` // research | auto | review | intel
 	Reply      string     `json:"reply,omitempty"`
 	Remember   string     `json:"remember,omitempty"`
+	Risk       RiskLevel  `json:"risk,omitempty"`
 	Confidence float64    `json:"confidence"`
 }
 
 var validThreads = map[string]bool{"claude": true, "codex": true, "agy": true, "ollama": true}
 var validPipelines = map[string]bool{"research": true, "auto": true, "review": true, "intel": true}
 
+func validRisk(r RiskLevel) bool {
+	switch r {
+	case "", RiskRead, RiskEdit, RiskShip:
+		return true
+	default:
+		return false
+	}
+}
+
+func riskRank(r RiskLevel) int {
+	switch r {
+	case RiskRead:
+		return 1
+	case RiskEdit:
+		return 2
+	case RiskShip:
+		return 3
+	default:
+		return 0
+	}
+}
+
+// EffectiveRisk returns the highest risk class implied by the action,
+// defaulting to edit. The auto pipeline can commit/push/PR, so it is always
+// ship-class regardless of what the model claimed.
+func (a Action) EffectiveRisk() RiskLevel {
+	r := a.Risk
+	for _, d := range a.Dispatches {
+		if riskRank(d.Risk) > riskRank(r) {
+			r = d.Risk
+		}
+	}
+	if a.Action == ActionPipeline && a.Pipeline == "auto" && riskRank(RiskShip) > riskRank(r) {
+		r = RiskShip
+	}
+	if r == "" {
+		return RiskEdit
+	}
+	return r
+}
+
 // Valid reports whether the action is structurally usable. The REPL treats
 // invalid actions like a brain failure (retry, then ask the user).
 func (a Action) Valid() bool {
+	if !validRisk(a.Risk) {
+		return false
+	}
 	switch a.Action {
 	case ActionReply:
 		return a.Reply != ""
@@ -51,7 +107,7 @@ func (a Action) Valid() bool {
 			return false
 		}
 		for _, d := range a.Dispatches {
-			if !validThreads[d.Thread] || d.Message == "" {
+			if !validThreads[d.Thread] || d.Message == "" || !validRisk(d.Risk) {
 				return false
 			}
 		}
@@ -85,15 +141,16 @@ var ActionSchema = json.RawMessage(`{
           "model": {"type": "string"},
           "message": {"type": "string"},
           "cli_options": {"type": "array", "items": {"type": "string"}},
-          "rationale": {"type": "string"}
+          "rationale": {"type": "string"},
+          "risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}
         },
         "required": ["thread", "message"]
       }
     },
-    "pipeline": {"type": "string", "enum": ["research", "auto", "review", "intel", ""]},
-    "reply": {"type": "string"},
-    "remember": {"type": "string"},
-    "confidence": {"type": "number"}
+	"pipeline": {"type": "string", "enum": ["research", "auto", "review", "intel", ""]},
+	"reply": {"type": "string"},
+	"remember": {"type": "string"},
+	"confidence": {"type": "number"}
   },
   "required": ["action", "confidence"]
 }`)

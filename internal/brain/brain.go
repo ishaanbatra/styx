@@ -43,7 +43,7 @@ type Escalator interface {
 // Ollama is the production brain: a small local model with structured output.
 type Ollama struct {
 	BaseURL             string  // e.g. http://localhost:11434
-	Model               string  // e.g. llama3.2:3b (a fast non-reasoning instruct model)
+	Model               string  // e.g. qwen2.5-coder:7b (a fast non-reasoning instruct model)
 	ConfidenceThreshold float64 // escalate below this (0 disables)
 	Escalator           Escalator
 

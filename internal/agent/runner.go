@@ -29,13 +29,13 @@ type Runner struct {
 
 // Send runs one turn. The thread's SessionID and context meter are updated
 // in place; the caller is responsible for persisting the ThreadStore.
-func (r *Runner) Send(ctx context.Context, msg, model string, extra []string) (TurnResult, error) {
+func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, readOnly bool) (TurnResult, error) {
 	if r.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, r.Timeout)
 		defer cancel()
 	}
-	args := r.Adapter.BuildArgs(msg, r.Thread.SessionID, model, extra)
+	args := r.Adapter.BuildArgs(msg, r.Thread.SessionID, model, extra, readOnly)
 	cmd := exec.CommandContext(ctx, r.Adapter.Bin(), args...)
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir

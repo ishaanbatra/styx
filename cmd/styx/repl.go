@@ -40,6 +40,7 @@ type replSession struct {
 	tracker    *budget.Tracker
 	pipelines  map[string]func(ctx context.Context, arg string) error
 	ollamaSend func(ctx context.Context, model, prompt string) (string, error)
+	assumeYes  bool // --yes / non-interactive: skip ship-risk confirmations
 	in         *bufio.Reader
 	out        io.Writer
 	outMu      sync.Mutex
@@ -73,6 +74,11 @@ func (s *replSession) turn(ctx context.Context, utterance string) error {
 }
 
 func (s *replSession) execute(ctx context.Context, utterance string, act brain.Action) error {
+	if act.EffectiveRisk() == brain.RiskShip && !s.confirmRisk(act) {
+		s.println("◆ cancelled - ship-risk action declined")
+		s.pushRecent(utterance, "(cancelled: ship-risk)")
+		return nil
+	}
 	switch act.Action {
 	case brain.ActionReply:
 		s.println(act.Reply)
@@ -146,11 +152,12 @@ func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, mode
 		return nil
 	}
 	res, err := s.mgr.Dispatch(ctx, agent.DispatchSpec{
-		Thread:  d.Thread,
-		CLI:     d.Thread,
-		Model:   model,
-		Message: d.Message,
-		Extra:   d.CLIOptions,
+		Thread:   d.Thread,
+		CLI:      d.Thread,
+		Model:    model,
+		Message:  d.Message,
+		Extra:    d.CLIOptions,
+		ReadOnly: d.Risk == brain.RiskRead,
 	}, s.printEvent)
 	if err != nil {
 		return fmt.Errorf("%s: %w", d.Thread, err)
@@ -159,6 +166,30 @@ func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, mode
 		s.println(res.Text)
 	}
 	return nil
+}
+
+func (s *replSession) confirmRisk(act brain.Action) bool {
+	if s.assumeYes {
+		return true
+	}
+	s.print(fmt.Sprintf("⚠ this will %s - proceed? [y/N]: ", riskSummary(act)))
+	line, err := s.in.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func riskSummary(act brain.Action) string {
+	if act.Action == brain.ActionPipeline {
+		return "run the " + act.Pipeline + " pipeline (may commit/push/open a PR)"
+	}
+	return "perform a ship-risk action (commit/push/deploy)"
 }
 
 // printEvent renders streamed agent events into the REPL.

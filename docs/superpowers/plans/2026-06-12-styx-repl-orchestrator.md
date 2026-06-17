@@ -4829,6 +4829,28 @@ versus today's explicit `styx auto`/`execute`. They are deliberately small and
 spec-consistent (the brain proposes; the REPL — not the model — enforces).
 Run them after Checkpoint B so the design is informed by real use.
 
+> **Prompt-freeze note (2026-06-16, branch `brain/fixture-policy-align`).** Task
+> 19.1's risk work is the *only* change in the rest of this plan that touches the
+> brain's gate-tested prompt (preamble / cards / `ActionSchema`). Audited: 19.2
+> changes only memory-hit *display* (`renderHits`), which the gate/promptfoo never
+> sees (the gate prompt is utterance-only); 19.3 is audit-only; Task 20 only adds a
+> REPL test. So once 19.1's reconciled preamble + the risk-eval extension (Step 4a)
+> land and the canonical promptfoo run confirms them, **the brain prompt is
+> frozen** — everything remaining is pure Go. Risk was reconciled to **per-dispatch
+> only** (Step 3): the original top-level-schema design broke the 3B (51%); the
+> shipped design holds routing at ~91% and teaches risk via a few read/ship
+> few-shot anchors.
+>
+> **FROZEN (confirmed 2026-06-16).** Run on the new default brain
+> `qwen2.5-coder:7b` (192 fixtures, 8 risk-labeled): the canonical Go gate and the
+> promptfoo harness agree **byte-for-byte** — `v15` scores routing **178/192
+> (93%)**, risk-emission **6/8 (75%)**, folded gate **176/192 (92%)**, same
+> 16-miss set. Adding the per-dispatch risk prose was routing-neutral (`v14`
+> no-risk baseline: 177/192) while lifting risk 2/8 → 6/8, so `v15` was kept (not
+> reverted) and **the brain prompt is now frozen**. `prompt.go` ==
+> `variants/v15.txt` == `generated/preamble_shipped.txt`. Everything remaining
+> (19.2 / 19.3 / Task 20) is pure Go.
+
 ### Task 19.1: risk tiers on the Action + REPL ship-confirmation gate
 
 A coarse risk class (`read` | `edit` | `ship`) rides on every dispatch and
@@ -4993,14 +5015,39 @@ and inside the dispatch loop, extend the guard:
 		}
 ```
 
-In `ActionSchema`, add a `risk` enum to the dispatch item properties and to the
-top-level properties (both: `"risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}`).
+In `ActionSchema`, add a `risk` enum to the **dispatch item properties only**
+(`"risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}`). Do **not**
+add a top-level `risk` to the schema. Empirically (2026-06-16, `llama3.2:3b`): a
+top-level optional risk scalar makes the 3B "satisfy" the schema by emitting
+`risk` and dropping the required `dispatches` array — routing collapsed to 51%
+(96/190). The Go `Action.Risk` field still exists (EffectiveRisk reads it), but
+it is **code-derived only** — set by the REPL / `EffectiveRisk` (e.g. `auto` →
+ship), never emitted by the model — so it needs no schema slot. Risk the model
+proposes rides **per-dispatch**.
 
-- [ ] **Step 4: Teach the brain to set risk** — in `internal/brain/prompt.go`, insert into `systemPreamble` just before the `Capability cards:` line:
+- [ ] **Step 4: Teach the brain to set risk** — in `internal/brain/prompt.go`, insert into `systemPreamble` just before the `Capability cards:` line. Per-dispatch only — no pipeline/handoff promise, since the schema carries risk per-dispatch:
 
 ```
-Risk: set "risk" on each dispatch (and on pipeline/handoff actions) to "read" (no writes — research, explain, review, status), "edit" (modifies files; the default), or "ship" (commits, pushes, opens PRs, deploys). When unsure, choose "edit". styx confirms with the user before any "ship" action, so never use "ship" to mean "important".
+Risk: each dispatch may carry an optional "risk" - "read" (no writes: research, explain, review, status), "edit" (changes files; this is the default, so omit it), or "ship" (commits, pushes, opens PRs, deploys). Omit "risk" unless the dispatch clearly only reads or clearly ships. Never use "ship" to mean "important" - styx asks the user before any ship action.
 ```
+
+This prose alone recovered routing to v14's level (172–173/192) on the live gate
+(2026-06-16) **and** fixed a structural failure the earlier wording caused (the
+3B emitted invalid JSON on "add a risk tier field … wire it into the REPL"). If
+the risk-eval subset (Step 4a) shows weak risk emission, anchor risk into one or
+two few-shot examples rather than expanding this prose — the 3B tunes to
+examples, not rules (see `eval/promptfoo/RESULTS.md`).
+
+- [ ] **Step 4a: Make the gate score risk** — so promptfoo and the Go gate
+  regression-test risk *emission*, not just routing:
+  - Label ~8 fixtures in `testdata/brain/utterances.json` with `"want_risk"`:
+    clear `read` explains/summaries, a couple of `edit` implements, and 2 new
+    explicit-thread `ship` cases ("have codex commit … and push it"). The
+    fixtures stay the single source of truth.
+  - Extend `eval/promptfoo/gate.js` (+ `gate-assert.js`, `gen-tests.js`) and
+    `internal/brain/integration_test.go` to check `dispatches[0].risk` when a
+    fixture is risk-labeled — an empty/omitted risk counts as `edit` (mirroring
+    `EffectiveRisk`). Report routing, risk, and folded gate accuracy separately.
 
 - [ ] **Step 5: Read-class permission drop (adapter)** — add `ReadOnly bool` to `agent.DispatchSpec`, thread it through `Manager.Dispatch` → runner, and in the claude arg builder (Task 11) append the write-permission flag conditionally. Extract the builder if needed so it is unit-testable:
 

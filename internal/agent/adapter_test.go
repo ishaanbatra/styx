@@ -39,7 +39,7 @@ func TestClaudeAdapterBuildArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := a.BuildArgs(tt.msg, tt.sessionID, tt.model, tt.extra)
+			got := a.BuildArgs(tt.msg, tt.sessionID, tt.model, tt.extra, false)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("args = %v\nwant  %v", got, tt.want)
 			}
@@ -55,7 +55,7 @@ func TestClaudeAdapterBuildArgs(t *testing.T) {
 
 func TestPlainAdapters(t *testing.T) {
 	cx := NewCodexAdapter()
-	got := cx.BuildArgs("check this", "", "gpt-5", nil)
+	got := cx.BuildArgs("check this", "", "gpt-5", nil, false)
 	want := []string{"--model", "gpt-5", "exec", "check this"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("codex args = %v, want %v", got, want)
@@ -65,9 +65,29 @@ func TestPlainAdapters(t *testing.T) {
 	}
 
 	ag := NewAgyAdapter()
-	got = ag.BuildArgs("summarize", "", "", nil)
+	got = ag.BuildArgs("summarize", "", "", nil, false)
 	want = []string{"-p", "summarize", "--dangerously-skip-permissions"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("agy args = %v, want %v", got, want)
 	}
+}
+
+func TestClaudeArgsReadOnlyDropsSkipPermissions(t *testing.T) {
+	rw := claudeArgs("s", "sonnet", "do it", nil, false)
+	if !containsArg(rw, "--dangerously-skip-permissions") {
+		t.Error("read-write dispatch should pre-grant permissions")
+	}
+	ro := claudeArgs("s", "sonnet", "explain", nil, true)
+	if containsArg(ro, "--dangerously-skip-permissions") {
+		t.Error("read-only dispatch must NOT pre-grant permissions")
+	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }

@@ -19,11 +19,12 @@ const distillPrompt = `Summarize the state of this work as a structured handoff 
 
 // DispatchSpec is one routed message to an agent thread.
 type DispatchSpec struct {
-	Thread  string // thread name; "" defaults to the CLI name
-	CLI     string // claude | codex | agy
-	Model   string // resolved model id (tier mapping already applied)
-	Message string
-	Extra   []string // extra CLI options from the brain (e.g. --add-dir)
+	Thread   string // thread name; "" defaults to the CLI name
+	CLI      string // claude | codex | agy
+	Model    string // resolved model id (tier mapping already applied)
+	Message  string
+	Extra    []string // extra CLI options from the brain (e.g. --add-dir)
+	ReadOnly bool     // true for read-class work; adapters should avoid pre-granted writes
 }
 
 // Manager owns a project's agent threads: lazy start, context metering,
@@ -58,13 +59,13 @@ func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(
 	run := &Runner{Adapter: ad, Thread: th, WorkDir: m.Project.Path, Timeout: m.Timeout, OnEvent: onEvent}
 
 	msg := m.seedMessage(th, ad, spec.Message)
-	res, err := run.Send(ctx, msg, spec.Model, spec.Extra)
+	res, err := run.Send(ctx, msg, spec.Model, spec.Extra, spec.ReadOnly)
 	if err != nil && th.SessionID != "" && ad.SupportsResume() {
 		// Crash recovery: the CLI's session may be gone. Roll back to the last
 		// checkpoint and rebuild from distillation + rolling summary.
 		th.SessionID = ""
 		msg = m.seedMessage(th, ad, spec.Message)
-		res, err = run.Send(ctx, msg, spec.Model, spec.Extra)
+		res, err = run.Send(ctx, msg, spec.Model, spec.Extra, spec.ReadOnly)
 	}
 	m.record(ctx, spec, res, err)
 	if err != nil {
@@ -139,7 +140,7 @@ func (m *Manager) maybeDistill(ctx context.Context, th *Thread, ad Adapter) {
 		return
 	}
 	run := &Runner{Adapter: ad, Thread: th, WorkDir: m.Project.Path, Timeout: m.Timeout}
-	res, err := run.Send(ctx, distillPrompt, m.DistillModel, nil)
+	res, err := run.Send(ctx, distillPrompt, m.DistillModel, nil, false)
 	if err != nil || res.Text == "" {
 		return // best-effort; the next turn will retry
 	}
@@ -220,7 +221,7 @@ func (m *Manager) Handoff(ctx context.Context, threadName string) error {
 	run := &Runner{Adapter: ad, Thread: th, WorkDir: m.Project.Path, Timeout: m.Timeout}
 	res, err := run.Send(ctx,
 		"An interactive working session on this thread just ended. Summarize what was likely accomplished and what follow-ups remain, based on this conversation so far.",
-		m.DistillModel, nil)
+		m.DistillModel, nil, false)
 	if err == nil && res.Text != "" {
 		th.Summary = res.Text
 		m.saveMemory(ctx, memory.KindDistillation, res.Text, "handoff/"+threadName)

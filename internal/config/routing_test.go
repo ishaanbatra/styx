@@ -116,8 +116,8 @@ func TestBrainDefaultsAppliedWhenSectionMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRoutingFile: %v", err)
 	}
-	if r.Brain.Model != "llama3.2:3b" {
-		t.Errorf("default brain model = %q, want llama3.2:3b", r.Brain.Model)
+	if r.Brain.Model != "qwen2.5-coder:7b" {
+		t.Errorf("default brain model = %q, want qwen2.5-coder:7b", r.Brain.Model)
 	}
 	if r.Brain.EmbedModel != "nomic-embed-text" {
 		t.Errorf("default embed model = %q", r.Brain.EmbedModel)
@@ -138,7 +138,7 @@ func TestBrainDefaultsAppliedWhenSectionMissing(t *testing.T) {
 
 func defaultBrainForTest() BrainConfig {
 	return BrainConfig{
-		Model:               "llama3.2:3b",
+		Model:               "qwen2.5-coder:7b",
 		EmbedModel:          "nomic-embed-text",
 		ConfidenceThreshold: 0.5,
 		ContextThresholdPct: 70,

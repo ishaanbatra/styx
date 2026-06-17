@@ -1,5 +1,63 @@
 # Routing-brain prompt iteration — results
 
+> **Update (2026-06-16) — brain upgraded to `qwen2.5-coder:7b` + per-dispatch
+> risk tiers (`v15`, shipped).** The default brain was switched `llama3.2:3b` →
+> `qwen2.5-coder:7b` (the 190-case re-tune below concluded the 3B was at its
+> ceiling — further gains needed a bigger brain, not more prompt rules), the
+> fixture set was extended **190 → 192** (2 explicit-`ship` cases; 8 now carry a
+> `want_risk` label: 4 `read`, 2 `edit`, 2 `ship`), and a coarse per-dispatch
+> **risk tier** (`read`|`edit`|`ship`) was taught via a risk paragraph + 5
+> risk-annotated few-shot anchors. The gate now scores routing, risk-emission,
+> and a folded gate accuracy separately. **`v15` is frozen and ships** (==
+> `prompt.go`'s `systemPreamble` == `generated/preamble_shipped.txt`).
+
+## 192-case `qwen2.5-coder:7b` run + risk tiers — `v15` (shipped)
+
+**TL;DR:** on the 7b, the shipped preamble `v15` scores **routing 178/192 (93%),
+risk-emission 6/8 (75%), folded gate 176/192 (92%)** on the canonical Go gate
+(`TestRoutingAccuracy`), reproduced **byte-for-byte** by the promptfoo harness
+(same numbers, same 16-miss set). Adding the per-dispatch risk prose was
+**routing-neutral** — the no-risk baseline `v14` scored 177/192, so risk language
+cost nothing (in fact +1) while lifting risk emission from 2/8 to 6/8.
+
+### Numbers (192-case, Go gate == faithful promptfoo)
+
+| Variant | What changed | Routing | Risk | Folded gate |
+|---------|--------------|---------|------|-------------|
+| v14 | previous shipped preamble, **no risk language** | 177/192 (92%) | 2/8 (25%) | 172/192 (90%) |
+| **v15** | **v14 + risk paragraph + 5 risk-annotated anchors (2 read, 2 edit, 1 ship)** | **178/192 (93%)** | **6/8 (75%)** | **176/192 (92%)** |
+
+`v14`'s 2/8 risk is structural: with no risk prose it emits no `risk`, so only the
+2 genuine `edit` fixtures pass (empty risk → `edit` default); all 4 `read` and 2
+`ship` fixtures miss. `v15`'s prose is what drives the 6/8.
+
+### Why `v15` was frozen (not reverted)
+
+The "set `risk` on every dispatch" wording was unvalidated on the 7b; the decision
+rule was "keep ~91%+ routing **and** improve risk, else revert to a softer
+optional-risk fallback." `v15` cleared both: routing 178/192 (≥ `v14`'s 177, well
+above the floor) **and** risk 6/8 (> the prior 5/8 the softer wording got). The
+risk prose is additive, not a routing tax — so `v15` stays. Per the small-model
+findings below, the risk anchors were **not** expanded to chase the residual 2/8
+(that overfits the 8 labeled fixtures); REPL-side enforcement guarantees safety
+regardless of emission accuracy.
+
+### Residual 16 misses (identical on Go gate and promptfoo)
+
+- **2 risk-only misses** (routing correct, `risk` omitted → safe `edit` default):
+  both are `read`-class `dispatch:claude` explains — "explain what internal/router
+  … end to end" and "walk me through what internal/channel … end to end". The
+  model under-emits `read` on long "explain … end to end" phrasings.
+- **14 routing misses**, all in known buckets: the codex/claude implementation
+  frontier (ship-risk-gate, harden-parser, ClassifiedError-pattern,
+  ParseClaudeEvent-rework), pipeline-`review`/`research` keyword leakage
+  ("evaluate this design", "walk the … design", "find out how … is configured",
+  "the cooldown keeps misfiring"), and `reply`-vs-`claude` label disputes
+  ("is this approach sound", "what's the blast radius", "remind me which
+  checkpoint is next").
+
+---
+
 > **Update (2026-06-15) — codex-as-implementer rework + dataset expansion.** The
 > brain was flipped to route well-scoped implementation to **codex** (claude =
 > planner/architect/reviewer), and `testdata/brain/utterances.json` was expanded

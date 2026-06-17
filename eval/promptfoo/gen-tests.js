@@ -14,6 +14,7 @@ module.exports = async function () {
       utterance: c.utterance,
       want_action: c.want_action || '',
       want_thread: c.want_thread || '',
+      want_risk: c.want_risk || '',
       want_pipeline: c.want_pipeline || '',
     },
     assert: [{ type: 'javascript', value: 'file://gate-assert.js' }],

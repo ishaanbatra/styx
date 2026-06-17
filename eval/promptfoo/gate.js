@@ -32,7 +32,10 @@ function valid(a) {
 
 function describe(a) {
   let s = a.action;
-  if (a.dispatches && a.dispatches[0]) s += '/' + a.dispatches[0].thread;
+  if (a.dispatches && a.dispatches[0]) {
+    s += '/' + a.dispatches[0].thread;
+    if (a.dispatches[0].risk) s += '/' + a.dispatches[0].risk;
+  }
   if (a.pipeline) s += '/' + a.pipeline;
   return s;
 }
@@ -53,6 +56,13 @@ function check(output, want) {
   if (ok && want.want_thread) {
     ok = Array.isArray(a.dispatches) && a.dispatches.length > 0 && a.dispatches[0].thread === want.want_thread;
   }
+  // want_risk (when labeled) checks the first dispatch's risk, mirroring
+  // EffectiveRisk: an empty/omitted risk counts as "edit" (the safe default).
+  if (ok && want.want_risk) {
+    const d0 = Array.isArray(a.dispatches) && a.dispatches[0];
+    const gotRisk = d0 && d0.risk ? d0.risk : 'edit';
+    ok = gotRisk === want.want_risk;
+  }
   if (ok && want.want_pipeline) {
     ok = a.pipeline === want.want_pipeline;
   }
@@ -60,6 +70,7 @@ function check(output, want) {
   const wantStr =
     want.want_action +
     (want.want_thread ? '/' + want.want_thread : '') +
+    (want.want_risk ? '/' + want.want_risk : '') +
     (want.want_pipeline ? '/' + want.want_pipeline : '');
   return { pass: ok, reason: ok ? 'ok' : `got ${describe(a)} want ${wantStr}` };
 }

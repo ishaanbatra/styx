@@ -28,8 +28,12 @@ the Go test and fix the harness.
   "User utterance:\n<text>"`.
 - **`gate.js`** replicates `Action.Valid()` + `TestRoutingAccuracy`'s match
   logic, so a promptfoo "pass" means exactly what a Go-gate "correct" means.
+  A fixture that carries a `want_risk` label additionally requires the first
+  dispatch's `risk` to match — an omitted/empty risk counts as `edit`, mirroring
+  `EffectiveRisk` — so the harness regression-tests risk *emission*, not just routing.
 - **`gen-tests.js`** generates tests from `testdata/brain/utterances.json` — the
-  *same* dataset the Go gate uses, never a fork. The two can't disagree on labels.
+  *same* dataset the Go gate uses, never a fork (it threads `want_action`,
+  `want_thread`, `want_risk`, `want_pipeline` through). The two can't disagree on labels.
 - **`generated/`** is produced from the Go source itself (`braindump` tool) so
   the cards block and schema never drift from `cards.go` / `action.go`.
 
@@ -42,22 +46,23 @@ npx promptfoo@latest view                   # inspect per-utterance misses in th
 python3 compare.py /tmp/out.json            # per-variant FIXED/REGRESSED vs baseline (use -o /tmp/out.json)
 ```
 
-`-j 1` matters: the local 3B model serializes anyway, and parallel requests
+`-j 1` matters: the local model serializes anyway, and parallel requests
 cause empty-content responses that don't reflect real (sequential) styx behavior.
 
 ## Layout
 
 | path | role |
 |------|------|
-| `promptfooconfig.yaml` | matrix config (default: `v5` vs `v7`) |
+| `promptfooconfig.yaml` | matrix config (default: `v14` vs `v15`, on `qwen2.5-coder:7b`) |
 | `prompt.js` | builds `[system,user]`; one named export per variant |
 | `provider.js` | byte-faithful ollama `/api/chat` client |
-| `gate.js`, `gate-assert.js` | gate-equivalent scoring |
+| `gate.js`, `gate-assert.js` | gate-equivalent scoring (routing + `want_risk`) |
 | `gen-tests.js` | tests from `testdata/brain/utterances.json` |
 | `variants/baseline.txt` | **frozen** pre-iteration preamble (84.8%) |
 | `variants/v1..v6.txt` | iteration history (see `RESULTS.md`); `v5` = previous shipped (pre-codex-implementer) |
-| `variants/v7.txt` | **what ships** -- equals `prompt.go`'s `systemPreamble` (codex-as-implementer, re-tuned to 91% on the 190-case gate) |
-| `variants/v8..v14.txt` | 190-case re-tune trail (see `RESULTS.md`); `v14` == `v7` (the shipped winner) |
+| `variants/v7.txt` | codex-as-implementer preamble, re-tuned to 91% on the 190-case `llama3.2:3b` gate (== `v14`) |
+| `variants/v8..v14.txt` | 190-case re-tune trail (see `RESULTS.md`); `v14` == `v7`, the no-risk shipped winner |
+| `variants/v15.txt` | **what ships** -- `v14` + per-dispatch risk tiers; == `prompt.go`'s `systemPreamble`; on `qwen2.5-coder:7b`: routing 178/192, risk 6/8 |
 | `generated/` | code-mirrored: `cards_block.txt`, `schema.json`, `preamble_shipped.txt` |
 | `braindump/main.go` | regenerates `generated/` from Go source |
 | `buckets.py` | groups a run's misses by want-label (`python3 buckets.py /tmp/out.json [variant]`) -- the per-bucket view used to drive iteration |
@@ -68,5 +73,5 @@ cause empty-content responses that don't reflect real (sequential) styx behavior
 ```bash
 go run ./eval/promptfoo/braindump -outdir eval/promptfoo/generated
 # fidelity check: the shipped prompt should equal the shipped variant
-diff <(cat eval/promptfoo/generated/preamble_shipped.txt) eval/promptfoo/variants/v7.txt
+diff <(cat eval/promptfoo/generated/preamble_shipped.txt) eval/promptfoo/variants/v15.txt
 ```

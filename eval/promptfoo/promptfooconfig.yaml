@@ -10,18 +10,19 @@ description: styx routing-brain accuracy (faithful to internal/brain/brain.go)
 
 providers:
   - id: file://provider.js
-    label: llama3.2:3b
+    label: qwen2.5-coder:7b
 
-# Default matrix: v5 (the previous, pre-codex-implementer shipped prompt) vs v7
+# Default matrix: v14 (the previous shipped prompt, no risk language) vs v15
 # (what ships now, == internal/brain/prompt.go's systemPreamble after the
-# codex-as-implementer rework). Each prompt label maps to a variants/<label>.txt
-# file via prompt.js. The full history (baseline, v1..v6) is kept in variants/ —
+# per-dispatch risk-tier rework). Each prompt label maps to a variants/<label>.txt
+# file via prompt.js. The full history (baseline, v1..v14) is kept in variants/ —
 # add any to this list to reproduce the search. gen-tests.js reads the expanded
-# testdata/brain/utterances.json (190 cases) at run time.
+# testdata/brain/utterances.json (192 cases) at run time. The canonical gate is
+# the Go test, which exercises prompt.go (== v15) directly; promptfoo must agree.
 prompts:
-  - id: file://prompt.js:v5
-    label: v5
-  - id: file://prompt.js:v7
-    label: v7
+  - id: file://prompt.js:v14
+    label: v14
+  - id: file://prompt.js:v15
+    label: v15
 
 tests: file://gen-tests.js
