@@ -44,7 +44,7 @@ VERBS
   help                      Show this menu
 
 REPL
-  Slash commands: /status /budget /threads /why /quit
+  Slash commands: /status /budget /threads /why /audit /quit
 
 CONFIG
   ~/.config/styx/routing.toml      routes (you edit)

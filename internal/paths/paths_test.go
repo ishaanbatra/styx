@@ -71,3 +71,14 @@ func TestMemoryAndThreadsDirs(t *testing.T) {
 		t.Errorf("ThreadsDir = %q, want /tmp/xdg-test/styx/state/threads", td)
 	}
 }
+
+func TestAuditDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
+	ad, err := AuditDir()
+	if err != nil {
+		t.Fatalf("AuditDir: %v", err)
+	}
+	if ad != "/tmp/xdg-test/styx/state/audit" {
+		t.Errorf("AuditDir = %q, want /tmp/xdg-test/styx/state/audit", ad)
+	}
+}

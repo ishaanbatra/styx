@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/agent"
+	"github.com/ishaanbatra/styx/internal/audit"
 	"github.com/ishaanbatra/styx/internal/brain"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
@@ -35,6 +36,7 @@ type replSession struct {
 	mem        *memory.Store // per-project
 	glob       *memory.Store // cross-project
 	emb        memory.Embedder
+	audit      *audit.Logger
 	tiers      map[string]string
 	fableCap   int
 	tracker    *budget.Tracker
@@ -51,6 +53,7 @@ type replSession struct {
 
 // turn runs one full loop iteration: recall -> decide -> act.
 func (s *replSession) turn(ctx context.Context, utterance string) error {
+	s.auditf(audit.KindTurn, utterance, nil)
 	hits, err := memory.Recall(ctx, s.emb, utterance, 5, s.mem, s.glob)
 	if err != nil {
 		hits = nil // recall is an enhancement, never a blocker
@@ -70,14 +73,26 @@ func (s *replSession) turn(ctx context.Context, utterance string) error {
 		return err
 	}
 	s.lastAction = &act
+	s.auditf(audit.KindDecision, string(act.Action), map[string]string{
+		"risk":       string(act.EffectiveRisk()),
+		"confidence": fmt.Sprintf("%.2f", act.Confidence),
+	})
 	return s.execute(ctx, utterance, act)
 }
 
 func (s *replSession) execute(ctx context.Context, utterance string, act brain.Action) error {
-	if act.EffectiveRisk() == brain.RiskShip && !s.confirmRisk(act) {
-		s.println("◆ cancelled - ship-risk action declined")
-		s.pushRecent(utterance, "(cancelled: ship-risk)")
-		return nil
+	if act.EffectiveRisk() == brain.RiskShip {
+		confirmed := s.confirmRisk(act)
+		result := "accepted"
+		if !confirmed {
+			result = "declined"
+		}
+		s.auditf(audit.KindRiskPrompt, riskSummary(act), map[string]string{"result": result})
+		if !confirmed {
+			s.println("◆ cancelled - ship-risk action declined")
+			s.pushRecent(utterance, "(cancelled: ship-risk)")
+			return nil
+		}
 	}
 	switch act.Action {
 	case brain.ActionReply:
@@ -88,6 +103,7 @@ func (s *replSession) execute(ctx context.Context, utterance string, act brain.A
 		return s.runDispatches(ctx, utterance, act.Dispatches)
 	case brain.ActionPipeline:
 		s.println(fmt.Sprintf("◆ pipeline › %s", act.Pipeline))
+		s.auditf(audit.KindPipeline, act.Pipeline, nil)
 		fn, ok := s.pipelines[act.Pipeline]
 		if !ok {
 			return fmt.Errorf("no pipeline %q wired", act.Pipeline)
@@ -140,6 +156,7 @@ func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []
 }
 
 func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, model string) error {
+	s.auditf(audit.KindDispatch, d.Thread+"·"+model, map[string]string{"msg": d.Message})
 	if d.Thread == "ollama" {
 		if s.ollamaSend == nil {
 			return errors.New("ollama dispatch not wired")
@@ -282,6 +299,7 @@ func (s *replSession) saveMemoryText(ctx context.Context, text string) error {
 	}); err != nil {
 		return fmt.Errorf("save memory: %w", err)
 	}
+	s.auditf(audit.KindMemoryWrite, text, nil)
 	s.println("◆ remembered")
 	return nil
 }
@@ -322,6 +340,13 @@ func (s *replSession) print(text string) {
 	fmt.Fprint(s.out, text)
 }
 
+func (s *replSession) auditf(kind audit.Kind, detail string, meta map[string]string) {
+	if s.audit == nil {
+		return
+	}
+	_ = s.audit.Append(audit.Record{Kind: kind, Detail: detail, Meta: meta})
+}
+
 func renderHits(hits []memory.Hit) []string {
 	var out []string
 	for _, h := range hits {
@@ -350,7 +375,7 @@ func (s *replSession) lastActionJSON() string {
 }
 
 // newREPLSession wires a production session for the current project. The
-// returned cleanup closes the memory stores.
+// returned cleanup closes the memory stores and audit log.
 func newREPLSession(a *app) (*replSession, func(), error) {
 	proj, err := project.Current()
 	if err != nil {
@@ -382,6 +407,26 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 	if err != nil {
 		cleanup()
 		return nil, nil, err
+	}
+	auditDir, err := paths.AuditDir()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	projAudit := filepath.Join(auditDir, proj.Name)
+	if err := paths.EnsureDir(projAudit); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	al, err := audit.Open(filepath.Join(projAudit, time.Now().Format("20060102-150405")+".jsonl"))
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	cleanup = func() {
+		mem.Close()
+		glob.Close()
+		al.Close()
 	}
 
 	och := rawChannel(a.channels["ollama"])
@@ -431,6 +476,7 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 		mem:      mem,
 		glob:     glob,
 		emb:      emb,
+		audit:    al,
 		tiers:    a.routing.Tiers,
 		fableCap: a.routing.Brain.FableWeeklyCap,
 		tracker:  a.tracker,
@@ -501,7 +547,7 @@ func cmdREPL(a *app) error {
 		return err
 	}
 	defer cleanup()
-	fmt.Printf("styx — %s · /status /budget /threads /why /quit\n", s.proj.Name)
+	fmt.Printf("styx — %s · /status /budget /threads /why /audit /quit\n", s.proj.Name)
 	for {
 		fmt.Print("styx› ")
 		line, err := s.in.ReadString('\n')
@@ -552,8 +598,21 @@ func (s *replSession) slash(line string) bool {
 		}
 	case "/why":
 		s.println(s.lastActionJSON())
+	case "/audit":
+		if s.audit == nil {
+			s.println("(audit unavailable)")
+			return false
+		}
+		recs, err := s.audit.Tail(20)
+		if err != nil {
+			s.println("(audit unavailable: " + err.Error() + ")")
+			return false
+		}
+		for _, r := range recs {
+			s.println(fmt.Sprintf("%s  %-12s %s", r.At.Format("15:04:05"), r.Kind, r.Detail))
+		}
 	default:
-		s.println("unknown command (try /status /budget /threads /why /quit)")
+		s.println("unknown command (try /status /budget /threads /why /audit /quit)")
 	}
 	return false
 }

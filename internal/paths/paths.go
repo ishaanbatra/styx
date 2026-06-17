@@ -91,6 +91,15 @@ func MemoryDir() (string, error) {
 	return filepath.Join(s, "memory"), nil
 }
 
+// AuditDir returns the directory holding per-project session audit logs.
+func AuditDir() (string, error) {
+	s, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s, "audit"), nil
+}
+
 // ThreadsDir returns the directory holding per-project agent-thread state.
 func ThreadsDir() (string, error) {
 	s, err := StateDir()

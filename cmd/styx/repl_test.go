@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/agent"
+	"github.com/ishaanbatra/styx/internal/audit"
 	"github.com/ishaanbatra/styx/internal/brain"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/config"
@@ -58,6 +59,11 @@ func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *b
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { bud.Close() })
+	al, err := audit.Open(filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { al.Close() })
 	threads, err := agent.LoadThreadsFrom(filepath.Join(dir, "threads.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +90,7 @@ func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *b
 		mem:      mem,
 		glob:     glob,
 		emb:      replEmbedder{},
+		audit:    al,
 		tiers:    map[string]string{"fable": "fable", "opus": "opus", "sonnet": "sonnet", "haiku": "haiku"},
 		fableCap: 2,
 		tracker:  bud,
@@ -253,5 +260,22 @@ func TestRoutingPreferenceIsLowConfidenceAndScoped(t *testing.T) {
 	}
 	if it.Scope != "reviews" {
 		t.Errorf("scope = %q, want reviews", it.Scope)
+	}
+}
+
+func TestAuditTrail(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionReply, Reply: "hi", Confidence: 0.9}}}
+	s, out := newTestSession(t, b, "")
+	if err := s.turn(context.Background(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if quit := s.slash("/audit"); quit {
+		t.Fatal("/audit should not quit")
+	}
+	got := out.String()
+	for _, want := range []string{"turn", "decision"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("/audit output missing %q:\n%s", want, got)
+		}
 	}
 }

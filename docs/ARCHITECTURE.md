@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-16
+last_verified: 2026-06-17
 ---
 
 # Styx Architecture
@@ -74,14 +74,16 @@ Shared pieces:
   Ollama models.
 - `repl.go` — the conversational frontend and session core. `cmdREPL` runs the
   persistent bare-`styx` loop with `/status`, `/budget`, `/threads`, `/why`,
-  and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
+  `/audit`, and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
   recalls project/global memory, asks the local brain for an action, then
   replies, dispatches to persistent agent threads, runs a wired pipeline,
   performs an interactive handoff, or stores explicit memory. If the brain is
   unavailable, the session asks the user for a manual thread choice instead of
   failing closed. It also resolves brain tier names through `[tiers]` and
-  degrades hot fable usage to opus via `budget.Tracker.ModelCount`. Session
-  cleanup stores a best-effort distillation back to project memory.
+  degrades hot fable usage to opus via `budget.Tracker.ModelCount`. Each
+  session also opens a per-project audit log and `/audit` tails the last 20
+  records. Session cleanup stores a best-effort distillation back to project
+  memory and closes open stores/logs.
 - `logStatus()` writes `[styx]` status lines to stderr unless `--quiet`;
   final results go to stdout and are never suppressed.
 
@@ -249,7 +251,7 @@ counts recent failures; app routing opens a channel circuit after 3 failures in
 into `~/.config/styx/projects.toml` (slugged name, sniffed language, default
 `styx/research` + `styx/plans` dirs). `paths` resolves XDG-style locations:
 ConfigDir, StateDir, CacheDir, LogDir, RoutingPath, ProjectsPath, UsageDBPath,
-MemoryDir, and ThreadsDir. All file writes in config/brief/intel use atomic
+MemoryDir, AuditDir, and ThreadsDir. All file writes in config/brief/intel use atomic
 tmp+rename.
 
 ## Intel (internal/intel)
@@ -279,6 +281,14 @@ similarity weighted by confidence and recency (`confidence * 0.5^(age/90d)`),
 so stale or low-confidence corrections fade at personal scale. `Embedder`
 abstracts text to float32 vectors; the production `OllamaEmbedder` posts to
 `/api/embed` with a 30s HTTP client timeout and caller-provided context.
+
+## Audit (internal/audit)
+
+Per-session REPL audit trails are append-only JSONL files under
+`~/.config/styx/state/audit/<project>/YYYYMMDD-HHMMSS.jsonl`. Each record has
+an RFC3339 timestamp, kind, detail, and optional string metadata. The REPL logs
+turns, brain decisions, dispatches, pipeline runs, memory writes, and ship-risk
+prompts, then `/audit` tails the last 20 records from the current session.
 
 ## Pipelines (internal/pipeline + cmd/styx/auto.go)
 
@@ -336,6 +346,7 @@ vars out of shell rc files.
 ~/.config/styx/projects.toml                project registry (auto-managed)
 ~/.config/styx/state/usage.db               sqlite usage log
 ~/.config/styx/state/memory/                per-project memory sqlite databases
+~/.config/styx/state/audit/<proj>/*.jsonl   per-session REPL audit trails
 ~/.config/styx/state/threads/               agent-thread state
 ~/.config/styx/state/intel/<proj>/index.json
 <project>/.claude/context.md                rendered intel (Claude Code loads it)
