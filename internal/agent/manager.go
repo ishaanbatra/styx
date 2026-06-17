@@ -174,7 +174,10 @@ func (m *Manager) saveMemory(ctx context.Context, kind memory.Kind, text, source
 	if err != nil {
 		return
 	}
-	_, _ = m.Mem.Add(ctx, memory.Item{Kind: kind, Text: text, Source: source, Embedding: vec})
+	_, _ = m.Mem.Add(ctx, memory.Item{
+		Kind: kind, Text: text, Source: source,
+		Project: m.Project.Name, Scope: "thread", Confidence: 0.8, Embedding: vec,
+	})
 }
 
 // StatusLines renders one line per thread for the brain and /status.
