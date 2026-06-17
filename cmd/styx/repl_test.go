@@ -229,3 +229,29 @@ func TestShipRiskAutoApproved(t *testing.T) {
 		t.Error("auto pipeline did not run under assumeYes")
 	}
 }
+
+func TestRoutingPreferenceIsLowConfidenceAndScoped(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionRemember,
+		Remember: "routing-preference: codex handles algorithm reviews; scope: reviews", Confidence: 1}}}
+	s, _ := newTestSession(t, b, "")
+	if err := s.turn(context.Background(), "no, codex should do reviews"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	items, err := s.mem.All(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items", len(items))
+	}
+	it := items[0]
+	if it.Kind != memory.KindRoutingPreference {
+		t.Errorf("kind = %s", it.Kind)
+	}
+	if it.Confidence >= 1 {
+		t.Errorf("routing-pref confidence = %v, want < 1", it.Confidence)
+	}
+	if it.Scope != "reviews" {
+		t.Errorf("scope = %q, want reviews", it.Scope)
+	}
+}

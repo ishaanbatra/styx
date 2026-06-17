@@ -66,3 +66,30 @@ func TestVecEncodeDecodeRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestStoreProvenanceRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "p.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if _, err := s.Add(ctx, Item{
+		Kind: KindRoutingPreference, Text: "codex for reviews",
+		Project: "styx", Scope: "reviews", Confidence: 0.6, Embedding: []float32{0.1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.All(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items", len(items))
+	}
+	it := items[0]
+	if it.Project != "styx" || it.Scope != "reviews" || it.Confidence != 0.6 {
+		t.Errorf("provenance round-trip = %+v", it)
+	}
+}

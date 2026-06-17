@@ -28,12 +28,16 @@ const (
 
 // Item is one memory record.
 type Item struct {
-	ID        int64
-	Kind      Kind
-	Text      string
-	Source    string // which thread/session/pipeline wrote it
-	Embedding []float32
-	CreatedAt time.Time
+	ID         int64
+	Kind       Kind
+	Text       string
+	Source     string
+	Project    string  // owning project ("" = global)
+	Scope      string  // optional applicability hint, e.g. "reviews" or "general"
+	Confidence float64 // 0..1; explicit facts high, one-off corrections low
+	Embedding  []float32
+	CreatedAt  time.Time
+	LastUsedAt time.Time // bumped on recall; reserved for future eviction
 }
 
 // Store is one SQLite memory database (per-project or global).
@@ -43,12 +47,16 @@ type Store struct {
 
 const schema = `
 CREATE TABLE IF NOT EXISTS memory (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind       TEXT    NOT NULL,
-    text       TEXT    NOT NULL,
-    source     TEXT    NOT NULL DEFAULT '',
-    embedding  BLOB    NOT NULL,
-    created_at INTEGER NOT NULL
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT    NOT NULL,
+    text         TEXT    NOT NULL,
+    source       TEXT    NOT NULL DEFAULT '',
+    project      TEXT    NOT NULL DEFAULT '',
+    scope        TEXT    NOT NULL DEFAULT '',
+    confidence   REAL    NOT NULL DEFAULT 1,
+    embedding    BLOB    NOT NULL,
+    created_at   INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -62,17 +70,64 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply memory schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
 // Close releases the database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
+// migrate adds provenance columns to memory DBs created before they existed.
+func migrate(db *sql.DB) error {
+	want := map[string]string{
+		"project":      "TEXT NOT NULL DEFAULT ''",
+		"scope":        "TEXT NOT NULL DEFAULT ''",
+		"confidence":   "REAL NOT NULL DEFAULT 1",
+		"last_used_at": "INTEGER NOT NULL DEFAULT 0",
+	}
+	rows, err := db.Query(`PRAGMA table_info(memory)`)
+	if err != nil {
+		return fmt.Errorf("inspect memory schema: %w", err)
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan memory schema: %w", err)
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read memory schema: %w", err)
+	}
+	rows.Close()
+	for name, def := range want {
+		if !have[name] {
+			if _, err := db.Exec("ALTER TABLE memory ADD COLUMN " + name + " " + def); err != nil {
+				return fmt.Errorf("add memory column %s: %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+
 // Add inserts an item and returns its id.
 func (s *Store) Add(ctx context.Context, it Item) (int64, error) {
+	if it.Confidence == 0 {
+		it.Confidence = 1
+	}
 	res, err := s.db.ExecContext(ctx,
-		`INSERT INTO memory (kind, text, source, embedding, created_at) VALUES (?, ?, ?, ?, ?)`,
-		string(it.Kind), it.Text, it.Source, encodeVec(it.Embedding), time.Now().Unix())
+		`INSERT INTO memory (kind, text, source, project, scope, confidence, embedding, created_at, last_used_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		string(it.Kind), it.Text, it.Source, it.Project, it.Scope, it.Confidence,
+		encodeVec(it.Embedding), time.Now().Unix(), 0)
 	if err != nil {
 		return 0, fmt.Errorf("insert memory item: %w", err)
 	}
@@ -82,7 +137,7 @@ func (s *Store) Add(ctx context.Context, it Item) (int64, error) {
 // All returns every item in the store, newest first.
 func (s *Store) All(ctx context.Context) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, kind, text, source, embedding, created_at FROM memory ORDER BY id DESC`)
+		`SELECT id, kind, text, source, project, scope, confidence, embedding, created_at, last_used_at FROM memory ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query memory: %w", err)
 	}
@@ -92,13 +147,16 @@ func (s *Store) All(ctx context.Context) ([]Item, error) {
 		var it Item
 		var kind string
 		var blob []byte
-		var ts int64
-		if err := rows.Scan(&it.ID, &kind, &it.Text, &it.Source, &blob, &ts); err != nil {
+		var ts, lastUsed int64
+		if err := rows.Scan(&it.ID, &kind, &it.Text, &it.Source, &it.Project, &it.Scope, &it.Confidence, &blob, &ts, &lastUsed); err != nil {
 			return nil, fmt.Errorf("scan memory item: %w", err)
 		}
 		it.Kind = Kind(kind)
 		it.Embedding = decodeVec(blob)
 		it.CreatedAt = time.Unix(ts, 0)
+		if lastUsed != 0 {
+			it.LastUsedAt = time.Unix(lastUsed, 0)
+		}
 		out = append(out, it)
 	}
 	return out, rows.Err()

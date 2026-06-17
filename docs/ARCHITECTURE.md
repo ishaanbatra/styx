@@ -268,13 +268,17 @@ Claude Code auto-loads project context.
 Long-term memory is stored in SQLite databases under
 `~/.config/styx/state/memory/`. Each store has a `memory` table of typed items
 (`decision`, `todo`, `distillation`, `brief`, `fact`, or
-`routing-preference`) with source metadata, creation time, and a float32
-embedding packed as a little-endian blob. The initial store API supports open,
-close, insert, and newest-first full scans. `Recall` embeds a query and ranks
-items across one or more stores by brute-force cosine similarity at personal
-scale. `Embedder` abstracts text to float32 vectors; the production
-`OllamaEmbedder` posts to `/api/embed` with a 30s HTTP client timeout and
-caller-provided context.
+`routing-preference`) with source metadata, provenance columns (`project`,
+`scope`, `confidence`, `last_used_at`), creation time, and a float32 embedding
+packed as a little-endian blob. Old memory DBs are migrated additively on open;
+unset confidence defaults to `1`, while one-off routing preferences enter at
+lower confidence and may carry a scope hint such as `reviews`. The store API
+supports open, close, insert, and newest-first full scans. `Recall` embeds a
+query and ranks items across one or more stores by brute-force cosine
+similarity weighted by confidence and recency (`confidence * 0.5^(age/90d)`),
+so stale or low-confidence corrections fade at personal scale. `Embedder`
+abstracts text to float32 vectors; the production `OllamaEmbedder` posts to
+`/api/embed` with a 30s HTTP client timeout and caller-provided context.
 
 ## Pipelines (internal/pipeline + cmd/styx/auto.go)
 

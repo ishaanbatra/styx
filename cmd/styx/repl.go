@@ -263,18 +263,44 @@ func (s *replSession) askUserRoute(ctx context.Context, utterance string) error 
 // can teach the brain this user's preferences.
 func (s *replSession) saveMemoryText(ctx context.Context, text string) error {
 	kind := memory.KindFact
-	if strings.HasPrefix(text, "routing-preference:") {
+	scope := "general"
+	confidence := 1.0
+	if rest, ok := strings.CutPrefix(text, "routing-preference:"); ok {
 		kind = memory.KindRoutingPreference
+		// One-off corrections start low and decay; the brain only leans on them
+		// when they recur. An optional "scope: <x>" hint narrows them.
+		confidence = 0.6
+		scope = parseScope(rest)
 	}
 	vec, err := s.emb.Embed(ctx, text)
 	if err != nil {
 		return fmt.Errorf("embed memory: %w", err)
 	}
-	if _, err := s.mem.Add(ctx, memory.Item{Kind: kind, Text: text, Source: "repl", Embedding: vec}); err != nil {
+	if _, err := s.mem.Add(ctx, memory.Item{
+		Kind: kind, Text: text, Source: "repl",
+		Project: s.proj.Name, Scope: scope, Confidence: confidence, Embedding: vec,
+	}); err != nil {
 		return fmt.Errorf("save memory: %w", err)
 	}
 	s.println("◆ remembered")
 	return nil
+}
+
+// parseScope pulls an optional "scope: <tag>" hint out of a routing preference
+// ("...scope: reviews"); defaults to "general".
+func parseScope(s string) string {
+	i := strings.Index(s, "scope:")
+	if i < 0 {
+		return "general"
+	}
+	tag := strings.TrimSpace(s[i+len("scope:"):])
+	if j := strings.IndexAny(tag, ".\n;"); j >= 0 {
+		tag = tag[:j]
+	}
+	if tag = strings.TrimSpace(tag); tag == "" {
+		return "general"
+	}
+	return tag
 }
 
 func (s *replSession) pushRecent(utterance, outcome string) {
@@ -299,7 +325,14 @@ func (s *replSession) print(text string) {
 func renderHits(hits []memory.Hit) []string {
 	var out []string
 	for _, h := range hits {
-		out = append(out, fmt.Sprintf("[%s] %s", h.Item.Kind, h.Item.Text))
+		meta := string(h.Item.Kind)
+		if h.Item.Scope != "" && h.Item.Scope != "general" {
+			meta += "; scope " + h.Item.Scope
+		}
+		if h.Item.Confidence > 0 && h.Item.Confidence < 1 {
+			meta += fmt.Sprintf("; conf %.1f", h.Item.Confidence)
+		}
+		out = append(out, fmt.Sprintf("[%s] %s", meta, h.Item.Text))
 	}
 	return out
 }
@@ -558,7 +591,8 @@ func (s *replSession) endSession() {
 		return
 	}
 	_, _ = s.mem.Add(ctx, memory.Item{
-		Kind: memory.KindDistillation, Text: sum, Source: "repl-session", Embedding: vec,
+		Kind: memory.KindDistillation, Text: sum, Source: "repl-session",
+		Project: s.proj.Name, Scope: "thread", Confidence: 0.9, Embedding: vec,
 	})
 }
 
