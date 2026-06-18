@@ -198,6 +198,10 @@ Each discoverer is tiny and independently testable. MVP ships two:
   - **agy / ollama:** ignore `Effort`.
 - Effort is **never validated** by styx; an unsupported value surfaces as the
   CLI's own `ClassifiedError`.
+- **Scope:** effort flows through the **router → `channel.Request`** path
+  (verbs and the research/plan/review pipelines — where the bug occurred). The
+  REPL brain → `internal/agent` thread path is separate; the brain does not emit
+  effort, so that path is out of scope for this feature.
 
 ## One-time migration & record
 
