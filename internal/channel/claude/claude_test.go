@@ -92,3 +92,11 @@ func TestSend_MissingBinaryIsClassified(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestClaudeArgs_ExtraRoots(t *testing.T) {
+	got := claudeArgs(channel.Request{Prompt: "hi", ExtraRoots: []string{"/a", "/b"}})
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "--add-dir /a") || !strings.Contains(joined, "--add-dir /b") {
+		t.Errorf("missing --add-dir roots in %q", joined)
+	}
+}

@@ -64,6 +64,11 @@ func codexArgs(req channel.Request) []string {
 		// mirroring the claude `--dangerously-skip-permissions` implement path.
 		args = append(args, "--sandbox", "workspace-write")
 	}
+	for _, root := range req.ExtraRoots {
+		if root != "" {
+			args = append(args, "--add-dir", root)
+		}
+	}
 	args = append(args, req.Prompt)
 	return args
 }

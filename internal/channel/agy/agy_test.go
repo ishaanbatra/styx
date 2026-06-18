@@ -90,6 +90,22 @@ func TestName(t *testing.T) {
 	}
 }
 
+func TestSend_AppendsExtraRoots(t *testing.T) {
+	dir := fakeAgy(t, `echo "$@" > "$STYX_TEST_ARGS_FILE"; echo ok`)
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("STYX_TEST_ARGS_FILE", argsFile)
+	c := New()
+	if _, err := c.Send(context.Background(), channel.Request{Prompt: "hi", ExtraRoots: []string{"/a", "/b"}}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(argsFile)
+	got := string(b)
+	if !contains(got, "/a") || !contains(got, "/b") {
+		t.Errorf("expected both roots in args, got: %s", got)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

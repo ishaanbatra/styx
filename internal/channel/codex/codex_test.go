@@ -86,3 +86,11 @@ func TestSend_MissingBinary(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestCodexArgs_ExtraRoots(t *testing.T) {
+	got := codexArgs(channel.Request{Prompt: "hi", ExtraRoots: []string{"/a", "/b"}})
+	want := []string{"exec", "--add-dir", "/a", "--add-dir", "/b", "hi"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("args = %v, want %v", got, want)
+	}
+}
