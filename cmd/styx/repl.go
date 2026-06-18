@@ -492,7 +492,11 @@ func renderProject(p config.Project, bound bool) string {
 }
 
 func (s *replSession) renderBoundProjects() []string {
-	return []string{renderProject(s.proj(), true)}
+	var out []string
+	for _, bp := range s.bound {
+		out = append(out, renderProject(bp.proj, true))
+	}
+	return out
 }
 
 func (s *replSession) renderKnownProjects() []string {
@@ -502,7 +506,7 @@ func (s *replSession) renderKnownProjects() []string {
 	}
 	var out []string
 	for _, p := range regs {
-		if p.ID == s.proj().ID {
+		if _, bound := s.bound[p.ID]; bound {
 			continue
 		}
 		out = append(out, renderProject(p, false))
@@ -524,8 +528,16 @@ func (s *replSession) lastActionJSON() string {
 
 // newREPLSession wires a production session for the current project. The
 // returned cleanup closes all bound project resources and the audit log.
-func newREPLSession(a *app) (*replSession, func(), error) {
-	seed, err := resolveGlobalTarget("")
+// Optional repos names are resolved and bound at launch; the first becomes
+// the focus; cwd-based resolution is used when no repos are given.
+func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
+	var seed project.Project
+	var err error
+	if len(repos) > 0 {
+		seed, err = target.Resolve(target.Spec{Alias: repos[0]})
+	} else {
+		seed, err = resolveGlobalTarget("")
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -641,6 +653,18 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 	_ = bp
 	s.focus = seed.ID
 
+	for _, name := range repos[1:] {
+		p, err := target.Resolve(target.Spec{Alias: name})
+		if err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("bind launch repo %q: %w", name, err)
+		}
+		if _, err := s.bind(p); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+	}
+
 	return s, cleanup, nil
 }
 
@@ -681,14 +705,23 @@ func indexNewestBrief(ctx context.Context, mem *memory.Store, emb memory.Embedde
 	})
 }
 
+// plural returns "s" when n != 1, "" otherwise.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 // cmdREPL is bare `styx`: the persistent conversational session.
-func cmdREPL(a *app) error {
-	s, cleanup, err := newREPLSession(a)
+func cmdREPL(a *app, repos ...string) error {
+	s, cleanup, err := newREPLSession(a, repos...)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	fmt.Printf("styx — %s · /status /budget /threads /why /audit /quit\n", s.proj().Name)
+	fmt.Printf("styx — %s (%d repo%s) · /status /repos /focus /budget /threads /why /audit /quit\n",
+		s.proj().Name, len(s.bound), plural(len(s.bound)))
 	for {
 		fmt.Print("styx› ")
 		line, err := s.in.ReadString('\n')
@@ -726,13 +759,45 @@ func (s *replSession) slash(line string) bool {
 	case "/quit", "/exit":
 		return true
 	case "/status", "/threads":
-		lines := s.mgr().StatusLines()
-		if len(lines) == 0 {
-			s.println("no threads yet (they start lazily on first dispatch)")
+		for id, bp := range s.bound {
+			marker := "  "
+			if id == s.focus {
+				marker = "→ "
+			}
+			s.println(marker + bp.proj.Name)
+			lines := bp.mgr.StatusLines()
+			if len(lines) == 0 {
+				s.println("  no threads yet (they start lazily on first dispatch)")
+			}
+			for _, l := range lines {
+				s.println("  " + meterize(l))
+			}
 		}
-		for _, l := range lines {
-			s.println(meterize(l))
+	case "/repos":
+		for id, bp := range s.bound {
+			marker := "  "
+			if id == s.focus {
+				marker = "→ "
+			}
+			s.println(marker + renderProject(bp.proj, true))
 		}
+	case "/focus":
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			s.println("usage: /focus <project>")
+			return false
+		}
+		p, err := target.Resolve(target.Spec{Alias: fields[1]})
+		if err != nil {
+			s.println("focus: " + err.Error())
+			return false
+		}
+		if _, err := s.bind(p); err != nil {
+			s.println("focus: " + err.Error())
+			return false
+		}
+		s.focus = p.ID
+		s.println("→ focus: " + p.Name)
 	case "/budget":
 		if err := cmdBudget(nil); err != nil {
 			s.println("budget: " + err.Error())
@@ -757,7 +822,7 @@ func (s *replSession) slash(line string) bool {
 			s.println(fmt.Sprintf("%s  %-12s %-12s %s", r.At.Format("15:04:05"), tag, r.Kind, r.Detail))
 		}
 	default:
-		s.println("unknown command (try /status /budget /threads /why /audit /quit)")
+		s.println("unknown command (try /status /repos /focus /budget /threads /why /audit /quit)")
 	}
 	return false
 }

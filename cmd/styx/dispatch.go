@@ -306,10 +306,28 @@ func dispatch(verb string, args []string) error {
 	case "grunt", "think", "explain", "summarize", "critique":
 		return cmdOneShot(a, verb, args)
 	}
-	// Anything that isn't a verb is an utterance: `styx "fix the flaky test"`
-	// runs one brain turn and exits.
-	utterance := strings.TrimSpace(strings.Join(append([]string{verb}, args...), " "))
+	// `styx <repo...>`: if every positional names a resolvable project, open the
+	// REPL bound to them (first = focus). Otherwise it's a one-shot utterance.
+	tokens := append([]string{verb}, args...)
+	if repos, ok := allReposResolve(tokens); ok {
+		return cmdREPL(a, repos...)
+	}
+	utterance := strings.TrimSpace(strings.Join(tokens, " "))
 	return cmdBrainTurn(a, utterance)
+}
+
+// allReposResolve reports whether every token names a resolvable project; if so
+// it returns the tokens so the caller can open the REPL bound to them.
+func allReposResolve(tokens []string) ([]string, bool) {
+	if len(tokens) == 0 {
+		return nil, false
+	}
+	for _, tok := range tokens {
+		if _, err := target.Resolve(target.Spec{Alias: tok}); err != nil {
+			return nil, false
+		}
+	}
+	return tokens, true
 }
 
 // ensureFirstRun creates the config dir and seeds routing.toml on first run.

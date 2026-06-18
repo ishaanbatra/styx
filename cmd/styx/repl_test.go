@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -453,5 +454,40 @@ func TestRecallSpansBoundRepos(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("cross-repo recall did not surface B's fact: %+v", hits)
+	}
+}
+
+func TestTwoRepoScriptedSession(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "traced")
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	t.Setenv("FAKEAGENT_ARGS_LOG", argsLog)
+
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "backend", bud)
+	b := bindTestProject(t, "teacher", bud)
+	_ = config.SaveProjects([]config.Project{
+		{ID: "backend", Name: "backend", Path: a.proj.Path},
+		{ID: "teacher", Name: "teacher", Path: b.proj.Path},
+	})
+	out := &bytes.Buffer{}
+	s := &replSession{
+		bound: map[string]*boundProject{"backend": a, "teacher": b},
+		focus: "backend", emb: replEmbedder{}, tracker: bud,
+		tiers: map[string]string{"opus": "opus", "haiku": "haiku"},
+		in:    bufio.NewReader(strings.NewReader("")), out: out,
+	}
+	d := brain.Dispatch{Thread: "claude", Message: "trace upload", Project: "teacher", ExtraRoots: []string{"backend"}}
+	if err := s.runOneDispatch(context.Background(), d, "opus"); err != nil {
+		t.Fatal(err)
+	}
+	log, _ := os.ReadFile(argsLog)
+	if !strings.Contains(string(log), "--add-dir") || !strings.Contains(string(log), a.proj.Path) {
+		t.Errorf("backend not attached to teacher dispatch: %s", log)
+	}
+	if b.mgr.Threads.Get("claude", "claude").Turns != 1 {
+		t.Errorf("teacher thread did not run")
 	}
 }
