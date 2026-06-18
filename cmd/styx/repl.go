@@ -661,7 +661,7 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 		}
 		if _, err := s.bind(p); err != nil {
 			cleanup()
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("bind launch repo %q: %w", name, err)
 		}
 	}
 
