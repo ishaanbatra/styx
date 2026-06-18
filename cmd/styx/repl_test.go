@@ -419,3 +419,39 @@ func TestScriptedSession(t *testing.T) {
 		t.Errorf("status output missing thread line:\n%s", out.String())
 	}
 }
+
+func TestRecallSpansBoundRepos(t *testing.T) {
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "A", bud)
+	b := bindTestProject(t, "B", bud)
+	glob, _ := memory.Open(filepath.Join(t.TempDir(), "glob.db"))
+
+	s := &replSession{
+		bound: map[string]*boundProject{"A": a, "B": b},
+		focus: "A",
+		glob:  glob,
+		emb:   replEmbedder{},
+	}
+	// A fact learned in repo B.
+	vec, _ := s.emb.Embed(context.Background(), "the embedding worker lives in B")
+	if _, err := b.mem.Add(context.Background(), memory.Item{
+		Kind: memory.KindFact, Text: "the embedding worker lives in B",
+		Project: "B", Embedding: vec, Confidence: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Recall from focus A must surface B's fact.
+	hits, err := s.recallAll(context.Background(), "where is the embedding worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, h := range hits {
+		if strings.Contains(h.Item.Text, "embedding worker lives in B") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("cross-repo recall did not surface B's fact: %+v", hits)
+	}
+}

@@ -118,10 +118,21 @@ func (s *replSession) bind(p config.Project) (*boundProject, error) {
 	return bp, nil
 }
 
+// recallAll recalls across every bound repo's store plus the global store, so a
+// fact learned in one repo surfaces when the focus is elsewhere.
+func (s *replSession) recallAll(ctx context.Context, utterance string) ([]memory.Hit, error) {
+	stores := make([]*memory.Store, 0, len(s.bound)+1)
+	for _, bp := range s.bound {
+		stores = append(stores, bp.mem)
+	}
+	stores = append(stores, s.glob)
+	return memory.Recall(ctx, s.emb, utterance, 5, stores...)
+}
+
 // turn runs one full loop iteration: recall -> decide -> act.
 func (s *replSession) turn(ctx context.Context, utterance string) error {
 	s.auditf(audit.KindTurn, utterance, nil)
-	hits, err := memory.Recall(ctx, s.emb, utterance, 5, s.mem(), s.glob)
+	hits, err := s.recallAll(ctx, utterance)
 	if err != nil {
 		hits = nil // recall is an enhancement, never a blocker
 	}
@@ -400,7 +411,7 @@ func (s *replSession) saveMemoryText(ctx context.Context, text string) error {
 	}
 	if _, err := s.mem().Add(ctx, memory.Item{
 		Kind: kind, Text: text, Source: "repl",
-		Project: s.proj().Name, Scope: scope, Confidence: confidence, Embedding: vec,
+		Project: s.proj().ID, Scope: scope, Confidence: confidence, Embedding: vec,
 	}); err != nil {
 		return fmt.Errorf("save memory: %w", err)
 	}
@@ -781,7 +792,7 @@ func (s *replSession) endSession() {
 	}
 	_, _ = s.mem().Add(ctx, memory.Item{
 		Kind: memory.KindDistillation, Text: sum, Source: "repl-session",
-		Project: s.proj().Name, Scope: "thread", Confidence: 0.9, Embedding: vec,
+		Project: s.proj().ID, Scope: "thread", Confidence: 0.9, Embedding: vec,
 	})
 }
 
