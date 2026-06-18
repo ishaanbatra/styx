@@ -50,6 +50,11 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 	if req.WorkingDir != "" {
 		args = append(args, "--add-dir", req.WorkingDir)
 	}
+	for _, root := range req.ExtraRoots {
+		if root != "" {
+			args = append(args, "--add-dir", root)
+		}
+	}
 	cmd := exec.CommandContext(ctx, "agy", args...)
 	if req.WorkingDir != "" {
 		if _, statErr := osStat(req.WorkingDir); statErr == nil {

@@ -46,6 +46,8 @@ type Event struct {
 	TokensOut int
 	Success   bool
 	ErrorKind string // "", "timeout", "429", "5xx", "other"
+	Project   string // resolved project ID ("" = none)
+	RunID     string // per-session / per-verb run correlation id ("" = none)
 }
 
 // State is the current spend posture for a channel.
@@ -96,7 +98,7 @@ func Default() (*Tracker, error) {
 
 // New opens (and migrates) the sqlite database at path.
 func New(path string) (*Tracker, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
@@ -110,6 +112,18 @@ func New(path string) (*Tracker, error) {
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			db.Close()
 			return nil, fmt.Errorf("migrate usage.model column: %w", err)
+		}
+	}
+	// v0.4 migration: per-event project tag + run-id for usage attribution.
+	for _, col := range []string{
+		`ALTER TABLE usage ADD COLUMN project TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE usage ADD COLUMN run_id TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.ExecContext(context.Background(), col); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				db.Close()
+				return nil, fmt.Errorf("migrate usage columns: %w", err)
+			}
 		}
 	}
 	return &Tracker{
@@ -173,8 +187,9 @@ func (t *Tracker) Record(ctx context.Context, e Event) error {
 		successInt = 1
 	}
 	_, err := t.db.ExecContext(ctx,
-		`INSERT INTO usage (ts, channel, verb, model, tokens_in, tokens_out, success, error_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		time.Now().Unix(), e.Channel, e.Verb, e.Model, e.TokensIn, e.TokensOut, successInt, e.ErrorKind)
+		`INSERT INTO usage (ts, channel, verb, model, tokens_in, tokens_out, success, error_kind, project, run_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().Unix(), e.Channel, e.Verb, e.Model, e.TokensIn, e.TokensOut, successInt, e.ErrorKind, e.Project, e.RunID)
 	if err != nil {
 		return fmt.Errorf("record usage: %w", err)
 	}

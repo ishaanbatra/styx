@@ -33,6 +33,8 @@ type Dispatch struct {
 	Thread     string    `json:"thread"`                // claude | codex | agy | ollama
 	Model      string    `json:"model,omitempty"`       // tier (fable|opus|sonnet|haiku) or ollama model
 	Message    string    `json:"message"`               // what to send the agent
+	Project    string    `json:"project,omitempty"`     // primary repo name; cwd + commit target ("" = focus)
+	ExtraRoots []string  `json:"extra_roots,omitempty"` // additional repo names, attached via --add-dir
 	CLIOptions []string  `json:"cli_options,omitempty"` // extra CLI flags, e.g. --add-dir
 	Rationale  string    `json:"rationale,omitempty"`   // one line, shown to the user
 	Risk       RiskLevel `json:"risk,omitempty"`
@@ -140,6 +142,8 @@ var ActionSchema = json.RawMessage(`{
           "thread": {"type": "string", "enum": ["claude", "codex", "agy", "ollama"]},
           "model": {"type": "string"},
           "message": {"type": "string"},
+          "project": {"type": "string"},
+          "extra_roots": {"type": "array", "items": {"type": "string"}},
           "cli_options": {"type": "array", "items": {"type": "string"}},
           "rationale": {"type": "string"},
           "risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}

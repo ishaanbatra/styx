@@ -179,3 +179,22 @@ func TestResume_PicksUpWhereLeftOff(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadStateVersionlessStillLoads(t *testing.T) {
+	dir := t.TempDir()
+	// A pre-version state.json (no "version" key) must load without error.
+	legacy := `{"run_id":"20260101-000000-x","goal":"g","status":"running","current_stage":2,"branch":"styx/x","stages":[{"id":1,"name":"research","status":"completed"},{"id":2,"name":"intel","status":"running"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadState(dir)
+	if err != nil {
+		t.Fatalf("LoadState legacy: %v", err)
+	}
+	if s.RunID != "20260101-000000-x" || s.CurrentStage != 2 {
+		t.Errorf("legacy state misread: %+v", s)
+	}
+	if s.Version != StateVersion {
+		t.Errorf("Version not normalized: got %d want %d", s.Version, StateVersion)
+	}
+}

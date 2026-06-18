@@ -101,6 +101,12 @@ func BuildPrompt(t Turn) (string, string) {
 	if len(t.MemoryHits) > 0 {
 		u.WriteString("Relevant memories:\n" + strings.Join(t.MemoryHits, "\n") + "\n\n")
 	}
+	if len(t.BoundProjects) > 0 {
+		u.WriteString("Bound projects (the session is working in these):\n" + strings.Join(t.BoundProjects, "\n") + "\n\n")
+	}
+	if len(t.KnownProjects) > 0 {
+		u.WriteString("Known projects (name one in `project`/`extra_roots` to bring it in):\n" + strings.Join(t.KnownProjects, "\n") + "\n\n")
+	}
 	u.WriteString("User utterance:\n" + t.Utterance)
 	return sys.String(), u.String()
 }

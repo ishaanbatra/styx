@@ -91,3 +91,13 @@ func containsArg(args []string, want string) bool {
 	}
 	return false
 }
+
+func TestCodexAdapterPlacesExtraAfterExec(t *testing.T) {
+	a := NewCodexAdapter()
+	got := a.BuildArgs("hello", "", "opus", []string{"--add-dir", "/a"}, false)
+	// --add-dir must come AFTER exec and before the message.
+	want := []string{"--model", "opus", "exec", "--add-dir", "/a", "hello"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("args = %v, want %v", got, want)
+	}
+}

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,9 +16,11 @@ import (
 
 // Project is one registered code project.
 type Project struct {
+	ID           string   `toml:"id,omitempty"`
 	Name         string   `toml:"name"`
 	Path         string   `toml:"path"`
 	Language     string   `toml:"language"`
+	Description  string   `toml:"description,omitempty"`
 	ResearchDir  string   `toml:"research_dir,omitempty"`
 	PlansDir     string   `toml:"plans_dir,omitempty"`
 	DefaultVerbs []string `toml:"default_verbs,omitempty"`
@@ -44,7 +48,20 @@ func LoadProjects() ([]Project, error) {
 	if err := toml.Unmarshal(b, &pf); err != nil {
 		return nil, fmt.Errorf("parse projects.toml: %w", err)
 	}
+	for i := range pf.Project {
+		if pf.Project[i].ID == "" && pf.Project[i].Path != "" {
+			pf.Project[i].ID = ProjectID(pf.Project[i].Path)
+		}
+	}
 	return pf.Project, nil
+}
+
+// ProjectID returns a stable 12-hex-char identifier for a project, derived from
+// its absolute path. Used to key on-disk per-project state so a rename never
+// orphans it.
+func ProjectID(absPath string) string {
+	sum := sha256.Sum256([]byte(absPath))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 // SaveProjects writes projects.toml atomically (tmpfile + rename).

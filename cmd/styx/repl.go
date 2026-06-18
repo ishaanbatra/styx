@@ -22,48 +22,128 @@ import (
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
+	"github.com/ishaanbatra/styx/internal/pipeline"
 	"github.com/ishaanbatra/styx/internal/project"
+	"github.com/ishaanbatra/styx/internal/target"
 )
 
 const maxRecentTurns = 8
 
-// replSession is one conversational styx session for one project. The brain
-// routes each utterance; agent threads, pipelines, and memory do the work.
+// boundProject is one repo bound to the session: its own agent Manager, threads,
+// and memory store. Bound lazily on first reference.
+type boundProject struct {
+	proj    config.Project
+	mgr     *agent.Manager
+	mem     *memory.Store
+	closers []func() error
+}
+
+// replSession is one conversational styx session for one or more projects. The
+// brain routes each utterance; agent threads, pipelines, and memory do the work.
+// bound is the set of repos wired to this session (keyed by project ID); focus
+// is the ID of the currently active project.
 type replSession struct {
-	proj       config.Project
-	brain      brain.Brain
-	mgr        *agent.Manager
-	mem        *memory.Store // per-project
-	glob       *memory.Store // cross-project
-	emb        memory.Embedder
-	audit      *audit.Logger
-	tiers      map[string]string
-	fableCap   int
-	tracker    *budget.Tracker
-	pipelines  map[string]func(ctx context.Context, arg string) error
-	ollamaSend func(ctx context.Context, model, prompt string) (string, error)
-	assumeYes  bool // --yes / non-interactive: skip ship-risk confirmations
-	in         *bufio.Reader
-	out        io.Writer
-	outMu      sync.Mutex
-	summary    string
-	recent     []string
-	lastAction *brain.Action
+	bound        map[string]*boundProject                               // keyed by project ID
+	focus        string                                                 // ID of the current-focus project
+	runID        string                                                 // session run-id for budget tagging
+	summarize    func(ctx context.Context, text string) (string, error) // cheap local summarizer
+	thresholdPct float64                                                // = a.routing.Brain.ContextThresholdPct
+	distillModel string                                                 // = a.routing.Tiers["haiku"]
+	timeout      time.Duration                                          // computed claude subprocess budget
+	brain        brain.Brain
+	glob         *memory.Store // cross-project
+	emb          memory.Embedder
+	audit        *audit.Logger
+	tiers        map[string]string
+	fableCap     int
+	tracker      *budget.Tracker
+	pipelines    map[string]func(ctx context.Context, arg string) error
+	ollamaSend   func(ctx context.Context, model, prompt string) (string, error)
+	assumeYes    bool // --yes / non-interactive: skip ship-risk confirmations
+	in           *bufio.Reader
+	out          io.Writer
+	outMu        sync.Mutex
+	summary      string
+	recent       []string
+	lastAction   *brain.Action
+}
+
+func (s *replSession) proj() config.Project { return s.bound[s.focus].proj }
+func (s *replSession) mgr() *agent.Manager  { return s.bound[s.focus].mgr }
+func (s *replSession) mem() *memory.Store   { return s.bound[s.focus].mem }
+
+// bind returns the bound bundle for p, creating it lazily (memoized by ID).
+// Reuses the session-global embedder, budget tracker, brain, and run-id.
+func (s *replSession) bind(p config.Project) (*boundProject, error) {
+	if bp, ok := s.bound[p.ID]; ok {
+		return bp, nil
+	}
+	memDir, err := paths.MemoryDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := paths.EnsureDir(memDir); err != nil {
+		return nil, err
+	}
+	mem, err := memory.Open(filepath.Join(memDir, p.ID+".db"))
+	if err != nil {
+		return nil, fmt.Errorf("open project memory: %w", err)
+	}
+	threads, err := agent.LoadThreads(p.ID)
+	if err != nil {
+		mem.Close()
+		return nil, err
+	}
+	mgr := &agent.Manager{
+		Project:   p,
+		ProjectID: p.ID,
+		RunID:     s.runID,
+		Threads:   threads,
+		Adapters: map[string]agent.Adapter{
+			"claude": agent.NewClaudeAdapter(),
+			"codex":  agent.NewCodexAdapter(),
+			"agy":    agent.NewAgyAdapter(),
+		},
+		Budget:       s.tracker,
+		Mem:          mem,
+		Emb:          s.emb,
+		Summarize:    s.summarize,
+		ThresholdPct: s.thresholdPct,
+		DistillModel: s.distillModel,
+		Timeout:      s.timeout,
+	}
+	mgr.OnCompact = func(name string) { s.println("↻ " + name + " thread compacted") }
+	bp := &boundProject{proj: p, mgr: mgr, mem: mem, closers: []func() error{mem.Close}}
+	s.bound[p.ID] = bp
+	return bp, nil
+}
+
+// recallAll recalls across every bound repo's store plus the global store, so a
+// fact learned in one repo surfaces when the focus is elsewhere.
+func (s *replSession) recallAll(ctx context.Context, utterance string) ([]memory.Hit, error) {
+	stores := make([]*memory.Store, 0, len(s.bound)+1)
+	for _, bp := range s.bound {
+		stores = append(stores, bp.mem)
+	}
+	stores = append(stores, s.glob)
+	return memory.Recall(ctx, s.emb, utterance, 5, stores...)
 }
 
 // turn runs one full loop iteration: recall -> decide -> act.
 func (s *replSession) turn(ctx context.Context, utterance string) error {
-	s.auditf(audit.KindTurn, utterance, nil)
-	hits, err := memory.Recall(ctx, s.emb, utterance, 5, s.mem, s.glob)
+	s.auditf(audit.KindTurn, utterance, s.focus, nil)
+	hits, err := s.recallAll(ctx, utterance)
 	if err != nil {
 		hits = nil // recall is an enhancement, never a blocker
 	}
 	t := brain.Turn{
-		Utterance:    utterance,
-		Summary:      s.summary,
-		RecentTurns:  s.recent,
-		ThreadStatus: s.mgr.StatusLines(),
-		MemoryHits:   renderHits(hits),
+		Utterance:     utterance,
+		Summary:       s.summary,
+		RecentTurns:   s.recent,
+		ThreadStatus:  s.mgr().StatusLines(),
+		MemoryHits:    renderHits(hits),
+		BoundProjects: s.renderBoundProjects(),
+		KnownProjects: s.renderKnownProjects(),
 	}
 	act, err := s.brain.Decide(ctx, t)
 	if err != nil {
@@ -73,11 +153,16 @@ func (s *replSession) turn(ctx context.Context, utterance string) error {
 		return err
 	}
 	s.lastAction = &act
-	s.auditf(audit.KindDecision, string(act.Action), map[string]string{
+	s.auditf(audit.KindDecision, string(act.Action), s.focus, map[string]string{
 		"risk":       string(act.EffectiveRisk()),
 		"confidence": fmt.Sprintf("%.2f", act.Confidence),
 	})
-	return s.execute(ctx, utterance, act)
+	err = s.execute(ctx, utterance, act)
+	if errors.Is(err, errUnresolvedRepo) {
+		s.println("◆ " + err.Error())
+		return s.askUserRoute(ctx, utterance)
+	}
+	return err
 }
 
 func (s *replSession) execute(ctx context.Context, utterance string, act brain.Action) error {
@@ -87,7 +172,7 @@ func (s *replSession) execute(ctx context.Context, utterance string, act brain.A
 		if !confirmed {
 			result = "declined"
 		}
-		s.auditf(audit.KindRiskPrompt, riskSummary(act), map[string]string{"result": result})
+		s.auditf(audit.KindRiskPrompt, riskSummary(act), s.focus, map[string]string{"result": result})
 		if !confirmed {
 			s.println("◆ cancelled - ship-risk action declined")
 			s.pushRecent(utterance, "(cancelled: ship-risk)")
@@ -103,7 +188,7 @@ func (s *replSession) execute(ctx context.Context, utterance string, act brain.A
 		return s.runDispatches(ctx, utterance, act.Dispatches)
 	case brain.ActionPipeline:
 		s.println(fmt.Sprintf("◆ pipeline › %s", act.Pipeline))
-		s.auditf(audit.KindPipeline, act.Pipeline, nil)
+		s.auditf(audit.KindPipeline, act.Pipeline, s.focus, nil)
 		fn, ok := s.pipelines[act.Pipeline]
 		if !ok {
 			return fmt.Errorf("no pipeline %q wired", act.Pipeline)
@@ -117,8 +202,8 @@ func (s *replSession) execute(ctx context.Context, utterance string, act brain.A
 			thread = act.Dispatches[0].Thread
 		}
 		s.println(fmt.Sprintf("◆ handoff › opening interactive %s (exit to return to styx)", thread))
-		s.mgr.Threads.Get(thread, thread)
-		err := s.mgr.Handoff(ctx, thread)
+		s.mgr().Threads.Get(thread, thread)
+		err := s.mgr().Handoff(ctx, thread)
 		s.pushRecent(utterance, "(interactive handoff)")
 		return err
 	case brain.ActionRemember:
@@ -155,8 +240,37 @@ func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []
 	return errors.Join(errs...)
 }
 
+// errUnresolvedRepo marks a brain-named repo that did not resolve, so the turn
+// loop escalates to the user instead of guessing.
+var errUnresolvedRepo = errors.New("unresolved repo")
+
 func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, model string) error {
-	s.auditf(audit.KindDispatch, d.Thread+"·"+model, map[string]string{"msg": d.Message})
+	// 1. resolve target repo (default = focus) + extra roots
+	bp := s.bound[s.focus]
+	if d.Project != "" {
+		p, err := target.Resolve(target.Spec{Alias: d.Project})
+		if err != nil {
+			return fmt.Errorf("%w: dispatch target %q: %v", errUnresolvedRepo, d.Project, err)
+		}
+		bp, err = s.bind(p)
+		if err != nil {
+			return err
+		}
+	}
+	var roots []string
+	for _, name := range d.ExtraRoots {
+		rp, err := target.Resolve(target.Spec{Alias: name})
+		if err != nil {
+			return fmt.Errorf("%w: extra root %q: %v", errUnresolvedRepo, name, err)
+		}
+		if _, err := s.bind(rp); err != nil {
+			return err
+		}
+		roots = append(roots, rp.Path)
+	}
+	// 2. audit — tagged with the resolved project, not s.focus (may differ in multi-repo sessions)
+	s.auditf(audit.KindDispatch, d.Thread+"·"+model, bp.proj.ID, map[string]string{"msg": d.Message})
+	// 3. ollama branch (unchanged)
 	if d.Thread == "ollama" {
 		if s.ollamaSend == nil {
 			return errors.New("ollama dispatch not wired")
@@ -168,18 +282,20 @@ func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, mode
 		s.println(text)
 		return nil
 	}
-	res, err := s.mgr.Dispatch(ctx, agent.DispatchSpec{
-		Thread:   d.Thread,
-		CLI:      d.Thread,
-		Model:    model,
-		Message:  d.Message,
-		Extra:    d.CLIOptions,
-		ReadOnly: d.Risk == brain.RiskRead,
+	// 4. dispatch on the resolved project's manager with ExtraRoots
+	res, err := bp.mgr.Dispatch(ctx, agent.DispatchSpec{
+		Thread:     d.Thread,
+		CLI:        d.Thread,
+		Model:      model,
+		Message:    d.Message,
+		Extra:      d.CLIOptions,
+		ExtraRoots: roots,
+		ReadOnly:   d.Risk == brain.RiskRead,
 	}, s.printEvent)
 	if err != nil {
 		return fmt.Errorf("%s: %w", d.Thread, err)
 	}
-	if ad, ok := s.mgr.Adapters[d.Thread]; ok && !ad.SupportsStream() {
+	if ad, ok := bp.mgr.Adapters[d.Thread]; ok && !ad.SupportsStream() {
 		s.println(res.Text)
 	}
 	return nil
@@ -293,13 +409,13 @@ func (s *replSession) saveMemoryText(ctx context.Context, text string) error {
 	if err != nil {
 		return fmt.Errorf("embed memory: %w", err)
 	}
-	if _, err := s.mem.Add(ctx, memory.Item{
+	if _, err := s.mem().Add(ctx, memory.Item{
 		Kind: kind, Text: text, Source: "repl",
-		Project: s.proj.Name, Scope: scope, Confidence: confidence, Embedding: vec,
+		Project: s.proj().ID, Scope: scope, Confidence: confidence, Embedding: vec,
 	}); err != nil {
 		return fmt.Errorf("save memory: %w", err)
 	}
-	s.auditf(audit.KindMemoryWrite, text, nil)
+	s.auditf(audit.KindMemoryWrite, text, s.proj().ID, nil)
 	s.println("◆ remembered")
 	return nil
 }
@@ -340,11 +456,11 @@ func (s *replSession) print(text string) {
 	fmt.Fprint(s.out, text)
 }
 
-func (s *replSession) auditf(kind audit.Kind, detail string, meta map[string]string) {
+func (s *replSession) auditf(kind audit.Kind, detail, projectID string, meta map[string]string) {
 	if s.audit == nil {
 		return
 	}
-	_ = s.audit.Append(audit.Record{Kind: kind, Detail: detail, Meta: meta})
+	_ = s.audit.Append(audit.Record{Kind: kind, Detail: detail, Project: projectID, Meta: meta})
 }
 
 func renderHits(hits []memory.Hit) []string {
@@ -362,6 +478,42 @@ func renderHits(hits []memory.Hit) []string {
 	return out
 }
 
+// renderProject formats one registry entry into a brain-facing one-liner.
+func renderProject(p config.Project, bound bool) string {
+	desc := p.Description
+	if desc == "" {
+		desc = filepath.Base(p.Path)
+	}
+	line := fmt.Sprintf("%s (%s): %s", p.Name, p.Language, desc)
+	if bound {
+		line += " [bound]"
+	}
+	return line
+}
+
+func (s *replSession) renderBoundProjects() []string {
+	var out []string
+	for _, bp := range s.bound {
+		out = append(out, renderProject(bp.proj, true))
+	}
+	return out
+}
+
+func (s *replSession) renderKnownProjects() []string {
+	regs, err := project.List()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, p := range regs {
+		if _, bound := s.bound[p.ID]; bound {
+			continue
+		}
+		out = append(out, renderProject(p, false))
+	}
+	return out
+}
+
 // lastActionJSON renders the previous routing decision for /why.
 func (s *replSession) lastActionJSON() string {
 	if s.lastAction == nil {
@@ -375,12 +527,21 @@ func (s *replSession) lastActionJSON() string {
 }
 
 // newREPLSession wires a production session for the current project. The
-// returned cleanup closes the memory stores and audit log.
-func newREPLSession(a *app) (*replSession, func(), error) {
-	proj, err := project.Current()
+// returned cleanup closes all bound project resources and the audit log.
+// Optional repos names are resolved and bound at launch; the first becomes
+// the focus; cwd-based resolution is used when no repos are given.
+func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
+	var seed project.Project
+	var err error
+	if len(repos) > 0 {
+		seed, err = target.Resolve(target.Spec{Alias: repos[0]})
+	} else {
+		seed, err = resolveGlobalTarget("")
+	}
 	if err != nil {
 		return nil, nil, err
 	}
+
 	memDir, err := paths.MemoryDir()
 	if err != nil {
 		return nil, nil, err
@@ -388,45 +549,27 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 	if err := paths.EnsureDir(memDir); err != nil {
 		return nil, nil, err
 	}
-	mem, err := memory.Open(filepath.Join(memDir, proj.Name+".db"))
-	if err != nil {
-		return nil, nil, fmt.Errorf("open project memory: %w", err)
-	}
 	glob, err := memory.Open(filepath.Join(memDir, "global.db"))
 	if err != nil {
-		mem.Close()
 		return nil, nil, fmt.Errorf("open global memory: %w", err)
-	}
-	cleanup := func() {
-		mem.Close()
-		glob.Close()
 	}
 
 	emb := memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel)
-	threads, err := agent.LoadThreads(proj.Name)
-	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
+
 	auditDir, err := paths.AuditDir()
 	if err != nil {
-		cleanup()
+		glob.Close()
 		return nil, nil, err
 	}
-	projAudit := filepath.Join(auditDir, proj.Name)
+	projAudit := filepath.Join(auditDir, seed.ID)
 	if err := paths.EnsureDir(projAudit); err != nil {
-		cleanup()
+		glob.Close()
 		return nil, nil, err
 	}
 	al, err := audit.Open(filepath.Join(projAudit, time.Now().Format("20060102-150405")+".jsonl"))
 	if err != nil {
-		cleanup()
-		return nil, nil, err
-	}
-	cleanup = func() {
-		mem.Close()
 		glob.Close()
-		al.Close()
+		return nil, nil, err
 	}
 
 	och := rawChannel(a.channels["ollama"])
@@ -442,22 +585,7 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 	if a.routing.Budget.Claude.TimeoutMinutes > 0 {
 		timeout = time.Duration(a.routing.Budget.Claude.TimeoutMinutes) * time.Minute
 	}
-	mgr := &agent.Manager{
-		Project: proj,
-		Threads: threads,
-		Adapters: map[string]agent.Adapter{
-			"claude": agent.NewClaudeAdapter(),
-			"codex":  agent.NewCodexAdapter(),
-			"agy":    agent.NewAgyAdapter(),
-		},
-		Budget:       a.tracker,
-		Mem:          mem,
-		Emb:          emb,
-		Summarize:    summarize,
-		ThresholdPct: a.routing.Brain.ContextThresholdPct,
-		DistillModel: a.routing.Tiers["haiku"],
-		Timeout:      timeout,
-	}
+	runID := pipeline.NewRunID("repl-" + seed.Name)
 
 	b := &brain.Ollama{
 		BaseURL:             "http://localhost:11434",
@@ -470,28 +598,19 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 	}
 
 	s := &replSession{
-		proj:     proj,
-		brain:    b,
-		mgr:      mgr,
-		mem:      mem,
-		glob:     glob,
-		emb:      emb,
-		audit:    al,
-		tiers:    a.routing.Tiers,
-		fableCap: a.routing.Brain.FableWeeklyCap,
-		tracker:  a.tracker,
-		pipelines: map[string]func(ctx context.Context, arg string) error{
-			"research": func(_ context.Context, arg string) error {
-				err := cmdResearch(a, []string{arg})
-				if err == nil {
-					indexNewestBrief(context.Background(), mem, emb, filepath.Join(proj.Path, proj.ResearchDir))
-				}
-				return err
-			},
-			"auto":   func(_ context.Context, arg string) error { return cmdAuto(a, []string{arg}) },
-			"review": func(_ context.Context, _ string) error { return cmdReview(a, nil) },
-			"intel":  func(_ context.Context, _ string) error { return cmdIntel(a, []string{proj.Name}) },
-		},
+		bound:        map[string]*boundProject{},
+		runID:        runID,
+		summarize:    summarize,
+		thresholdPct: a.routing.Brain.ContextThresholdPct,
+		distillModel: a.routing.Tiers["haiku"],
+		timeout:      timeout,
+		brain:        b,
+		glob:         glob,
+		emb:          emb,
+		audit:        al,
+		tiers:        a.routing.Tiers,
+		fableCap:     a.routing.Brain.FableWeeklyCap,
+		tracker:      a.tracker,
 		ollamaSend: func(ctx context.Context, model, prompt string) (string, error) {
 			resp, err := a.channels["ollama"].Send(ctx, channel.Request{Model: model, Prompt: prompt})
 			return resp.Text, err
@@ -499,7 +618,53 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 		in:  bufio.NewReader(os.Stdin),
 		out: os.Stdout,
 	}
-	mgr.OnCompact = func(name string) { s.println("↻ " + name + " thread compacted") }
+
+	// pipelines must be assigned after s is constructed because closures
+	// reference s.proj(), s.mem(), etc. at call time.
+	s.pipelines = map[string]func(ctx context.Context, arg string) error{
+		"research": func(_ context.Context, arg string) error {
+			err := cmdResearch(a, []string{arg})
+			if err == nil {
+				indexNewestBrief(context.Background(), s.mem(), s.emb, filepath.Join(s.proj().Path, s.proj().ResearchDir))
+			}
+			return err
+		},
+		"auto":   func(_ context.Context, arg string) error { return cmdAuto(a, []string{arg}) },
+		"review": func(_ context.Context, _ string) error { return cmdReview(a, nil) },
+		"intel":  func(_ context.Context, _ string) error { return cmdIntel(a, []string{s.proj().Name}) },
+	}
+
+	// cleanup iterates all bound bundles then closes session-global stores.
+	cleanup := func() {
+		for _, bp := range s.bound {
+			for _, c := range bp.closers {
+				_ = c()
+			}
+		}
+		glob.Close()
+		al.Close()
+	}
+
+	bp, err := s.bind(seed)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	_ = bp
+	s.focus = seed.ID
+
+	for _, name := range repos[1:] {
+		p, err := target.Resolve(target.Spec{Alias: name})
+		if err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("bind launch repo %q: %w", name, err)
+		}
+		if _, err := s.bind(p); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("bind launch repo %q: %w", name, err)
+		}
+	}
+
 	return s, cleanup, nil
 }
 
@@ -540,14 +705,23 @@ func indexNewestBrief(ctx context.Context, mem *memory.Store, emb memory.Embedde
 	})
 }
 
+// plural returns "s" when n != 1, "" otherwise.
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 // cmdREPL is bare `styx`: the persistent conversational session.
-func cmdREPL(a *app) error {
-	s, cleanup, err := newREPLSession(a)
+func cmdREPL(a *app, repos ...string) error {
+	s, cleanup, err := newREPLSession(a, repos...)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
-	fmt.Printf("styx — %s · /status /budget /threads /why /audit /quit\n", s.proj.Name)
+	fmt.Printf("styx — %s (%d repo%s) · /status /repos /focus /budget /threads /why /audit /quit\n",
+		s.proj().Name, len(s.bound), plural(len(s.bound)))
 	for {
 		fmt.Print("styx› ")
 		line, err := s.in.ReadString('\n')
@@ -585,13 +759,45 @@ func (s *replSession) slash(line string) bool {
 	case "/quit", "/exit":
 		return true
 	case "/status", "/threads":
-		lines := s.mgr.StatusLines()
-		if len(lines) == 0 {
-			s.println("no threads yet (they start lazily on first dispatch)")
+		for id, bp := range s.bound {
+			marker := "  "
+			if id == s.focus {
+				marker = "→ "
+			}
+			s.println(marker + bp.proj.Name)
+			lines := bp.mgr.StatusLines()
+			if len(lines) == 0 {
+				s.println("  no threads yet (they start lazily on first dispatch)")
+			}
+			for _, l := range lines {
+				s.println("  " + meterize(l))
+			}
 		}
-		for _, l := range lines {
-			s.println(meterize(l))
+	case "/repos":
+		for id, bp := range s.bound {
+			marker := "  "
+			if id == s.focus {
+				marker = "→ "
+			}
+			s.println(marker + renderProject(bp.proj, true))
 		}
+	case "/focus":
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			s.println("usage: /focus <project>")
+			return false
+		}
+		p, err := target.Resolve(target.Spec{Alias: fields[1]})
+		if err != nil {
+			s.println("focus: " + err.Error())
+			return false
+		}
+		if _, err := s.bind(p); err != nil {
+			s.println("focus: " + err.Error())
+			return false
+		}
+		s.focus = p.ID
+		s.println("→ focus: " + p.Name)
 	case "/budget":
 		if err := cmdBudget(nil); err != nil {
 			s.println("budget: " + err.Error())
@@ -609,10 +815,14 @@ func (s *replSession) slash(line string) bool {
 			return false
 		}
 		for _, r := range recs {
-			s.println(fmt.Sprintf("%s  %-12s %s", r.At.Format("15:04:05"), r.Kind, r.Detail))
+			tag := r.Project
+			if tag == "" {
+				tag = "-"
+			}
+			s.println(fmt.Sprintf("%s  %-12s %-12s %s", r.At.Format("15:04:05"), tag, r.Kind, r.Detail))
 		}
 	default:
-		s.println("unknown command (try /status /budget /threads /why /audit /quit)")
+		s.println("unknown command (try /status /repos /focus /budget /threads /why /audit /quit)")
 	}
 	return false
 }
@@ -636,12 +846,12 @@ func meterize(line string) string {
 
 // endSession writes a session-end summary to project memory (best-effort).
 func (s *replSession) endSession() {
-	if len(s.recent) == 0 || s.mgr.Summarize == nil {
+	if len(s.recent) == 0 || s.mgr().Summarize == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	sum, err := s.mgr.Summarize(ctx, strings.Join(s.recent, "\n"))
+	sum, err := s.mgr().Summarize(ctx, strings.Join(s.recent, "\n"))
 	if err != nil || sum == "" {
 		return
 	}
@@ -649,9 +859,9 @@ func (s *replSession) endSession() {
 	if err != nil {
 		return
 	}
-	_, _ = s.mem.Add(ctx, memory.Item{
+	_, _ = s.mem().Add(ctx, memory.Item{
 		Kind: memory.KindDistillation, Text: sum, Source: "repl-session",
-		Project: s.proj.Name, Scope: "thread", Confidence: 0.9, Embedding: vec,
+		Project: s.proj().ID, Scope: "thread", Confidence: 0.9, Embedding: vec,
 	})
 }
 

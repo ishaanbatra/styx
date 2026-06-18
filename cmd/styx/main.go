@@ -4,31 +4,49 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
-// parseGlobalFlags strips --quiet and --verbose from argv (long form only),
-// returning the remaining tokens plus the two bools.
-func parseGlobalFlags(argv []string) (rest []string, quiet, verbose bool) {
-	for _, a := range argv {
-		switch a {
-		case "--quiet":
+// parseGlobalFlags strips global flags from argv (long form only), returning
+// the remaining tokens plus the parsed values.
+func parseGlobalFlags(argv []string) (rest []string, quiet, verbose bool, projectAlias, dirArg string) {
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "--quiet":
 			quiet = true
-		case "--verbose":
+		case a == "--verbose":
 			verbose = true
+		case a == "--project":
+			if i+1 < len(argv) {
+				projectAlias = argv[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--project="):
+			projectAlias = strings.TrimPrefix(a, "--project=")
+		case a == "--dir":
+			if i+1 < len(argv) {
+				dirArg = argv[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--dir="):
+			dirArg = strings.TrimPrefix(a, "--dir=")
 		default:
 			rest = append(rest, a)
 		}
 	}
-	return rest, quiet, verbose
+	return rest, quiet, verbose, projectAlias, dirArg
 }
 
 func main() {
-	rest, quiet, verbose := parseGlobalFlags(os.Args[1:])
+	rest, quiet, verbose, projectAlias, dirArg := parseGlobalFlags(os.Args[1:])
 
 	if len(rest) == 0 {
 		// Bare `styx` opens the REPL in the current project.
 		globalQuiet = quiet
 		globalVerbose = verbose
+		globalProjectAlias = projectAlias
+		globalDirArg = dirArg
 		if err := ensureFirstRun(); err != nil {
 			fmt.Fprintf(os.Stderr, "styx: setup error: %v\n", err)
 			os.Exit(1)
@@ -49,6 +67,8 @@ func main() {
 	// Store parsed globals so dispatch and verb handlers can read them.
 	globalQuiet = quiet
 	globalVerbose = verbose
+	globalProjectAlias = projectAlias
+	globalDirArg = dirArg
 
 	verb := rest[0]
 	args := rest[1:]

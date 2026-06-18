@@ -22,12 +22,27 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 
 ## Verbs
 
+### Global flags
+
+| Flag | What it does |
+|---|---|
+| `--project <alias>` | Run the verb against a registered project, from anywhere (exact name or unique prefix) |
+| `--dir <path>` | Run the verb against the repo at `<path>`, from anywhere |
+
+Without either flag, styx uses the current directory's repo. An explicit target
+that can't be resolved is a clear error, never a silent fallback.
+
 ### Conversational
 
 | Verb | What it does |
 |---|---|
 | `styx` | Open the conversational REPL in the current project |
 | `styx "<anything>"` | Run one brain-routed turn, then exit |
+| `styx <repo...>` | Open the REPL bound to one or more named repos (first is focus) |
+
+Within a multi-repo session, `/repos` lists all bound repos (focus-marked),
+`/focus <name>` switches to a different bound repo (binding it lazily if not yet
+open), and naming a repo mid-conversation binds it without restarting the session.
 
 ### Deep research + planning
 
@@ -73,7 +88,8 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 | `budget` | Per-channel usage summary |
 | `doctor [--fix]` | Preflight CLIs, capability-card drift, callable Claude tiers, and required Ollama models |
 | `route --explain <verb> "..."` | Why did styx pick that channel? |
-| `project ls/add/rm/rename` | Manage project registry |
+| `project ls/add/rm/rename/scan` | Manage project registry |
+| `project scan [root] [--depth N]` | Walk down from `root` (default `~`), find git repos, bulk-register them (prunes node_modules/vendor; depth default 4) |
 | `migrate-secrets` | Move env-var secrets to macOS Keychain |
 | `upgrade` | Re-run routing migrations manually (v0.1->v0.2 gemini->agy; v0.3 adds the `implement` verb) |
 
@@ -82,7 +98,10 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 - `~/.config/styx/routing.toml` — routing rules + budget caps (you edit this)
 - `~/.config/styx/projects.toml` — registered projects (auto-managed)
 - `~/.config/styx/state/usage.db` — append-only sqlite usage log
-- `~/.config/styx/state/intel/<project>/index.json` — per-project codebase intel
+- `~/.config/styx/state/memory/<id>.db` — per-project memory, keyed by stable project id
+- `~/.config/styx/state/audit/<id>/` — REPL audit logs, keyed by stable project id
+- `~/.config/styx/state/threads/<id>.json` — agent thread state, keyed by stable project id
+- `~/.config/styx/state/intel/<id>/index.json` — per-project codebase intel, keyed by stable project id
 - `<project>/.claude/context.md` — rendered intel (Claude Code auto-loads this)
 - `<project>/.styx/runs/<run-id>/` — pipeline state per run
 - Secrets live in macOS Keychain under service `styx`.

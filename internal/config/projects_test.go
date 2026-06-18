@@ -13,6 +13,7 @@ func TestSaveAndLoadProjects(t *testing.T) {
 
 	want := []Project{
 		{
+			ID:           ProjectID("/Users/x/Documents/GitHub/ai-ta-backend"),
 			Name:         "hoot-backend",
 			Path:         "/Users/x/Documents/GitHub/ai-ta-backend",
 			Language:     "python",
@@ -21,6 +22,7 @@ func TestSaveAndLoadProjects(t *testing.T) {
 			DefaultVerbs: []string{"plan", "build", "review"},
 		},
 		{
+			ID:       ProjectID("/Users/x/Documents/GitHub/VoiceResumeBot"),
 			Name:     "voiceresumebot",
 			Path:     "/Users/x/Documents/GitHub/VoiceResumeBot",
 			Language: "python",
@@ -52,5 +54,36 @@ func TestLoadProjects_MissingFileReturnsEmpty(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("expected empty slice, got %d projects", len(got))
+	}
+}
+
+func TestProjectIDStableAndDistinct(t *testing.T) {
+	a := ProjectID("/Users/x/Documents/GitHub/ai-ta-backend")
+	again := ProjectID("/Users/x/Documents/GitHub/ai-ta-backend")
+	b := ProjectID("/Users/x/Documents/GitHub/ai-ta-teacher-ui")
+	if a != again {
+		t.Errorf("ID not stable: %q vs %q", a, again)
+	}
+	if a == b {
+		t.Errorf("distinct paths share an ID: %q", a)
+	}
+	if len(a) != 12 {
+		t.Errorf("ID length = %d, want 12", len(a))
+	}
+}
+
+func TestLoadProjectsBackfillsID(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	// Write a legacy entry with no ID.
+	if err := SaveProjects([]Project{{Name: "legacy", Path: "/repos/legacy", Language: "go"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadProjects()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != ProjectID("/repos/legacy") {
+		t.Errorf("ID not backfilled: %+v", got)
 	}
 }

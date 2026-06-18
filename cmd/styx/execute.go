@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/ishaanbatra/styx/internal/execute"
-	"github.com/ishaanbatra/styx/internal/project"
 )
 
 func cmdExecuteVerb(args []string) error {
@@ -18,7 +17,7 @@ func cmdExecuteVerb(args []string) error {
 	if err != nil {
 		return fmt.Errorf("read plan file: %w", err)
 	}
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
 	}

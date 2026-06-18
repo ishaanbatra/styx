@@ -70,6 +70,11 @@ func claudeArgs(req channel.Request) []string {
 	if req.Effort != "" {
 		args = append(args, "--effort", req.Effort)
 	}
+	for _, root := range req.ExtraRoots {
+		if root != "" {
+			args = append(args, "--add-dir", root)
+		}
+	}
 	return args
 }
 

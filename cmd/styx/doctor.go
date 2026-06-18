@@ -48,6 +48,15 @@ func cmdDoctor(args []string) error {
 			}
 		}
 	}
+	if projs, err := config.LoadProjects(); err != nil {
+		fmt.Printf("! state migration skipped: load projects: %v\n", err)
+		healthy = false
+	} else if err := config.MigrateProjectState(projs); err != nil {
+		fmt.Printf("! state migration warning: %v\n", err)
+		healthy = false
+	} else {
+		fmt.Println("ok state migration checked (project ID paths)")
+	}
 
 	for _, card := range brain.Cards {
 		if card.Bin == "" {

@@ -16,11 +16,13 @@ import (
 
 // Turn is everything the brain sees for one routing decision.
 type Turn struct {
-	Utterance    string
-	Summary      string   // rolling conversation summary
-	RecentTurns  []string // rendered recent exchanges, oldest first
-	ThreadStatus []string // one line per live thread
-	MemoryHits   []string // rendered top-k memory recalls
+	Utterance     string
+	Summary       string   // rolling conversation summary
+	RecentTurns   []string // rendered recent exchanges, oldest first
+	ThreadStatus  []string // one line per live thread
+	MemoryHits    []string // rendered top-k memory recalls
+	BoundProjects []string // one-liner per repo currently bound to the session
+	KnownProjects []string // one-liner per other registered repo
 }
 
 // Brain decides what to do with one utterance. Production uses Ollama;

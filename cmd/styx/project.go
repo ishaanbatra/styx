@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/project"
@@ -21,11 +22,22 @@ func cmdProject(args []string) error {
 			fmt.Printf("%-20s %s\n", p.Name, p.Path)
 		}
 		return nil
+	case "scan":
+		return cmdProjectScan(args[1:])
 	case "add":
 		if len(args) < 3 {
 			return fmt.Errorf("usage: styx project add <name> <path>")
 		}
-		return project.Register(config.Project{Name: args[1], Path: args[2], Language: project.SniffLanguage(args[2])})
+		abs, err := filepath.Abs(args[2])
+		if err != nil {
+			return fmt.Errorf("resolve path %q: %w", args[2], err)
+		}
+		return project.Register(config.Project{
+			ID:       config.ProjectID(abs),
+			Name:     args[1],
+			Path:     abs,
+			Language: project.SniffLanguage(abs),
+		})
 	case "rm":
 		if len(args) < 2 {
 			return fmt.Errorf("usage: styx project rm <name>")

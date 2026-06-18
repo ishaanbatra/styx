@@ -16,7 +16,7 @@ func cmdBuild(a *app, args []string) error {
 	if len(args) > 0 {
 		target = args[0]
 	}
-	proj, err := resolveTarget(target)
+	proj, err := resolveGlobalTarget(target)
 	if err != nil {
 		return err
 	}

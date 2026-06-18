@@ -34,3 +34,22 @@ func TestAppendAndTail(t *testing.T) {
 		t.Error("At not stamped")
 	}
 }
+
+func TestRecordCarriesProject(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "a.jsonl")
+	l, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if err := l.Append(Record{Kind: KindDispatch, Detail: "claude·opus", Project: "pid123"}); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := l.Tail(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Project != "pid123" {
+		t.Errorf("project not round-tripped: %+v", recs)
+	}
+}

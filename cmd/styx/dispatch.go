@@ -21,6 +21,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
+	"github.com/ishaanbatra/styx/internal/target"
 )
 
 // globalQuiet and globalVerbose are set by main() after parseGlobalFlags.
@@ -28,6 +29,27 @@ var (
 	globalQuiet   bool
 	globalVerbose bool
 )
+
+// Global target flags, set by main() after parseGlobalFlags.
+var (
+	globalProjectAlias string
+	globalDirArg       string
+)
+
+// resolveGlobalTarget resolves the active project. A non-empty positional arg
+// takes precedence; otherwise global --project/--dir flags are consulted; then
+// cwd. Explicit alias/dir failures do not silently fall back to cwd.
+func resolveGlobalTarget(arg string) (project.Project, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("getwd: %w", err)
+	}
+	alias := arg
+	if alias == "" {
+		alias = globalProjectAlias
+	}
+	return target.Resolve(target.Spec{Alias: alias, Dir: globalDirArg, Cwd: cwd})
+}
 
 // logStatus writes a "[styx] " status line to stderr unless --quiet is set.
 // Final results (printed to stdout) are never suppressed by --quiet.
@@ -284,10 +306,28 @@ func dispatch(verb string, args []string) error {
 	case "grunt", "think", "explain", "summarize", "critique":
 		return cmdOneShot(a, verb, args)
 	}
-	// Anything that isn't a verb is an utterance: `styx "fix the flaky test"`
-	// runs one brain turn and exits.
-	utterance := strings.TrimSpace(strings.Join(append([]string{verb}, args...), " "))
+	// `styx <repo...>`: if every positional names a resolvable project, open the
+	// REPL bound to them (first = focus). Otherwise it's a one-shot utterance.
+	tokens := append([]string{verb}, args...)
+	if repos, ok := allReposResolve(tokens); ok {
+		return cmdREPL(a, repos...)
+	}
+	utterance := strings.TrimSpace(strings.Join(tokens, " "))
 	return cmdBrainTurn(a, utterance)
+}
+
+// allReposResolve reports whether every token names a resolvable project; if so
+// it returns the tokens so the caller can open the REPL bound to them.
+func allReposResolve(tokens []string) ([]string, bool) {
+	if len(tokens) == 0 {
+		return nil, false
+	}
+	for _, tok := range tokens {
+		if _, err := target.Resolve(target.Spec{Alias: tok}); err != nil {
+			return nil, false
+		}
+	}
+	return tokens, true
 }
 
 // ensureFirstRun creates the config dir and seeds routing.toml on first run.
@@ -324,6 +364,13 @@ func ensureFirstRun() error {
 			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")
 		}
 	}
+	if projs, err := config.LoadProjects(); err == nil {
+		if err := config.MigrateProjectState(projs); err != nil {
+			fmt.Fprintf(os.Stderr, "[styx] state migration warning: %v\n", err)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "[styx] state migration warning: load projects: %v\n", err)
+	}
 	return nil
 }
 
@@ -334,16 +381,4 @@ func rawChannel(ch channel.Channel) channel.Channel {
 		return w.Inner
 	}
 	return ch
-}
-
-// resolveTarget converts a "backend|student|teacher|<alias>" arg into a Project.
-// Empty arg means the project for the current working directory.
-func resolveTarget(arg string) (project.Project, error) {
-	if arg == "" {
-		return project.Current()
-	}
-	if p, err := project.Resolve(arg); err == nil {
-		return p, nil
-	}
-	return project.Current()
 }

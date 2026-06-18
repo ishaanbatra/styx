@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,14 +43,32 @@ func (replEmbedder) Embed(context.Context, string) ([]float32, error) {
 	return []float32{1, 0, 0}, nil
 }
 
-func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *bytes.Buffer) {
+func bindTestProject(t *testing.T, name string, bud *budget.Tracker) *boundProject {
 	t.Helper()
 	dir := t.TempDir()
 	mem, err := memory.Open(filepath.Join(dir, "mem.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { mem.Close() })
+	threads, _ := agent.LoadThreadsFrom(filepath.Join(dir, "threads.json"))
+	fake, _ := filepath.Abs("../../testdata/fakeagent")
+	p := config.Project{ID: name, Name: name, Path: dir}
+	return &boundProject{
+		proj: p,
+		mem:  mem,
+		mgr: &agent.Manager{
+			Project: p, ProjectID: name, Threads: threads,
+			Adapters: map[string]agent.Adapter{"claude": &agent.ClaudeAdapter{BinPath: fake}},
+			Budget:   bud, Mem: mem, Emb: replEmbedder{},
+			ThresholdPct: 70, DistillModel: "haiku", Timeout: 10 * time.Second,
+		},
+		closers: []func() error{mem.Close},
+	}
+}
+
+func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *bytes.Buffer) {
+	t.Helper()
+	dir := t.TempDir()
 	glob, err := memory.Open(filepath.Join(dir, "glob.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -64,30 +84,17 @@ func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *b
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { al.Close() })
-	threads, err := agent.LoadThreadsFrom(filepath.Join(dir, "threads.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fake, err := filepath.Abs("../../testdata/fakeagent")
-	if err != nil {
-		t.Fatal(err)
-	}
+	bp := bindTestProject(t, "testproj", bud)
+	t.Cleanup(func() {
+		for _, c := range bp.closers {
+			_ = c()
+		}
+	})
 	out := &bytes.Buffer{}
 	s := &replSession{
-		proj:  config.Project{Name: "testproj", Path: dir},
-		brain: b,
-		mgr: &agent.Manager{
-			Project:      config.Project{Name: "testproj", Path: dir},
-			Threads:      threads,
-			Adapters:     map[string]agent.Adapter{"claude": &agent.ClaudeAdapter{BinPath: fake}},
-			Budget:       bud,
-			Mem:          mem,
-			Emb:          replEmbedder{},
-			ThresholdPct: 70,
-			DistillModel: "haiku",
-			Timeout:      10 * time.Second,
-		},
-		mem:      mem,
+		bound:    map[string]*boundProject{"testproj": bp},
+		focus:    "testproj",
+		brain:    b,
 		glob:     glob,
 		emb:      replEmbedder{},
 		audit:    al,
@@ -142,7 +149,7 @@ func TestTurnRememberStoresRoutingPreference(t *testing.T) {
 	if err := s.turn(context.Background(), "no, codex should review"); err != nil {
 		t.Fatalf("turn: %v", err)
 	}
-	items, err := s.mem.All(context.Background())
+	items, err := s.mem().All(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +251,7 @@ func TestRoutingPreferenceIsLowConfidenceAndScoped(t *testing.T) {
 	if err := s.turn(context.Background(), "no, codex should do reviews"); err != nil {
 		t.Fatalf("turn: %v", err)
 	}
-	items, err := s.mem.All(context.Background())
+	items, err := s.mem().All(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,6 +284,78 @@ func TestAuditTrail(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("/audit output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestDispatchTargetsNamedRepoWithExtraRoots(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "done")
+
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "ai-ta-backend", bud)
+	b := bindTestProject(t, "ai-ta-teacher-ui", bud)
+	// Register both so target.Resolve / extra-root resolution find them.
+	if err := config.SaveProjects([]config.Project{
+		{ID: "ai-ta-backend", Name: "ai-ta-backend", Path: a.proj.Path},
+		{ID: "ai-ta-teacher-ui", Name: "ai-ta-teacher-ui", Path: b.proj.Path},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &bytes.Buffer{}
+	s := &replSession{
+		bound:   map[string]*boundProject{"ai-ta-backend": a, "ai-ta-teacher-ui": b},
+		focus:   "ai-ta-backend",
+		emb:     replEmbedder{},
+		tracker: bud,
+		tiers:   map[string]string{"opus": "opus", "haiku": "haiku"},
+		in:      bufio.NewReader(strings.NewReader("")),
+		out:     out,
+	}
+	d := brain.Dispatch{
+		Thread: "claude", Message: "trace upload",
+		Project: "ai-ta-teacher-ui", ExtraRoots: []string{"ai-ta-backend"},
+	}
+	if err := s.runOneDispatch(context.Background(), d, "opus"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	// The teacher-ui thread ran; backend's did not.
+	if b.mgr.Threads.Get("claude", "claude").Turns != 1 {
+		t.Errorf("teacher-ui thread did not run")
+	}
+	if a.mgr.Threads.Get("claude", "claude").Turns != 0 {
+		t.Errorf("backend thread should be untouched")
+	}
+}
+
+func TestDispatchUnknownTargetSurfacesError(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "backend", bud)
+	_ = config.SaveProjects([]config.Project{{ID: "backend", Name: "backend", Path: a.proj.Path}})
+
+	s := &replSession{
+		bound: map[string]*boundProject{"backend": a}, focus: "backend",
+		emb: replEmbedder{}, tracker: bud,
+		tiers: map[string]string{"opus": "opus"},
+		in:    bufio.NewReader(strings.NewReader("")), out: &bytes.Buffer{},
+	}
+	err := s.runOneDispatch(context.Background(), brain.Dispatch{
+		Thread: "claude", Message: "x", Project: "nope-not-registered",
+	}, "opus")
+	if err == nil || !strings.Contains(err.Error(), "unknown project") {
+		t.Fatalf("want unknown-project error, got %v", err)
+	}
+	if !errors.Is(err, errUnresolvedRepo) {
+		t.Errorf("error should wrap errUnresolvedRepo so the turn loop escalates")
+	}
+	if a.mgr.Threads.Get("claude", "claude").Turns != 0 {
+		t.Errorf("no thread should run on an unresolved target (no silent fallback to focus)")
 	}
 }
 
@@ -317,12 +396,12 @@ func TestScriptedSession(t *testing.T) {
 	}
 
 	// The dispatch persisted a durable thread with the CLI's session id.
-	th := s.mgr.Threads.Get("claude", "claude")
+	th := s.mgr().Threads.Get("claude", "claude")
 	if th.SessionID != "sess-e2e" || th.Turns != 1 {
 		t.Errorf("thread after session = %+v", th)
 	}
 	// The remember landed in project memory and is recallable.
-	hits, err := memory.Recall(ctx, s.emb, "what's our retry policy?", 1, s.mem)
+	hits, err := memory.Recall(ctx, s.emb, "what's our retry policy?", 1, s.mem())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,5 +418,176 @@ func TestScriptedSession(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "claude (claude): 1 turns") {
 		t.Errorf("status output missing thread line:\n%s", out.String())
+	}
+}
+
+func TestRecallSpansBoundRepos(t *testing.T) {
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "A", bud)
+	b := bindTestProject(t, "B", bud)
+	glob, _ := memory.Open(filepath.Join(t.TempDir(), "glob.db"))
+
+	s := &replSession{
+		bound: map[string]*boundProject{"A": a, "B": b},
+		focus: "A",
+		glob:  glob,
+		emb:   replEmbedder{},
+	}
+	// A fact learned in repo B.
+	vec, _ := s.emb.Embed(context.Background(), "the embedding worker lives in B")
+	if _, err := b.mem.Add(context.Background(), memory.Item{
+		Kind: memory.KindFact, Text: "the embedding worker lives in B",
+		Project: "B", Embedding: vec, Confidence: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Recall from focus A must surface B's fact.
+	hits, err := s.recallAll(context.Background(), "where is the embedding worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, h := range hits {
+		if strings.Contains(h.Item.Text, "embedding worker lives in B") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("cross-repo recall did not surface B's fact: %+v", hits)
+	}
+}
+
+func TestAllReposResolve(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	if err := config.SaveProjects([]config.Project{
+		{ID: "alpha", Name: "alpha", Path: t.TempDir()},
+		{ID: "beta", Name: "beta", Path: t.TempDir()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name   string
+		tokens []string
+		wantOK bool
+	}{
+		{"all resolve", []string{"alpha", "beta"}, true},
+		{"single resolves", []string{"alpha"}, true},
+		{"one token unknown", []string{"alpha", "nope-xyz"}, false},
+		{"utterance (none resolve)", []string{"fix", "the", "bug"}, false},
+		{"empty", nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := allReposResolve(tt.tokens)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v (got=%v)", ok, tt.wantOK, got)
+			}
+			if ok && len(got) != len(tt.tokens) {
+				t.Errorf("returned tokens = %v, want len %d", got, len(tt.tokens))
+			}
+			if !ok && got != nil {
+				t.Errorf("expected nil tokens on false, got %v", got)
+			}
+		})
+	}
+}
+
+func TestFocusSlashResolvesAndFailsLoud(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "alpha", bud)
+	b := bindTestProject(t, "beta", bud)
+	if err := config.SaveProjects([]config.Project{
+		{ID: "alpha", Name: "alpha", Path: a.proj.Path},
+		{ID: "beta", Name: "beta", Path: b.proj.Path},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	s := &replSession{
+		bound: map[string]*boundProject{"alpha": a, "beta": b}, focus: "alpha",
+		emb: replEmbedder{}, tracker: bud,
+		in: bufio.NewReader(strings.NewReader("")), out: out,
+	}
+	// Known name flips focus.
+	if quit := s.slash("/focus beta"); quit {
+		t.Fatal("/focus should not quit")
+	}
+	if s.focus != "beta" {
+		t.Errorf("focus = %q, want beta", s.focus)
+	}
+	// Unresolved name: focus unchanged, error surfaced.
+	if quit := s.slash("/focus nope-xyz"); quit {
+		t.Fatal("/focus should not quit")
+	}
+	if s.focus != "beta" {
+		t.Errorf("focus changed on unresolved name: %q", s.focus)
+	}
+	if !strings.Contains(out.String(), "focus:") {
+		t.Errorf("no error surfaced for unresolved /focus: %q", out.String())
+	}
+	// Missing argument: usage message, no quit, focus unchanged.
+	if quit := s.slash("/focus"); quit {
+		t.Fatal("/focus should not quit")
+	}
+	if s.focus != "beta" {
+		t.Errorf("focus changed on usage error: %q", s.focus)
+	}
+}
+
+func TestReposListsBoundWithFocusMarker(t *testing.T) {
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "alpha", bud)
+	b := bindTestProject(t, "beta", bud)
+	out := &bytes.Buffer{}
+	s := &replSession{
+		bound: map[string]*boundProject{"alpha": a, "beta": b}, focus: "alpha",
+		in: bufio.NewReader(strings.NewReader("")), out: out,
+	}
+	if quit := s.slash("/repos"); quit {
+		t.Fatal("/repos should not quit")
+	}
+	got := out.String()
+	if !strings.Contains(got, "alpha") || !strings.Contains(got, "beta") {
+		t.Errorf("/repos missing a bound repo:\n%s", got)
+	}
+	if !strings.Contains(got, "→") {
+		t.Errorf("/repos missing focus marker:\n%s", got)
+	}
+}
+
+func TestTwoRepoScriptedSession(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "traced")
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	t.Setenv("FAKEAGENT_ARGS_LOG", argsLog)
+
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "backend", bud)
+	b := bindTestProject(t, "teacher", bud)
+	_ = config.SaveProjects([]config.Project{
+		{ID: "backend", Name: "backend", Path: a.proj.Path},
+		{ID: "teacher", Name: "teacher", Path: b.proj.Path},
+	})
+	out := &bytes.Buffer{}
+	s := &replSession{
+		bound: map[string]*boundProject{"backend": a, "teacher": b},
+		focus: "backend", emb: replEmbedder{}, tracker: bud,
+		tiers: map[string]string{"opus": "opus", "haiku": "haiku"},
+		in:    bufio.NewReader(strings.NewReader("")), out: out,
+	}
+	d := brain.Dispatch{Thread: "claude", Message: "trace upload", Project: "teacher", ExtraRoots: []string{"backend"}}
+	if err := s.runOneDispatch(context.Background(), d, "opus"); err != nil {
+		t.Fatal(err)
+	}
+	log, _ := os.ReadFile(argsLog)
+	if !strings.Contains(string(log), "--add-dir") || !strings.Contains(string(log), a.proj.Path) {
+		t.Errorf("backend not attached to teacher dispatch: %s", log)
+	}
+	if b.mgr.Threads.Get("claude", "claude").Turns != 1 {
+		t.Errorf("teacher thread did not run")
 	}
 }

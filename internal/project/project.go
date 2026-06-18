@@ -107,7 +107,7 @@ func Forget(alias string) error {
 func findGitRoot(start string) (string, error) {
 	dir := start
 	for {
-		if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && (fi.IsDir() || !fi.IsDir()) {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
@@ -142,6 +142,7 @@ func autoRegister(root string, existing []Project) Project {
 		suffix++
 	}
 	return Project{
+		ID:          config.ProjectID(root),
 		Name:        name,
 		Path:        root,
 		Language:    SniffLanguage(root),

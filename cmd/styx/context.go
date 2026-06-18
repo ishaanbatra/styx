@@ -5,14 +5,13 @@ import (
 	"fmt"
 
 	"github.com/ishaanbatra/styx/internal/intel"
-	"github.com/ishaanbatra/styx/internal/project"
 )
 
 func cmdContext(args []string) error {
 	if len(args) == 0 || args[0] != "show" {
 		return errors.New("usage: styx context show")
 	}
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
 	}

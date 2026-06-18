@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
 )
@@ -21,7 +20,7 @@ func cmdRoute(args []string) error {
 		return err
 	}
 	defer a.tracker.Close()
-	proj, _ := project.Current()
+	proj, _ := resolveGlobalTarget("")
 	sigs := signals.Extract(verb, []string{text}, proj)
 	fmt.Print(a.router.Explain(context.Background(), router.Request{Verb: verb, Args: []string{text}, Signals: sigs}))
 	return nil

@@ -136,6 +136,20 @@ func TestForget(t *testing.T) {
 	}
 }
 
+func TestFindGitRootAcceptsGitFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: /elsewhere\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := findGitRoot(root)
+	if err != nil {
+		t.Fatalf("findGitRoot: %v", err)
+	}
+	if got != root {
+		t.Errorf("findGitRoot = %q, want %q", got, root)
+	}
+}
+
 func contains(s, substr string) bool {
 	for i := 0; i+len(substr) <= len(s); i++ {
 		if s[i:i+len(substr)] == substr {
