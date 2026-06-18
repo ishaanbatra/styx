@@ -142,6 +142,7 @@ func autoRegister(root string, existing []Project) Project {
 		suffix++
 	}
 	return Project{
+		ID:          config.ProjectID(root),
 		Name:        name,
 		Path:        root,
 		Language:    SniffLanguage(root),
