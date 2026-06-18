@@ -118,7 +118,9 @@ wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
 No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
 optional pass-through `effort` string; styx stores it without validating
-provider-specific values. `[models].refresh_interval_hours` controls the
+provider-specific values and the router copies it onto `Decision.Effort`.
+Bare channel tokens such as `codex` are valid and mean "let that CLI choose its
+current default model." `[models].refresh_interval_hours` controls the
 model-refresh staleness threshold and defaults to 24 hours.
 
 The `implement` verb routes autonomous plan application: codex is primary

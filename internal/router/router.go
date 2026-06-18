@@ -47,6 +47,7 @@ type ChannelModel struct {
 type Decision struct {
 	Channel  string
 	Model    string
+	Effort   string
 	Fallback []ChannelModel
 	RuleIdx  int    // -1 if no rule matched (default)
 	Reason   string // human-readable trace
@@ -91,6 +92,7 @@ func (r *Router) Route(ctx context.Context, req Request) (Decision, error) {
 		}
 		return Decision{
 			Channel: targets[0].Channel, Model: targets[0].Model,
+			Effort:  rule.Effort,
 			RuleIdx: idx, Parallel: true,
 			ParallelTargets: targets, SynthesizeWith: synth,
 			Reason: fmt.Sprintf("matched rule #%d (parallel)", idx),
@@ -127,7 +129,7 @@ func (r *Router) Route(ctx context.Context, req Request) (Decision, error) {
 		}
 	}
 	return Decision{
-		Channel: chosen.Channel, Model: chosen.Model,
+		Channel: chosen.Channel, Model: chosen.Model, Effort: rule.Effort,
 		Fallback: fallback, RuleIdx: idx, Reason: reason, Degraded: degraded,
 	}, nil
 }
@@ -225,7 +227,10 @@ func (r *Router) capFor(channel string) float64 {
 func parseChannelModel(s string) (ChannelModel, error) {
 	idx := strings.Index(s, ":")
 	if idx < 0 {
-		return ChannelModel{}, fmt.Errorf("invalid channel:model %q", s)
+		if s == "" {
+			return ChannelModel{}, fmt.Errorf("empty channel:model")
+		}
+		return ChannelModel{Channel: s, Model: ""}, nil
 	}
 	return ChannelModel{Channel: s[:idx], Model: s[idx+1:]}, nil
 }
