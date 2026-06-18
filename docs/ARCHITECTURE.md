@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-17
+last_verified: 2026-06-18
 ---
 
 # Styx Architecture
@@ -113,10 +113,13 @@ Shared pieces:
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
 `routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules,
-Brain, Tiers}`. Rules match on `verb` + required `signals`; **first match
+Models, Brain, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
-No match defaults to `ollama:qwen2.5-coder:14b`.
+No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
+optional pass-through `effort` string; styx stores it without validating
+provider-specific values. `[models].refresh_interval_hours` controls the
+model-refresh staleness threshold and defaults to 24 hours.
 
 The `implement` verb routes autonomous plan application: codex is primary
 (well-scoped execution), claude is the fallback, and the `complex` signal
