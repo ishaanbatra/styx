@@ -86,13 +86,13 @@ type AgyClient interface {
 	Send(ctx context.Context, prompt, workingDir string) (string, error)
 }
 
-// indexDir returns ~/.config/styx/state/intel/<project-name>/
+// indexDir returns ~/.config/styx/state/intel/<project-id>/
 func indexDir(proj config.Project) (string, error) {
 	state, err := paths.StateDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(state, "intel", proj.Name), nil
+	return filepath.Join(state, "intel", proj.ID), nil
 }
 
 func indexPath(proj config.Project) (string, error) {
@@ -145,7 +145,7 @@ func Build(ctx context.Context, proj config.Project, agy AgyClient, prog *progre
 	return idx, nil
 }
 
-// Save atomically writes idx to ~/.config/styx/state/intel/<name>/index.json
+// Save atomically writes idx to ~/.config/styx/state/intel/<id>/index.json
 func Save(proj config.Project, idx *Index) error {
 	d, err := indexDir(proj)
 	if err != nil {

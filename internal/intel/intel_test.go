@@ -207,6 +207,17 @@ func TestBuild_EmitsProgress(t *testing.T) {
 	}
 }
 
+func TestIndexDirKeyedByID(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	d, err := indexDir(config.Project{ID: "abc123def456", Name: "renamed-since", Path: "/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(d) != "abc123def456" {
+		t.Errorf("indexDir = %q, want .../abc123def456", d)
+	}
+}
+
 // fakeAgyEcho is an AgyClient stub that returns canned answers for module/key-symbol prompts.
 type fakeAgyEcho struct{}
 

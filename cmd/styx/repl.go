@@ -387,7 +387,7 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 	if err := paths.EnsureDir(memDir); err != nil {
 		return nil, nil, err
 	}
-	mem, err := memory.Open(filepath.Join(memDir, proj.Name+".db"))
+	mem, err := memory.Open(filepath.Join(memDir, proj.ID+".db"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open project memory: %w", err)
 	}
@@ -402,7 +402,7 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 	}
 
 	emb := memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel)
-	threads, err := agent.LoadThreads(proj.Name)
+	threads, err := agent.LoadThreads(proj.ID)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
@@ -412,7 +412,7 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 		cleanup()
 		return nil, nil, err
 	}
-	projAudit := filepath.Join(auditDir, proj.Name)
+	projAudit := filepath.Join(auditDir, proj.ID)
 	if err := paths.EnsureDir(projAudit); err != nil {
 		cleanup()
 		return nil, nil, err
