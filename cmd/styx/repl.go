@@ -22,7 +22,6 @@ import (
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
-	"github.com/ishaanbatra/styx/internal/project"
 )
 
 const maxRecentTurns = 8
@@ -377,7 +376,7 @@ func (s *replSession) lastActionJSON() string {
 // newREPLSession wires a production session for the current project. The
 // returned cleanup closes the memory stores and audit log.
 func newREPLSession(a *app) (*replSession, func(), error) {
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return nil, nil, err
 	}
