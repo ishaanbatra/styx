@@ -321,12 +321,14 @@ built-in live-streaming claude path.
 Convergence loop: drafter (agy) drafts, critic (codex) critiques as structured
 `Critique{Blocking, Important, Nits}`, loop revises until converged (no
 blocking/important), oscillation detected by draft-hash comparison, max 6
-rounds. `Parse` accepts strict JSON, embedded JSON, or keyword sections, and
-falls back to treating garbage as one IMPORTANT finding (never silently
-converges); parse fallback errors are surfaced through progress/status instead
-of being swallowed. `deep.go` extracts cited URLs, fetches (80KB cap), and
-appends a Sources Appendix. `brief` writes timestamped briefs/plans into the
-project's configured dirs and resolves the most recent brief.
+rounds. The command routes drafter and critic separately and passes each
+decision's model and optional effort through `channel.Request`. `Parse` accepts
+strict JSON, embedded JSON, or keyword sections, and falls back to treating
+garbage as one IMPORTANT finding (never silently converges); parse fallback
+errors are surfaced through progress/status instead of being swallowed.
+`deep.go` extracts cited URLs, fetches (80KB cap), and appends a Sources
+Appendix. `brief` writes timestamped briefs/plans into the project's configured
+dirs and resolves the most recent brief.
 
 ## Execute (internal/execute)
 
