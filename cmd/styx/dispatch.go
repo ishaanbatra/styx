@@ -346,6 +346,13 @@ func ensureFirstRun() error {
 			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")
 		}
 	}
+	if projs, err := config.LoadProjects(); err == nil {
+		if err := config.MigrateProjectState(projs); err != nil {
+			fmt.Fprintf(os.Stderr, "[styx] state migration warning: %v\n", err)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "[styx] state migration warning: load projects: %v\n", err)
+	}
 	return nil
 }
 
