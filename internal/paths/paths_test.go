@@ -54,6 +54,16 @@ func TestUsageDBPath(t *testing.T) {
 	}
 }
 
+func TestModelsCachePath(t *testing.T) {
+	p, err := ModelsCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(p) != "models.json" {
+		t.Errorf("base = %q, want models.json", filepath.Base(p))
+	}
+}
+
 func TestMemoryAndThreadsDirs(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
 	md, err := MemoryDir()

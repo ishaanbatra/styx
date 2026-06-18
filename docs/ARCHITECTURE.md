@@ -356,6 +356,7 @@ vars out of shell rc files.
 ```
 ~/.config/styx/routing.toml                 routing rules + caps (user-edited)
                                              plus brain/tier defaults for REPL routing
+~/.config/styx/models.json                  model discovery cache timestamp + results
 ~/.config/styx/projects.toml                project registry (auto-managed)
 ~/.config/styx/state/usage.db               sqlite usage log
 ~/.config/styx/state/memory/                per-project memory sqlite databases
