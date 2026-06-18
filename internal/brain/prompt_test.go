@@ -25,11 +25,13 @@ func TestCardsCoverAllThreads(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	turn := Turn{
-		Utterance:    "fix the flaky session test",
-		Summary:      "we are refactoring the session loader",
-		RecentTurns:  []string{"user: hello", "styx: hi"},
-		ThreadStatus: []string{"claude (claude): 3 turns, context 41%"},
-		MemoryHits:   []string{"[decision] use sqlite for memory"},
+		Utterance:     "fix the flaky session test",
+		Summary:       "we are refactoring the session loader",
+		RecentTurns:   []string{"user: hello", "styx: hi"},
+		ThreadStatus:  []string{"claude (claude): 3 turns, context 41%"},
+		MemoryHits:    []string{"[decision] use sqlite for memory"},
+		BoundProjects: []string{"ai-ta-backend (python): embedding + RAG service [bound]"},
+		KnownProjects: []string{"ai-ta-teacher-ui (typescript): teacher upload UI"},
 	}
 	sys, user := BuildPrompt(turn)
 	if !strings.Contains(sys, "routing brain") {
@@ -50,6 +52,14 @@ func TestBuildPrompt(t *testing.T) {
 	} {
 		if !strings.Contains(user, want) {
 			t.Errorf("user prompt missing %q:\n%s", want, user)
+		}
+	}
+	for _, want := range []string{
+		"ai-ta-backend (python): embedding + RAG service [bound]",
+		"ai-ta-teacher-ui (typescript): teacher upload UI",
+	} {
+		if !strings.Contains(user, want) {
+			t.Errorf("user prompt missing project line %q:\n%s", want, user)
 		}
 	}
 }

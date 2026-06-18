@@ -23,6 +23,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/pipeline"
+	"github.com/ishaanbatra/styx/internal/project"
 )
 
 const maxRecentTurns = 8
@@ -59,11 +60,13 @@ func (s *replSession) turn(ctx context.Context, utterance string) error {
 		hits = nil // recall is an enhancement, never a blocker
 	}
 	t := brain.Turn{
-		Utterance:    utterance,
-		Summary:      s.summary,
-		RecentTurns:  s.recent,
-		ThreadStatus: s.mgr.StatusLines(),
-		MemoryHits:   renderHits(hits),
+		Utterance:     utterance,
+		Summary:       s.summary,
+		RecentTurns:   s.recent,
+		ThreadStatus:  s.mgr.StatusLines(),
+		MemoryHits:    renderHits(hits),
+		BoundProjects: s.renderBoundProjects(),
+		KnownProjects: s.renderKnownProjects(),
 	}
 	act, err := s.brain.Decide(ctx, t)
 	if err != nil {
@@ -358,6 +361,38 @@ func renderHits(hits []memory.Hit) []string {
 			meta += fmt.Sprintf("; conf %.1f", h.Item.Confidence)
 		}
 		out = append(out, fmt.Sprintf("[%s] %s", meta, h.Item.Text))
+	}
+	return out
+}
+
+// renderProject formats one registry entry into a brain-facing one-liner.
+func renderProject(p config.Project, bound bool) string {
+	desc := p.Description
+	if desc == "" {
+		desc = filepath.Base(p.Path)
+	}
+	line := fmt.Sprintf("%s (%s): %s", p.Name, p.Language, desc)
+	if bound {
+		line += " [bound]"
+	}
+	return line
+}
+
+func (s *replSession) renderBoundProjects() []string {
+	return []string{renderProject(s.proj, true)}
+}
+
+func (s *replSession) renderKnownProjects() []string {
+	regs, err := project.List()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, p := range regs {
+		if p.ID == s.proj.ID {
+			continue
+		}
+		out = append(out, renderProject(p, false))
 	}
 	return out
 }
