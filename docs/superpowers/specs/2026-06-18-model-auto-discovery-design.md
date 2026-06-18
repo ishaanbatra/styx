@@ -32,59 +32,73 @@ This spec covers the durable feature.
 
 ## Goal & non-goals
 
-**Goal (MVP): never break on stale model ids.** Styx self-heals: it
-proactively discovers the model each channel currently accepts and rewrites the
-routing table to match, before tasks run.
+**Goal: stop pinning model versions; control reasoning effort explicitly.**
+The original failure conflated two orthogonal dimensions. The design separates
+them:
 
-**Decisions locked during brainstorming:**
+1. **Model version → defer to "latest", never pinned.** styx stops naming
+   concrete model versions. claude routes by alias (`opus`/`sonnet` already mean
+   "latest of that class"); codex sends no `--model` at all, so codex uses its
+   own current default. Nothing version-pinned ⇒ nothing to go stale ⇒ styx is
+   always on the latest by construction. (agy already defers; ollama unaffected.)
+2. **Reasoning effort → user-controlled, per routing rule.** A new optional
+   `effort` field on each rule lets the user pick effort independent of version
+   (e.g. codex `high` instead of its `medium` default; claude `ultracode`
+   instead of `high`). Effort is a **pass-through string**, never validated
+   against a styx enum, so new effort levels work without a styx change — the
+   same anti-staleness stance applied to the effort axis.
 
-- **Timing — proactive only.** Discovery runs *ahead* of tasks, not inline
-  mid-task. If a model still breaks between refreshes the run fails and the next
-  refresh repairs it; there is no inline retry/recovery path.
+**Decisions locked during brainstorming + refinement:**
+
+- **Defer-to-latest, not rewrite-to-current.** Because versions are no longer
+  pinned, `styx doctor` keeps you current passively. doctor's active job is
+  (a) **validate** that aliases resolve, and (b) run a **one-time migration**
+  that de-pins any legacy version-pinned tokens in an existing `routing.toml`
+  (`codex:gpt-5.5` → `codex`, `claude:opus-4-7` → `claude:opus`), recording a
+  correction. After migration the table has no version pins and the migration
+  is idempotent (no further rewrites).
+- **Timing — proactive only.** No inline mid-task recovery. Since nothing is
+  pinned this is rarely needed; if a CLI default itself breaks, the run fails
+  and the user fixes the CLI.
 - **Cadence — on `styx doctor` + a staleness check in `loadApp()` (~24h).**
-  No daemon; consistent with styx's "state is files on disk, no daemons." The
-  check lives in `loadApp()` (not just REPL session start) so it covers every
-  entry point — verb dispatch (`styx research`, `styx auto`), one-shot brain
-  turns, and the REPL alike. The original failure came through the one-shot
-  brain path, so a REPL-only hook would have missed it.
-- **Config writes — auto-rewrite + record correction.** The refresh rewrites
-  the routing table in place and records a routing-correction memory.
+  No daemon; consistent with "state is files on disk, no daemons." The check
+  lives in `loadApp()` (not just REPL start) so it covers verb dispatch, one-shot
+  turns, and the REPL alike. (The migration only rewrites once; subsequent
+  refreshes just validate + refresh the cache timestamp.)
+- **Config writes — migrate + record correction.** The one-time migration
+  rewrites the table in place (atomic) and records a routing-correction memory.
 
 **Non-goals (explicitly deferred):**
 
-- Routing by codex *reasoning effort* (`high`/`medium`) — the "best model per
-  tier" ambition. Styx keeps using codex's own configured effort default.
 - Inline mid-task model recovery.
 - Refreshing the brain capability cards in `cards.go`. They name models at the
   *tier* level (`opus`/`sonnet`/`haiku`, `qwen2.5-coder:*`), not version pins,
   so they do not rot the same way. Revisit later.
 - agy and ollama discoverers (agy ignores `--model`; ollama is doctor-covered).
-  The `Discoverer` registry leaves room to add them later without rework.
+- styx *validating* effort values — they are pass-through; an invalid effort is
+  the CLI's error to report, surfaced via the existing `ClassifiedError` path.
 
-## Key insight: the four channels name models differently
+## Key insight: two axes, handled per channel
 
-Discovery is feasible for all four channels, but via four different native
-mechanisms. The staleness pain is concentrated in version-pinned ids (codex,
-and the pinned claude versions); alias-based and enumerable channels barely rot.
+The fix separates **version** (auto-latest) from **effort** (user-controlled).
+How each axis is realized depends on the channel's CLI:
 
-| Channel | Adapter sends `--model`? | Stale risk | In rewrite scope? | Why |
-|---------|--------------------------|------------|-------------------|-----|
-| codex   | **yes** (`--model req.Model`) | **high** | **yes** | pinned `gpt-5` retired → break. Discover from `~/.codex/config.toml`. |
-| claude  | **yes** (`--model req.Model`) | medium | **yes** | rules pin `opus-4-7`/`sonnet-4-6` (not a valid alias nor full name). De-pin to aliases. |
-| agy     | **no** — ignores `req.Model` | none | no | `agy/agy.go` Send never passes `--model`; always uses agy's own default. `agy:default` is cosmetic and can't break. |
-| ollama  | yes | low | no | a removed pulled model is already detected by doctor's `ollamaModelsMissing` + `--fix` pull. No duplication. |
+| Channel | Version → "latest" | Effort mechanism | Notes |
+|---------|--------------------|------------------|-------|
+| codex   | send **no** `--model` → codex's own default | `-c model_reasoning_effort=<effort>` | was the broken case; defer fixes it |
+| claude  | `--model <alias>` (`opus`/`sonnet`/`haiku`/`fable`) = latest of class | `--effort <effort>` | de-pin `opus-4-7`→`opus` |
+| agy     | already defers (Send ignores `req.Model`) | none | `agy:default` cosmetic; untouched |
+| ollama  | explicit local model name (user-pulled) | none | doctor already validates presence |
 
-The design stance for the two in-scope channels is **stop pinning**: codex
-defers to its own config (styx broke precisely by *overriding* it with
-`--model`); claude defers to aliases (the `[tiers]` block already maps tiers to
-aliases, but the rules pin `claude:opus-4-7` / `claude:sonnet-4-6`).
+So routing names **at most a model *class* (claude) or nothing (codex)** for the
+version axis, plus an optional **effort** per rule. Migration de-pins the two
+channels that currently carry version strings; agy/ollama are left alone.
 
-**Scope refinement (from adapter investigation, post-initial-spec):** the
-original spec named four discoverers. Inspecting the adapters showed agy never
-sends a model id (so it cannot go stale) and ollama staleness is already
-covered by doctor. MVP therefore ships **two discoverers — codex and claude**.
-The `Discoverer` abstraction and registry remain, so agy/ollama discoverers can
-be added later if their adapters change.
+**Scope (from adapter investigation):** agy never sends a model id and ollama
+staleness is doctor-covered, so neither needs a discoverer. MVP ships **one
+discoverer (claude, to enumerate valid aliases for migration) and a codex
+config reader (to report the current default for the cache/transparency)**.
+The `Discoverer` registry remains extensible.
 
 ## Architecture
 
@@ -101,17 +115,22 @@ doctor (always) / loadApp when cache stale
         │
         ▼
  modelsync.Refresh(ctx, cfg)
-        │  for each registered Discoverer (best-effort, per-channel timeout):
-        ├─► codexDiscoverer   reads ~/.codex/config.toml
+        │  discover (best-effort, per-channel timeout):
+        ├─► codexDiscoverer   reads ~/.codex/config.toml (current default)
         └─► claudeDiscoverer  returns stable aliases
         │
         ▼
- diff Results against routing.toml tokens
+ scan routing.toml for version-pinned tokens
         │
-        ├─► surgical rewrite of stale ids (atomic tmp+rename, comments preserved)
+        ├─► one-time migration: codex:<ver>→codex, claude:<ver>→claude:<alias>
+        │     (atomic tmp+rename, comments preserved; idempotent after first run)
         ├─► record routing-correction memory (global scope, provenance)
         └─► write models.json cache (Results + refreshed_at)
 ```
+
+Separately, at **dispatch time** (not in Refresh), the router carries an
+`Effort` from the matched rule into the channel `Request`; the codex and claude
+adapters translate it to their flags. This axis is static config, not discovery.
 
 ### Discovery interface
 
@@ -126,7 +145,7 @@ type Discoverer interface {
 type Result struct {
     Current   string   // id styx should prefer now (e.g. "gpt-5.5"); "" if alias-only
     Available []string // all valid ids when enumerable (agy, ollama); else nil
-    Source    string   // "codex-config" | "agy-models" | "ollama-tags" | "claude-alias"
+    Source    string   // "codex-config" | "claude-alias"
 }
 ```
 
@@ -163,68 +182,102 @@ Each discoverer is tiny and independently testable. MVP ships two:
   codex/claude are instant, ollama is a fast local GET, `agy models` ~1s. A
   discoverer that exceeds its timeout keeps its cached value and is skipped.
 
-## Routing rewrite & record
+## Effort plumbing (dispatch time)
 
-- **Diff:** scan `routing.toml` for `channel:model` tokens in `use`,
-  `fallback`, `parallel`, and `synthesize_with` values. For each, compare the
-  model against the channel's discovery `Result`.
-- **Surgical text rewrite (not TOML re-marshal):** replace only the stale id
-  token in the raw file text so hand-written comments and layout survive.
-  Atomic tmp+rename. Rules:
-  - **codex:** any `codex:<x>` where `<x> != Current` → `codex:<Current>`.
-  - **claude:** de-pin a pinned version to its alias by tier-prefix match
-    against `Available` (`claude:opus-4-7` → `claude:opus`, `claude:sonnet-4-6`
-    → `claude:sonnet`). A token already equal to an alias, or `claude:interactive`,
-    is left untouched. One-time; afterward claude tokens are aliases and never
-    rewrite again.
-  - **agy / ollama:** not rewritten (out of scope — see the channel table).
-- **Record:** one memory item per applied change, global scope, high
-  confidence, via the provenance system (Task 19.2). Example text:
-  `"routing: codex model gpt-5 → gpt-5.5 (source: codex-config), 2026-06-18"`.
+- **Config:** `config.Rule` gains `Effort string` (`toml:"effort"`), optional.
+- **Router:** the `Decision` returned by `Route` carries `Effort` copied from
+  the matched rule. (For `parallel`/`fallback` entries the rule-level `Effort`
+  applies to all of them in MVP — per-entry effort is out of scope.)
+- **Channel `Request`:** gains `Effort string`. Dispatch paths
+  (`research.go`, the REPL `runOneDispatch`, etc.) set it from the decision.
+- **Adapters:**
+  - **codex:** stop sending `--model` (defer to codex's default). When
+    `req.Effort != ""`, append `-c model_reasoning_effort=<effort>`.
+  - **claude:** keep `--model <alias>`. When `req.Effort != ""`, append
+    `--effort <effort>`.
+  - **agy / ollama:** ignore `Effort`.
+- Effort is **never validated** by styx; an unsupported value surfaces as the
+  CLI's own `ClassifiedError`.
+
+## One-time migration & record
+
+The migration de-pins legacy version strings in an existing `routing.toml` so
+old configs converge to the defer-to-latest form. New installs are already in
+that form (see seeded defaults), so this is a no-op there.
+
+- **Scan:** find `channel:model` tokens in `use`, `fallback`, `parallel`, and
+  `synthesize_with` values.
+- **Surgical text rewrite (not TOML re-marshal):** edit only the target token in
+  the raw file text so comments and layout survive. Atomic tmp+rename. Rules:
+  - **codex:** any `codex:<version>` → bare `codex` (drop the version so codex
+    uses its own default). `codex:interactive` is left untouched.
+  - **claude:** de-pin a pinned version to its class alias by prefix match
+    against the claude discoverer's `Available` (`claude:opus-4-7` →
+    `claude:opus`, `claude:sonnet-4-6` → `claude:sonnet`). Tokens already equal
+    to an alias, and `claude:interactive`, are left untouched.
+  - **agy / ollama:** never touched.
+  - **Idempotent:** after the first run no version-pinned tokens remain, so
+    subsequent scans make no change.
+- **Record:** one memory item per applied change — `KindRoutingPreference`,
+  `Project: ""` (global), high `Confidence`, via the provenance system
+  (Task 19.2). Example: `"routing: de-pinned codex:gpt-5.5 → codex (defer to
+  latest), 2026-06-18"`.
 - **Transparency:** print each change to stderr via `logStatus` (respect
   `--quiet`).
-- The `models.json` cache is rewritten on every refresh regardless of whether a
-  routing change was applied, so the staleness timer resets.
+- `models.json` is rewritten on every refresh regardless, so the staleness
+  timer resets even when no migration was needed.
 
 ## Error handling
 
-Every discoverer is best-effort and isolated. A missing `~/.codex/config.toml`,
-a failed `agy models`, or ollama being unreachable warns for *that channel* and
-skips it — it never aborts the refresh and never bricks session start. The
-rewrite proceeds only for channels that discovered cleanly. A routing-write
-failure surfaces loudly in `doctor` but is swallowed-to-warning in `loadApp()`
-(a refresh hiccup must not block a verb, a one-shot turn, or the REPL). All subprocess/HTTP calls run under a
-context with timeout, per styx convention.
+Every discoverer is best-effort and isolated. A missing `~/.codex/config.toml`
+warns for codex and skips it — it never aborts the refresh and never bricks any
+entry point. The claude migration proceeds only if the claude discoverer
+returned its alias set. A routing-write failure surfaces loudly in `doctor` but
+is swallowed-to-warning in `loadApp()` (a refresh hiccup must not block a verb,
+a one-shot turn, or the REPL). All subprocess/HTTP calls run under a context
+with timeout, per styx convention.
 
 ## Testing
 
 Table-driven, fakes over mocks, matching styx conventions:
 
-- **Per discoverer:** temp-dir fake `~/.codex/config.toml` (inject the config
-  path) covering present/missing/no-model cases; claude alias path is pure.
-- **Rewrite:** fixture `routing.toml` + a discovery `Result` → assert new ids
-  present, comments preserved, untargeted lines byte-identical, and the write is
-  atomic. Cover codex bump, claude de-pin, and the no-change idempotent case.
+- **codex discoverer:** temp-dir fake `~/.codex/config.toml` (inject path)
+  covering present / missing-file / no-`model`-line cases.
+- **claude discoverer:** pure — asserts the alias set.
+- **Migration:** fixture `routing.toml` → assert `codex:<ver>`→`codex`,
+  `claude:opus-4-7`→`claude:opus`, `*:interactive` and agy/ollama untouched,
+  comments preserved, untargeted lines byte-identical, write atomic, and a
+  second run is a no-op (idempotent).
+- **Effort plumbing:** `config` test that `effort = "high"` parses into
+  `Rule.Effort`; router test that `Decision.Effort` is populated; codex adapter
+  test asserting `-c model_reasoning_effort=high` is in argv and `--model` is
+  **absent**; claude adapter test asserting `--effort ultracode` is in argv.
 - **Staleness:** inject a clock (no inline `time.Now()`); assert refresh fires
   when the cache is stale and is skipped when fresh.
 - **Record:** assert the routing-correction memory is written with correct
-  provenance (global scope, high confidence).
-- **doctor integration:** extend `cmd/styx/doctor_test.go` to assert a full
-  refresh runs and reports per-channel results.
+  provenance (`KindRoutingPreference`, global, high confidence).
+- **doctor integration:** extend `cmd/styx/doctor_test.go` to assert a refresh
+  runs and reports per-channel results.
 
 ## Drift-contract impact
 
-- `internal/modelsync/` is new — gets a package doc comment and a mention in
-  `docs/ARCHITECTURE.md` (owner of `internal/**`), with `last_verified` bumped.
-- New `[models]` block in `default_routing.go` and its `routing.toml` upgrade
-  path.
+- `internal/modelsync/` is new — package doc comment + a section in
+  `docs/ARCHITECTURE.md` (owner of `internal/**`), `last_verified` bumped.
+- `internal/channel/*` (codex drops `--model`, adds effort; claude adds effort;
+  `Request.Effort`), `internal/router` (`Decision.Effort`), `internal/config`
+  (`Rule.Effort`, `[models]` block) all owned by `ARCHITECTURE.md` — update it.
+- Seeded `default_routing.go` changes (de-pinned tokens + `[models]` +
+  `effort` examples) and its `routing.toml` upgrade path.
 - No verbs added/removed → `README.md` verb table unchanged.
 
 ## Rollout
 
-1. Quick-patch (done): `codex:gpt-5` → `codex:gpt-5.5` in live `routing.toml`
-   and seeded `default_routing.go`.
-2. `internal/modelsync` package: `Discoverer`, four discoverers, cache.
-3. Routing rewrite + record-correction.
-4. Wire into `doctor` (always) and session start (staleness).
-5. De-pin claude in the seeded defaults as part of the first real refresh.
+1. Quick-patch (done): `codex:gpt-5` → `codex:gpt-5.5` to unblock; superseded by
+   step 5's de-pin.
+2. Effort plumbing: `Rule.Effort` → `Decision.Effort` → `Request.Effort` →
+   codex/claude adapter flags (codex also drops `--model`).
+3. `internal/modelsync`: codex reader + claude discoverer + `models.json` cache.
+4. One-time migration (de-pin scan + atomic rewrite) + record-correction.
+5. Re-author seeded `default_routing.go` to the de-pinned form (`codex`,
+   `claude:opus`/`claude:sonnet`) with `[models]` and example `effort` fields.
+6. Wire `Refresh` into `doctor` (always) and `loadApp()` (staleness).
