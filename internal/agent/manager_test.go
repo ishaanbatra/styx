@@ -213,6 +213,30 @@ func TestDispatchRecordsProjectAndRunID(t *testing.T) {
 	}
 }
 
+func TestDispatchRendersExtraRoots(t *testing.T) {
+	dir := t.TempDir()
+	threads, _ := LoadThreadsFrom(filepath.Join(dir, "threads.json"))
+	argsLog := filepath.Join(dir, "args.log")
+	m := &Manager{
+		Project:  config.Project{Name: "proj", Path: dir},
+		Threads:  threads,
+		Adapters: map[string]Adapter{"claude": &ClaudeAdapter{BinPath: fakeBin(t)}},
+		Timeout:  10 * time.Second,
+	}
+	t.Setenv("FAKEAGENT_TEXT", "ok")
+	t.Setenv("FAKEAGENT_ARGS_LOG", argsLog)
+	if _, err := m.Dispatch(context.Background(), DispatchSpec{
+		Thread: "claude", CLI: "claude", Message: "hi",
+		ExtraRoots: []string{"/repos/other"},
+	}, nil); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	b, _ := os.ReadFile(argsLog)
+	if !strings.Contains(string(b), "--add-dir") || !strings.Contains(string(b), "/repos/other") {
+		t.Errorf("expected --add-dir /repos/other in argv, got: %s", b)
+	}
+}
+
 func TestSeedMessage(t *testing.T) {
 	f := newManagerFixture(t, 200000)
 	ad := f.m.Adapters["claude"]

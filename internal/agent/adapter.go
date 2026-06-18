@@ -105,8 +105,9 @@ func NewCodexAdapter() *PlainAdapter {
 			if model != "" {
 				args = append(args, "--model", model)
 			}
+			args = append(args, "exec")
 			args = append(args, extra...)
-			return append(args, "exec", msg)
+			return append(args, msg)
 		},
 	}
 }

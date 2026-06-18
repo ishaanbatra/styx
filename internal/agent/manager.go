@@ -19,12 +19,13 @@ const distillPrompt = `Summarize the state of this work as a structured handoff 
 
 // DispatchSpec is one routed message to an agent thread.
 type DispatchSpec struct {
-	Thread   string // thread name; "" defaults to the CLI name
-	CLI      string // claude | codex | agy
-	Model    string // resolved model id (tier mapping already applied)
-	Message  string
-	Extra    []string // extra CLI options from the brain (e.g. --add-dir)
-	ReadOnly bool     // true for read-class work; adapters should avoid pre-granted writes
+	Thread     string // thread name; "" defaults to the CLI name
+	CLI        string // claude | codex | agy
+	Model      string // resolved model id (tier mapping already applied)
+	Message    string
+	Extra      []string // extra CLI options from the brain (e.g. --add-dir)
+	ExtraRoots []string // absolute repo roots attached via --add-dir (cross-repo dispatch)
+	ReadOnly   bool     // true for read-class work; adapters should avoid pre-granted writes
 }
 
 // Manager owns a project's agent threads: lazy start, context metering,
@@ -60,14 +61,15 @@ func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(
 	th := m.Threads.Get(name, spec.CLI)
 	run := &Runner{Adapter: ad, Thread: th, WorkDir: m.Project.Path, Timeout: m.Timeout, OnEvent: onEvent}
 
+	extra := append(append([]string{}, spec.Extra...), addDirArgs(spec.ExtraRoots)...)
 	msg := m.seedMessage(th, ad, spec.Message)
-	res, err := run.Send(ctx, msg, spec.Model, spec.Extra, spec.ReadOnly)
+	res, err := run.Send(ctx, msg, spec.Model, extra, spec.ReadOnly)
 	if err != nil && th.SessionID != "" && ad.SupportsResume() {
 		// Crash recovery: the CLI's session may be gone. Roll back to the last
 		// checkpoint and rebuild from distillation + rolling summary.
 		th.SessionID = ""
 		msg = m.seedMessage(th, ad, spec.Message)
-		res, err = run.Send(ctx, msg, spec.Model, spec.Extra, spec.ReadOnly)
+		res, err = run.Send(ctx, msg, spec.Model, extra, spec.ReadOnly)
 	}
 	m.record(ctx, spec, res, err)
 	if err != nil {
@@ -182,6 +184,18 @@ func (m *Manager) saveMemory(ctx context.Context, kind memory.Kind, text, source
 		Kind: kind, Text: text, Source: source,
 		Project: m.Project.Name, Scope: "thread", Confidence: 0.8, Embedding: vec,
 	})
+}
+
+// addDirArgs renders extra repo roots as repeated --add-dir <root> flags.
+// All three agent CLIs (claude, codex, agy) accept --add-dir.
+func addDirArgs(roots []string) []string {
+	var out []string
+	for _, r := range roots {
+		if r != "" {
+			out = append(out, "--add-dir", r)
+		}
+	}
+	return out
 }
 
 // StatusLines renders one line per thread for the brain and /status.
