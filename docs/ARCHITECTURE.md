@@ -156,7 +156,9 @@ defer-to-latest form. The package defines a small `Discoverer` interface and
 per-channel `Result` records. The shipped discoverers are `CodexDiscoverer`,
 which reads the top-level `model` setting from the Codex CLI config for
 transparency, and `ClaudeDiscoverer`, which reports the stable class aliases
-`opus`, `sonnet`, `haiku`, and `fable`.
+`opus`, `sonnet`, `haiku`, and `fable`. Discovery output is persisted in an
+atomic `models.json` cache with a `refreshed_at` timestamp so callers can skip
+refresh work until `[models].refresh_interval_hours` says the cache is stale.
 
 ## Brain (internal/brain)
 
