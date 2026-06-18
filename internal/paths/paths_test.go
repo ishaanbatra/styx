@@ -54,6 +54,16 @@ func TestUsageDBPath(t *testing.T) {
 	}
 }
 
+func TestModelsCachePath(t *testing.T) {
+	p, err := ModelsCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(p) != "models.json" {
+		t.Errorf("base = %q, want models.json", filepath.Base(p))
+	}
+}
+
 func TestMemoryAndThreadsDirs(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
 	md, err := MemoryDir()
@@ -69,5 +79,16 @@ func TestMemoryAndThreadsDirs(t *testing.T) {
 	}
 	if td != "/tmp/xdg-test/styx/state/threads" {
 		t.Errorf("ThreadsDir = %q, want /tmp/xdg-test/styx/state/threads", td)
+	}
+}
+
+func TestAuditDir(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test")
+	ad, err := AuditDir()
+	if err != nil {
+		t.Fatalf("AuditDir: %v", err)
+	}
+	if ad != "/tmp/xdg-test/styx/state/audit" {
+		t.Errorf("AuditDir = %q, want /tmp/xdg-test/styx/state/audit", ad)
 	}
 }

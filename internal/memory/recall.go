@@ -5,12 +5,26 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 )
 
 // Hit is one recalled memory with its similarity score.
 type Hit struct {
 	Item  Item
 	Score float64
+}
+
+// recallHalfLife is how fast an item's recall weight halves with age - old
+// memories (and low-confidence ones) lose to fresh, certain ones.
+const recallHalfLife = 90 * 24 * time.Hour
+
+// decayedScore weights raw cosine similarity by confidence and recency.
+func decayedScore(cos, confidence float64, age time.Duration) float64 {
+	if confidence <= 0 {
+		confidence = 1
+	}
+	rec := math.Pow(0.5, float64(age)/float64(recallHalfLife))
+	return cos * confidence * rec
 }
 
 // Recall embeds query and returns the top-k most similar items across the
@@ -30,7 +44,9 @@ func Recall(ctx context.Context, emb Embedder, query string, k int, stores ...*S
 			return nil, fmt.Errorf("load memories: %w", err)
 		}
 		for _, it := range items {
-			hits = append(hits, Hit{Item: it, Score: cosine(qv, it.Embedding)})
+			cos := cosine(qv, it.Embedding)
+			score := decayedScore(cos, it.Confidence, time.Since(it.CreatedAt))
+			hits = append(hits, Hit{Item: it, Score: score})
 		}
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })

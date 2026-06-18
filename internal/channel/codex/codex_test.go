@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -57,6 +58,23 @@ func TestSend_ReadOnlyByDefault(t *testing.T) {
 	}
 	if strings.Contains(resp.Text, "workspace-write") {
 		t.Errorf("default request must not enable writes, args = %q", resp.Text)
+	}
+}
+
+func TestCodexArgs_EffortNoModel(t *testing.T) {
+	got := codexArgs(channel.Request{Prompt: "hi", Effort: "high"})
+	want := []string{"-c", "model_reasoning_effort=high", "exec", "hi"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("args = %v, want %v", got, want)
+	}
+}
+
+func TestCodexArgs_NoModelByDefault(t *testing.T) {
+	got := codexArgs(channel.Request{Prompt: "hi"})
+	for _, a := range got {
+		if a == "--model" {
+			t.Errorf("unexpected --model in %v", got)
+		}
 	}
 }
 

@@ -32,7 +32,7 @@ func TestRunnerSendStreamsAndCapturesSession(t *testing.T) {
 		OnEvent: func(e Event) { events = append(events, e) },
 		Timeout: 10 * time.Second,
 	}
-	res, err := r.Send(context.Background(), "do the thing", "sonnet", nil)
+	res, err := r.Send(context.Background(), "do the thing", "sonnet", nil, false)
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestRunnerSendPassesResumeArg(t *testing.T) {
 
 	th := &Thread{Name: "claude", CLI: "claude", SessionID: "sess-7"}
 	r := &Runner{Adapter: &ClaudeAdapter{BinPath: fakeBin(t)}, Thread: th, Timeout: 10 * time.Second}
-	if _, err := r.Send(context.Background(), "continue", "haiku", nil); err != nil {
+	if _, err := r.Send(context.Background(), "continue", "haiku", nil, false); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	b, err := os.ReadFile(log)
@@ -75,7 +75,7 @@ func TestRunnerSendFailsOnResumeError(t *testing.T) {
 	t.Setenv("FAKEAGENT_FAIL_RESUME", "1")
 	th := &Thread{Name: "claude", CLI: "claude", SessionID: "gone"}
 	r := &Runner{Adapter: &ClaudeAdapter{BinPath: fakeBin(t)}, Thread: th, Timeout: 10 * time.Second}
-	if _, err := r.Send(context.Background(), "continue", "", nil); err == nil {
+	if _, err := r.Send(context.Background(), "continue", "", nil, false); err == nil {
 		t.Fatal("want error when resume fails, got nil")
 	}
 }
@@ -94,7 +94,7 @@ func TestRunnerPlainAdapter(t *testing.T) {
 		Thread:  th,
 		Timeout: 10 * time.Second,
 	}
-	res, err := r.Send(context.Background(), "hello plain", "", nil)
+	res, err := r.Send(context.Background(), "hello plain", "", nil, false)
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}

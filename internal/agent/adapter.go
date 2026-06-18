@@ -9,7 +9,7 @@ type Adapter interface {
 	SupportsResume() bool // CLI persists sessions; per-turn --resume works
 	SupportsStream() bool // CLI emits parseable per-line JSON events
 	ContextWindow() int   // tokens; drives the distill threshold
-	BuildArgs(msg, sessionID, model string, extra []string) []string
+	BuildArgs(msg, sessionID, model string, extra []string, readOnly bool) []string
 	ParseEvent(line []byte) (Event, bool)
 }
 
@@ -43,7 +43,13 @@ func (a *ClaudeAdapter) ContextWindow() int {
 	return 200000
 }
 
-func (a *ClaudeAdapter) BuildArgs(msg, sessionID, model string, extra []string) []string {
+func (a *ClaudeAdapter) BuildArgs(msg, sessionID, model string, extra []string, readOnly bool) []string {
+	return claudeArgs(sessionID, model, msg, extra, readOnly)
+}
+
+// claudeArgs builds the headless claude invocation. Read-only turns omit the
+// pre-granted write permission.
+func claudeArgs(sessionID, model, msg string, extra []string, readOnly bool) []string {
 	args := []string{}
 	if sessionID != "" {
 		args = append(args, "--resume", sessionID)
@@ -52,7 +58,11 @@ func (a *ClaudeAdapter) BuildArgs(msg, sessionID, model string, extra []string) 
 		args = append(args, "--model", model)
 	}
 	args = append(args, extra...)
-	return append(args, "-p", msg, "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions")
+	args = append(args, "-p", msg, "--output-format", "stream-json", "--verbose")
+	if !readOnly {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	return args
 }
 
 func (a *ClaudeAdapter) ParseEvent(line []byte) (Event, bool) { return ParseClaudeEvent(line) }
@@ -80,7 +90,7 @@ func (a *PlainAdapter) SupportsResume() bool                 { return false }
 func (a *PlainAdapter) SupportsStream() bool                 { return false }
 func (a *PlainAdapter) ContextWindow() int                   { return a.Window }
 func (a *PlainAdapter) ParseEvent(line []byte) (Event, bool) { return Event{}, false }
-func (a *PlainAdapter) BuildArgs(msg, sessionID, model string, extra []string) []string {
+func (a *PlainAdapter) BuildArgs(msg, sessionID, model string, extra []string, readOnly bool) []string {
 	return a.ArgsFn(msg, model, extra)
 }
 

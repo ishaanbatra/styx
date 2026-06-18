@@ -13,6 +13,7 @@ import (
 type Routing struct {
 	Budget BudgetCaps        `toml:"budget"`
 	Rules  []Rule            `toml:"rule"`
+	Models ModelsConfig      `toml:"models"`
 	Brain  BrainConfig       `toml:"brain"`
 	Tiers  map[string]string `toml:"tiers"`
 }
@@ -42,11 +43,22 @@ type BrainConfig struct {
 	FableWeeklyCap      int     `toml:"fable_weekly_cap"`      // weekly fable messages before degrading to opus
 }
 
+// ModelsConfig controls model auto-discovery / staleness refresh.
+type ModelsConfig struct {
+	RefreshIntervalHours int `toml:"refresh_interval_hours"`
+}
+
+func applyModelsDefaults(r *Routing) {
+	if r.Models.RefreshIntervalHours == 0 {
+		r.Models.RefreshIntervalHours = 24
+	}
+}
+
 // applyBrainDefaults fills zero-valued brain/tier settings so configs written
 // before this section existed keep working.
 func applyBrainDefaults(r *Routing) {
 	if r.Brain.Model == "" {
-		r.Brain.Model = "llama3.2:3b"
+		r.Brain.Model = "qwen2.5-coder:7b"
 	}
 	if r.Brain.EmbedModel == "" {
 		r.Brain.EmbedModel = "nomic-embed-text"
@@ -84,6 +96,7 @@ type Rule struct {
 	Parallel       []string `toml:"parallel"`        // for parallel review-style verbs
 	SynthesizeWith string   `toml:"synthesize_with"` // channel that merges parallel outputs
 	Fallback       []string `toml:"fallback"`        // ordered fallback chain
+	Effort         string   `toml:"effort"`          // optional reasoning-effort, pass-through to the CLI
 }
 
 // LoadRouting loads routing.toml from the default config path.
@@ -105,6 +118,7 @@ func LoadRoutingFile(path string) (Routing, error) {
 	if err := toml.Unmarshal(b, &r); err != nil {
 		return Routing{}, fmt.Errorf("parse routing config %s: %w", path, err)
 	}
+	applyModelsDefaults(&r)
 	applyBrainDefaults(&r)
 	return r, nil
 }

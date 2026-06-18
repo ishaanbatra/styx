@@ -7,6 +7,7 @@ module.exports = (output, context) => {
   const r = check(output, {
     want_action: v.want_action,
     want_thread: v.want_thread,
+    want_risk: v.want_risk,
     want_pipeline: v.want_pipeline,
   });
   return { pass: r.pass, score: r.pass ? 1 : 0, reason: r.reason };

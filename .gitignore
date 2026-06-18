@@ -3,3 +3,5 @@
 *.out
 .DS_Store
 .claude/settings.local.json
+# stray binary from `go build ./eval/promptfoo/braindump` (use `go run` instead)
+/braindump

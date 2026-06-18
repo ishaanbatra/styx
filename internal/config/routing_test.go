@@ -23,8 +23,9 @@ func TestLoadRoutingFile(t *testing.T) {
 			{Verb: "plan", Use: "claude:sonnet-4-6", Fallback: []string{"codex:gpt-5", "ollama:qwen2.5-coder:14b"}},
 			{Verb: "review", Parallel: []string{"claude:sonnet-4-6", "codex:gpt-5"}, SynthesizeWith: "claude:sonnet-4-6"},
 		},
-		Brain: defaultBrainForTest(),
-		Tiers: defaultTiersForTest(),
+		Models: defaultModelsForTest(),
+		Brain:  defaultBrainForTest(),
+		Tiers:  defaultTiersForTest(),
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
@@ -53,11 +54,53 @@ func TestLoadRoutingFile_MessageLimits(t *testing.T) {
 		Rules: []Rule{
 			{Verb: "plan", Use: "claude:sonnet-4-6"},
 		},
-		Brain: defaultBrainForTest(),
-		Tiers: defaultTiersForTest(),
+		Models: defaultModelsForTest(),
+		Brain:  defaultBrainForTest(),
+		Tiers:  defaultTiersForTest(),
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestLoadRouting_EffortAndModels(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(`
+[[rule]]
+verb = "research.critic"
+use  = "codex"
+effort = "high"
+
+[models]
+refresh_interval_hours = 12
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Rules[0].Effort != "high" {
+		t.Errorf("Effort = %q, want high", r.Rules[0].Effort)
+	}
+	if r.Models.RefreshIntervalHours != 12 {
+		t.Errorf("RefreshIntervalHours = %d, want 12", r.Models.RefreshIntervalHours)
+	}
+}
+
+func TestLoadRouting_ModelsDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte("[[rule]]\nverb=\"plan\"\nuse=\"claude:opus\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Models.RefreshIntervalHours != 24 {
+		t.Errorf("default RefreshIntervalHours = %d, want 24", r.Models.RefreshIntervalHours)
 	}
 }
 
@@ -116,8 +159,8 @@ func TestBrainDefaultsAppliedWhenSectionMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRoutingFile: %v", err)
 	}
-	if r.Brain.Model != "llama3.2:3b" {
-		t.Errorf("default brain model = %q, want llama3.2:3b", r.Brain.Model)
+	if r.Brain.Model != "qwen2.5-coder:7b" {
+		t.Errorf("default brain model = %q, want qwen2.5-coder:7b", r.Brain.Model)
 	}
 	if r.Brain.EmbedModel != "nomic-embed-text" {
 		t.Errorf("default embed model = %q", r.Brain.EmbedModel)
@@ -138,12 +181,16 @@ func TestBrainDefaultsAppliedWhenSectionMissing(t *testing.T) {
 
 func defaultBrainForTest() BrainConfig {
 	return BrainConfig{
-		Model:               "llama3.2:3b",
+		Model:               "qwen2.5-coder:7b",
 		EmbedModel:          "nomic-embed-text",
 		ConfidenceThreshold: 0.5,
 		ContextThresholdPct: 70,
 		FableWeeklyCap:      80,
 	}
+}
+
+func defaultModelsForTest() ModelsConfig {
+	return ModelsConfig{RefreshIntervalHours: 24}
 }
 
 func defaultTiersForTest() map[string]string {

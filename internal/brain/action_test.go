@@ -1,6 +1,7 @@
 package brain
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -69,5 +70,44 @@ func TestActionSchemaIsValidJSON(t *testing.T) {
 	}
 	if v["type"] != "object" {
 		t.Errorf("schema root type = %v", v["type"])
+	}
+}
+
+func TestEffectiveRisk(t *testing.T) {
+	tests := []struct {
+		name string
+		a    Action
+		want RiskLevel
+	}{
+		{"default edit when unset", Action{Action: ActionDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "x"}}}, RiskEdit},
+		{"explicit read", Action{Action: ActionDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: RiskRead}}}, RiskRead},
+		{"max across dispatches", Action{Action: ActionParallelDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "a", Risk: RiskRead}, {Thread: "codex", Message: "b", Risk: RiskShip}}}, RiskShip},
+		{"auto pipeline is ship", Action{Action: ActionPipeline, Pipeline: "auto"}, RiskShip},
+		{"research pipeline defaults edit", Action{Action: ActionPipeline, Pipeline: "research"}, RiskEdit},
+		{"action-level ship", Action{Action: ActionHandoff, Risk: RiskShip}, RiskShip},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.EffectiveRisk(); got != tt.want {
+				t.Errorf("EffectiveRisk() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActionValidRisk(t *testing.T) {
+	good := Action{Action: ActionDispatch, Confidence: 0.7, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: RiskShip}}}
+	if !good.Valid() {
+		t.Error("valid risk rejected")
+	}
+	bad := Action{Action: ActionDispatch, Confidence: 0.7, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: "nuke"}}}
+	if bad.Valid() {
+		t.Error("invalid risk accepted")
+	}
+}
+
+func TestRiskInSchema(t *testing.T) {
+	if !bytes.Contains(ActionSchema, []byte(`"risk"`)) {
+		t.Error("ActionSchema missing risk property")
 	}
 }

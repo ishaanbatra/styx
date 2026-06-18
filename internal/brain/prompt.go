@@ -35,12 +35,12 @@ Examples (utterance -> JSON):
 - "are we over budget for codex this month?" -> {"action":"reply","reply":"...","confidence":0.85}
 - "which threads are busy and what are they working on?" -> {"action":"reply","reply":"...","confidence":0.85}
 - "refactor the loader into smaller functions" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"refactor the loader into smaller functions"}],"confidence":0.9}
-- "walk me through what the signals package does" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain what the signals package does"}],"confidence":0.85}
+- "walk me through what the signals package does" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain what the signals package does","risk":"read"}],"confidence":0.85}
 - "find every place we log to stderr and route it through progress" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"route every stderr log through progress"}],"confidence":0.85}
 - "make the distiller kick in at 80 percent context" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"trigger the distiller at 80% context"}],"confidence":0.85}
 - "tighten the preamble so the brain stops over-dispatching" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"tighten the preamble to reduce over-dispatching"}],"confidence":0.85}
-- "implement the retry logic we discussed in the loader" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"implement the discussed retry logic in the loader"}],"confidence":0.85}
-- "fix the failing TestRoute test" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"fix the failing TestRoute test"}],"confidence":0.85}
+- "implement the retry logic we discussed in the loader" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"implement the discussed retry logic in the loader","risk":"edit"}],"confidence":0.85}
+- "fix the failing TestRoute test" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"fix the failing TestRoute test","risk":"edit"}],"confidence":0.85}
 - "add a created_at column to the usage table plus the migration" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"add a created_at column to the usage table plus the migration"}],"confidence":0.85}
 - "add a --timeout flag to the dispatch command and thread it through" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"add a --timeout flag to the dispatch command and thread it through"}],"confidence":0.85}
 - "rename the Registry type and fix all the call sites" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"rename the Registry type and fix all the call sites"}],"confidence":0.85}
@@ -48,10 +48,11 @@ Examples (utterance -> JSON):
 - "write unit tests for the retry backoff helper" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"write unit tests for the retry backoff helper"}],"confidence":0.85}
 - "design how the new sync engine should be structured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"design the new sync engine structure"}],"confidence":0.85}
 - "have codex sanity-check this math" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"sanity-check this math"}],"confidence":0.9}
+- "have codex commit the fix and push it" -> {"action":"dispatch","dispatches":[{"thread":"codex","message":"commit the fix and push it","risk":"ship"}],"confidence":0.9}
 - "get claude and codex to both review this" -> {"action":"parallel_dispatch","dispatches":[{"thread":"claude","message":"review this"},{"thread":"codex","message":"review this"}],"confidence":0.9}
 - "scaffold getters and setters for this struct" -> {"action":"dispatch","dispatches":[{"thread":"ollama","message":"scaffold getters and setters for this struct"}],"confidence":0.9}
 - "write a commit message for the staged changes" -> {"action":"dispatch","dispatches":[{"thread":"ollama","message":"write a commit message for the staged changes"}],"confidence":0.9}
-- "summarize this 4000-line diff" -> {"action":"dispatch","dispatches":[{"thread":"agy","message":"summarize this diff"}],"confidence":0.9}
+- "summarize this 4000-line diff" -> {"action":"dispatch","dispatches":[{"thread":"agy","message":"summarize this diff","risk":"read"}],"confidence":0.9}
 - "explain this entire package, it's too big to read through" -> {"action":"dispatch","dispatches":[{"thread":"agy","message":"explain what this large package does"}],"confidence":0.85}
 - "look up the latest claude CLI flags" -> {"action":"pipeline","pipeline":"research","confidence":0.9}
 - "check whether fable 5 is still available" -> {"action":"pipeline","pipeline":"research","confidence":0.85}
@@ -71,6 +72,8 @@ Examples (utterance -> JSON):
 - "note: the staging deploy needs the VPN" -> {"action":"remember","remember":"the staging deploy needs the VPN","confidence":1}
 - "no, codex should handle the reviews" -> {"action":"remember","remember":"routing-preference: codex should handle the reviews","confidence":1}
 - "jot down that we cap retries at three attempts" -> {"action":"remember","remember":"we cap retries at three attempts","confidence":1}
+
+Risk: set "risk" on every dispatch - "read" if it only reads (research, explain, walk-through, review, summarize, status), "ship" if it commits, pushes, opens a PR, or deploys, or "edit" otherwise (changes files; the default for most code work). Never use "ship" to mean "important" - styx asks the user before any ship action.
 
 Capability cards:
 `

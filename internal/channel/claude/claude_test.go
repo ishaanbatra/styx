@@ -62,6 +62,17 @@ func TestSend_NoSkipPermissionsByDefault(t *testing.T) {
 	}
 }
 
+func TestClaudeArgs_Effort(t *testing.T) {
+	got := claudeArgs(channel.Request{Prompt: "hi", Model: "opus", Effort: "ultracode"})
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "--effort ultracode") {
+		t.Errorf("missing --effort ultracode in %v", got)
+	}
+	if !strings.Contains(joined, "--model opus") {
+		t.Errorf("missing --model opus in %v", got)
+	}
+}
+
 func TestSend_NonZeroExitIsError(t *testing.T) {
 	dir := fakeCLI(t, `echo "boom" >&2; exit 2`)
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))

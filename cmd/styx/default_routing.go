@@ -23,20 +23,21 @@ fallback = ["ollama:qwen2.5-coder:14b"]
 
 [[rule]]
 verb = "research.critic"
-use  = "codex:gpt-5"
+use  = "codex"
+effort = "high"
 fallback = ["ollama:qwen2.5-coder:14b"]
 
 # ── plan ──
 [[rule]]
 verb = "plan"
 signals = ["complex"]
-use  = "claude:opus-4-7"
-fallback = ["claude:sonnet-4-6", "codex:gpt-5"]
+use  = "claude:opus"
+fallback = ["claude:sonnet", "codex"]
 
 [[rule]]
 verb = "plan"
-use  = "claude:sonnet-4-6"
-fallback = ["codex:gpt-5", "ollama:qwen2.5-coder:14b"]
+use  = "claude:sonnet"
+fallback = ["codex", "ollama:qwen2.5-coder:14b"]
 
 # ── implement (autonomous code application from a plan) ──
 # A detailed plan already exists by this point, so the work is well-scoped:
@@ -46,13 +47,13 @@ fallback = ["codex:gpt-5", "ollama:qwen2.5-coder:14b"]
 [[rule]]
 verb = "implement"
 signals = ["complex"]
-use  = "claude:sonnet-4-6"
-fallback = ["codex:gpt-5", "claude:opus-4-7"]
+use  = "claude:sonnet"
+fallback = ["codex", "claude:opus"]
 
 [[rule]]
 verb = "implement"
-use  = "codex:gpt-5"
-fallback = ["claude:sonnet-4-6"]
+use  = "codex"
+fallback = ["claude:sonnet"]
 
 # ── build (interactive) ──
 [[rule]]
@@ -63,8 +64,8 @@ fallback = ["codex:interactive"]
 # ── review (parallel) ──
 [[rule]]
 verb = "review"
-parallel = ["claude:sonnet-4-6", "codex:gpt-5"]
-synthesize_with = "claude:sonnet-4-6"
+parallel = ["claude:sonnet", "codex"]
+synthesize_with = "claude:sonnet"
 
 # ── grunt / think ──
 [[rule]]
@@ -79,7 +80,7 @@ use  = "ollama:qwen2.5-coder:14b"
 [[rule]]
 verb = "think"
 signals = ["deep"]
-use  = "claude:sonnet-4-6"
+use  = "claude:sonnet"
 
 [[rule]]
 verb = "think"
@@ -90,7 +91,7 @@ use  = "ollama:qwen2.5-coder:14b"
 verb = "explain"
 signals = ["large_context"]
 use  = "agy:default"
-fallback = ["claude:sonnet-4-6"]
+fallback = ["claude:sonnet"]
 
 [[rule]]
 verb = "explain"
@@ -99,16 +100,20 @@ use  = "ollama:qwen2.5-coder:14b"
 [[rule]]
 verb = "summarize"
 use  = "agy:default"
-fallback = ["claude:sonnet-4-6", "ollama:qwen2.5-coder:14b"]
+fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]
 
 [[rule]]
 verb = "critique"
-use  = "codex:gpt-5"
-fallback = ["claude:sonnet-4-6", "ollama:qwen2.5-coder:14b"]
+use  = "codex"
+fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]
+
+# ── model discovery ──
+[models]
+refresh_interval_hours = 24
 
 # ── REPL brain ──
 [brain]
-model                 = "llama3.2:3b"
+model                 = "qwen2.5-coder:7b"
 embed_model           = "nomic-embed-text"
 confidence_threshold  = 0.5
 context_threshold_pct = 70
