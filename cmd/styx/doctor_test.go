@@ -1,8 +1,12 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/brain"
 )
@@ -73,5 +77,24 @@ func TestCheckTiersDeduplicatesAliases(t *testing.T) {
 	want := map[string]int{"opus": 1, "sonnet": 1, "haiku": 1}
 	if !reflect.DeepEqual(seen, want) {
 		t.Errorf("probed = %v, want %v", seen, want)
+	}
+}
+
+func TestRunModelRefresh_DePins(t *testing.T) {
+	dir := t.TempDir()
+	routing := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(routing, []byte("[[rule]]\nverb=\"x\"\nuse=\"claude:opus-4-7\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(dir, "models.json")
+	if err := runModelRefresh(routing, cache, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(routing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "claude:opus") || strings.Contains(string(got), "opus-4-7") {
+		t.Errorf("not de-pinned:\n%s", got)
 	}
 }

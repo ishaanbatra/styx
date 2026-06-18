@@ -66,12 +66,12 @@ Shared pieces:
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
   attempt in the budget DB with a classified error kind.
-- `doctor.go` — `cmdDoctor` preflights local CLIs against the brain capability
-  cards, reports whether each CLI runs with native resume or styx-maintained
-  continuity, checks distinct configured Claude tier aliases with a cheap
-  one-shot call, and verifies that Ollama has both the brain model
-  (`qwen2.5-coder:7b` by default) and embedding model pulled. `--fix` pulls missing
-  Ollama models.
+- `doctor.go` — `cmdDoctor` runs model refresh/de-pin migration, preflights
+  local CLIs against the brain capability cards, reports whether each CLI runs
+  with native resume or styx-maintained continuity, checks distinct configured
+  Claude tier aliases with a cheap one-shot call, and verifies that Ollama has
+  both the brain model (`qwen2.5-coder:7b` by default) and embedding model
+  pulled. `--fix` pulls missing Ollama models.
 - `repl.go` — the conversational frontend and session core. `cmdREPL` runs the
   persistent bare-`styx` loop with `/status`, `/budget`, `/threads`, `/why`,
   `/audit`, and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
@@ -167,7 +167,8 @@ as `claude:opus-4-7` collapse to their class alias. Interactive entries,
 `agy`, and `ollama` routes are left untouched. `Refresh` orchestrates discovery,
 migration, cache writes, and optional global routing-correction memories; each
 discoverer is isolated with a short timeout so one failed channel only logs a
-warning and the rest of the refresh continues.
+warning and the rest of the refresh continues. `styx doctor` runs this refresh
+on every invocation and prints the applied routing de-pins as status output.
 
 ## Brain (internal/brain)
 
