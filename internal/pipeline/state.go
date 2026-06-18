@@ -29,9 +29,14 @@ const (
 	StageSkipped   = "skipped"
 )
 
+// StateVersion is the current state.json schema version. Old files (no version
+// key) load as version 0 and are normalized on read; the field is additive.
+const StateVersion = 1
+
 // State is the per-run record persisted at <project>/.styx/runs/<run-id>/state.json
 type State struct {
 	RunID        string    `json:"run_id"`
+	Version      int       `json:"version,omitempty"`
 	Goal         string    `json:"goal"`
 	StartedAt    time.Time `json:"started_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -94,6 +99,9 @@ func LoadState(dir string) (*State, error) {
 	if err := json.Unmarshal(b, &s); err != nil {
 		return nil, fmt.Errorf("parse state: %w", err)
 	}
+	if s.Version == 0 {
+		s.Version = StateVersion
+	}
 	return &s, nil
 }
 
@@ -101,6 +109,7 @@ func LoadState(dir string) (*State, error) {
 func NewState(runID, goal string) *State {
 	return &State{
 		RunID:     runID,
+		Version:   StateVersion,
 		Goal:      goal,
 		StartedAt: time.Now().UTC(),
 		Status:    StatusRunning,

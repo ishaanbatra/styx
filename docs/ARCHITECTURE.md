@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-18 (Task 3.2)
+last_verified: 2026-06-18 (Task 3.3)
 ---
 
 # Styx Architecture
@@ -386,7 +386,11 @@ prompts, then `/audit` tails the last 20 records from the current session.
 `styx auto <goal>` runs 7 stages: research → intel → plan → execute → test →
 review → ship. State persists at `<project>/.styx/runs/<run-id>/state.json`
 after every stage; a lock file prevents concurrent runs; `auto --resume`
-re-enters at the first non-completed stage. Stage behaviors are closures on
+re-enters at the first non-completed stage. `State.Version` (additive,
+`omitempty`, current value `StateVersion = 1`) records the schema generation;
+`LoadState` normalizes missing/zero versions to `StateVersion` on read so
+pre-v1 `state.json` files load without error — the forward-compat contract
+for `--resume`. Stage behaviors are closures on
 `Runner` injected by `auto.go` (e.g. `RunReview` = git diff → synthesized
 claude+codex review → `research.Parse` counts blocking/important findings and
 logs when parsing degrades to the raw-text fallback; failed reviews loop through
