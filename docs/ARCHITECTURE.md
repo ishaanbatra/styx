@@ -55,12 +55,14 @@ Shared pieces:
   1 with a `styx:` prefix.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first; the rest construct `app{routing, tracker, router, channels,
-  progress}` via `loadApp()`. `loadApp()` shares the budget tracker with the
-  router for both cap checks and 3-failures-in-10-minutes circuit breaking.
-  `rawChannel()` unwraps the progress decorator for orchestration verbs that
-  narrate themselves, leaving timeout protection in place. `seedMessageLimits`
-  applies routing.toml message caps (with built-in fallbacks) to the budget
-  tracker. Unknown verbs fall through to one-shot brain turns, so
+  progress}` via `loadApp()`. `loadApp()` runs a best-effort model refresh when
+  `models.json` is stale and reloads routing if a de-pin migration ran, then
+  shares the budget tracker with the router for both cap checks and
+  3-failures-in-10-minutes circuit breaking. `rawChannel()` unwraps the
+  progress decorator for orchestration verbs that narrate themselves, leaving
+  timeout protection in place. `seedMessageLimits` applies routing.toml message
+  caps (with built-in fallbacks) to the budget tracker. Unknown verbs fall
+  through to one-shot brain turns, so
   `styx "fix the flaky test"` is treated as an utterance rather than an error.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
@@ -168,7 +170,9 @@ as `claude:opus-4-7` collapse to their class alias. Interactive entries,
 migration, cache writes, and optional global routing-correction memories; each
 discoverer is isolated with a short timeout so one failed channel only logs a
 warning and the rest of the refresh continues. `styx doctor` runs this refresh
-on every invocation and prints the applied routing de-pins as status output.
+on every invocation and prints the applied routing de-pins as status output;
+`loadApp()` runs it only when the cache is stale, covering verbs, one-shot
+turns, and the REPL.
 
 ## Brain (internal/brain)
 

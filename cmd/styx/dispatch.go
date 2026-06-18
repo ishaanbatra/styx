@@ -15,6 +15,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/channel/codex"
 	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/modelsync"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
@@ -91,6 +92,18 @@ func loadApp() (*app, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load routing: %w", err)
 	}
+	if rp, perr := paths.RoutingPath(); perr == nil {
+		if cp, perr := paths.ModelsCachePath(); perr == nil {
+			if _, rerr := maybeRefreshModels(rp, cp, r.Models.RefreshIntervalHours, time.Now()); rerr != nil {
+				fmt.Fprintf(os.Stderr, "[styx] model refresh skipped: %v\n", rerr)
+			} else {
+				r2, rerr := config.LoadRouting()
+				if rerr == nil {
+					r = r2
+				}
+			}
+		}
+	}
 	t, err := budget.Default()
 	if err != nil {
 		return nil, fmt.Errorf("open budget tracker: %w", err)
@@ -113,6 +126,26 @@ func loadApp() (*app, error) {
 		channels: defaultChannels(p, r),
 		progress: p,
 	}, nil
+}
+
+func maybeRefreshModels(routingPath, cachePath string, intervalHours int, now time.Time) (bool, error) {
+	c, err := modelsync.LoadCache(cachePath)
+	if err != nil {
+		return false, err
+	}
+	if !c.IsStale(now, time.Duration(intervalHours)*time.Hour) {
+		return false, nil
+	}
+	err = modelsync.Refresh(context.Background(), modelsync.Options{
+		RoutingPath: routingPath,
+		CachePath:   cachePath,
+		Now:         now,
+		Discoverers: []modelsync.Discoverer{
+			modelsync.CodexDiscoverer{},
+			modelsync.ClaudeDiscoverer{},
+		},
+	})
+	return err == nil, err
 }
 
 func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channel.Channel {
