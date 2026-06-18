@@ -21,6 +21,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
+	"github.com/ishaanbatra/styx/internal/target"
 )
 
 // globalQuiet and globalVerbose are set by main() after parseGlobalFlags.
@@ -28,6 +29,27 @@ var (
 	globalQuiet   bool
 	globalVerbose bool
 )
+
+// Global target flags, set by main() after parseGlobalFlags.
+var (
+	globalProjectAlias string
+	globalDirArg       string
+)
+
+// resolveGlobalTarget resolves the active project. A non-empty positional arg
+// takes precedence; otherwise global --project/--dir flags are consulted; then
+// cwd. Explicit alias/dir failures do not silently fall back to cwd.
+func resolveGlobalTarget(arg string) (project.Project, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return project.Project{}, fmt.Errorf("getwd: %w", err)
+	}
+	alias := arg
+	if alias == "" {
+		alias = globalProjectAlias
+	}
+	return target.Resolve(target.Spec{Alias: alias, Dir: globalDirArg, Cwd: cwd})
+}
 
 // logStatus writes a "[styx] " status line to stderr unless --quiet is set.
 // Final results (printed to stdout) are never suppressed by --quiet.
@@ -334,16 +356,4 @@ func rawChannel(ch channel.Channel) channel.Channel {
 		return w.Inner
 	}
 	return ch
-}
-
-// resolveTarget converts a "backend|student|teacher|<alias>" arg into a Project.
-// Empty arg means the project for the current working directory.
-func resolveTarget(arg string) (project.Project, error) {
-	if arg == "" {
-		return project.Current()
-	}
-	if p, err := project.Resolve(arg); err == nil {
-		return p, nil
-	}
-	return project.Current()
 }

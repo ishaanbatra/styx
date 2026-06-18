@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
-	"strings"
 
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/intel"
@@ -44,7 +42,7 @@ func cmdIntel(a *app, args []string) error {
 		}
 	}
 
-	proj, err := resolveProjectArg(target)
+	proj, err := resolveGlobalTarget(target)
 	if err != nil {
 		return err
 	}
@@ -91,28 +89,4 @@ func cmdIntelLs() error {
 		fmt.Printf("%-20s %-10s %s\n", p.Name, state, p.Path)
 	}
 	return nil
-}
-
-func resolveProjectArg(arg string) (project.Project, error) {
-	// First try alias.
-	if p, err := project.Resolve(arg); err == nil {
-		return p, nil
-	}
-	// Treat as path.
-	abs, err := filepath.Abs(arg)
-	if err != nil {
-		return project.Project{}, err
-	}
-	// Walk up until we find a project that contains this path.
-	projs, err := project.List()
-	if err != nil {
-		return project.Project{}, err
-	}
-	for _, p := range projs {
-		if strings.HasPrefix(abs, p.Path) {
-			return p, nil
-		}
-	}
-	// Otherwise, try to register on-the-fly by treating arg as a git root.
-	return project.CurrentFrom(abs)
 }
