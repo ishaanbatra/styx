@@ -172,7 +172,12 @@ discoverer is isolated with a short timeout so one failed channel only logs a
 warning and the rest of the refresh continues. `styx doctor` runs this refresh
 on every invocation and prints the applied routing de-pins as status output;
 `loadApp()` runs it only when the cache is stale, covering verbs, one-shot
-turns, and the REPL.
+turns, and the REPL. Effort remains a separate dispatch-time axis:
+`Rule.Effort` flows through `Decision.Effort` into `channel.Request.Effort`,
+where codex maps it to `model_reasoning_effort` and claude maps it to
+`--effort` without styx validating provider-specific values. agy already
+ignores routed model ids and ollama uses explicit local model names that doctor
+validates, so neither participates in auto-discovery.
 
 ## Brain (internal/brain)
 
