@@ -87,7 +87,7 @@ func TestRunModelRefresh_DePins(t *testing.T) {
 		t.Fatal(err)
 	}
 	cache := filepath.Join(dir, "models.json")
-	if err := runModelRefresh(routing, cache, time.Now()); err != nil {
+	if err := runModelRefresh(routing, cache, time.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(routing)

@@ -15,6 +15,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/channel/codex"
 	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/modelsync"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/progress"
@@ -94,9 +95,14 @@ func loadApp() (*app, error) {
 	}
 	if rp, perr := paths.RoutingPath(); perr == nil {
 		if cp, perr := paths.ModelsCachePath(); perr == nil {
-			if _, rerr := maybeRefreshModels(rp, cp, r.Models.RefreshIntervalHours, time.Now()); rerr != nil {
+			opener := func() (*memory.Store, memory.Embedder, func()) {
+				return globalCorrectionStore(r.Brain.EmbedModel)
+			}
+			refreshed, rerr := maybeRefreshModels(rp, cp, r.Models.RefreshIntervalHours, time.Now(), opener)
+			if rerr != nil {
 				fmt.Fprintf(os.Stderr, "[styx] model refresh skipped: %v\n", rerr)
-			} else {
+			} else if refreshed {
+				// Only re-read routing when a migration actually rewrote it.
 				r2, rerr := config.LoadRouting()
 				if rerr == nil {
 					r = r2
@@ -128,13 +134,49 @@ func loadApp() (*app, error) {
 	}, nil
 }
 
-func maybeRefreshModels(routingPath, cachePath string, intervalHours int, now time.Time) (bool, error) {
+// correctionStoreOpener lazily opens the global memory store + embedder used to
+// record routing de-pin corrections. It returns a closer the caller always
+// defers (a no-op on failure). A nil opener means "do not record corrections"
+// (used by tests and any path without a memory store).
+type correctionStoreOpener func() (*memory.Store, memory.Embedder, func())
+
+// globalCorrectionStore opens the shared global.db and an ollama embedder so a
+// de-pin migration is recorded as a routing-preference memory. Best-effort: any
+// failure yields a nil store (recording is skipped) rather than blocking the
+// refresh, and the embedder is only contacted when there is a change to record.
+func globalCorrectionStore(embedModel string) (*memory.Store, memory.Embedder, func()) {
+	noop := func() {}
+	memDir, err := paths.MemoryDir()
+	if err != nil {
+		return nil, nil, noop
+	}
+	if err := paths.EnsureDir(memDir); err != nil {
+		return nil, nil, noop
+	}
+	store, err := memory.Open(filepath.Join(memDir, "global.db"))
+	if err != nil {
+		return nil, nil, noop
+	}
+	emb := memory.NewOllamaEmbedder("http://localhost:11434", embedModel)
+	return store, emb, func() { store.Close() }
+}
+
+func maybeRefreshModels(routingPath, cachePath string, intervalHours int, now time.Time, openStore correctionStoreOpener) (bool, error) {
 	c, err := modelsync.LoadCache(cachePath)
 	if err != nil {
 		return false, err
 	}
 	if !c.IsStale(now, time.Duration(intervalHours)*time.Hour) {
 		return false, nil
+	}
+	// Open the correction store only on the stale path so the common
+	// fresh-cache case stays free of any sqlite/embedder setup.
+	var store *memory.Store
+	var emb memory.Embedder
+	if openStore != nil {
+		var closeStore func()
+		store, emb, closeStore = openStore()
+		defer closeStore()
 	}
 	err = modelsync.Refresh(context.Background(), modelsync.Options{
 		RoutingPath: routingPath,
@@ -144,6 +186,8 @@ func maybeRefreshModels(routingPath, cachePath string, intervalHours int, now ti
 			modelsync.CodexDiscoverer{},
 			modelsync.ClaudeDiscoverer{},
 		},
+		Store: store,
+		Embed: emb,
 	})
 	return err == nil, err
 }

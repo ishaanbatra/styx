@@ -14,6 +14,7 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/brain"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/modelsync"
 	"github.com/ishaanbatra/styx/internal/paths"
 )
@@ -37,7 +38,10 @@ func cmdDoctor(args []string) error {
 
 	if rp, err := paths.RoutingPath(); err == nil {
 		if cp, err := paths.ModelsCachePath(); err == nil {
-			if err := runModelRefresh(rp, cp, time.Now()); err != nil {
+			opener := func() (*memory.Store, memory.Embedder, func()) {
+				return globalCorrectionStore(r.Brain.EmbedModel)
+			}
+			if err := runModelRefresh(rp, cp, time.Now(), opener); err != nil {
 				fmt.Printf("! model refresh skipped: %v\n", err)
 			} else {
 				fmt.Println("ok models refreshed (defer-to-latest)")
@@ -102,7 +106,14 @@ func cmdDoctor(args []string) error {
 	return reportDoctor(healthy)
 }
 
-func runModelRefresh(routingPath, cachePath string, now time.Time) error {
+func runModelRefresh(routingPath, cachePath string, now time.Time, openStore correctionStoreOpener) error {
+	var store *memory.Store
+	var emb memory.Embedder
+	if openStore != nil {
+		var closeStore func()
+		store, emb, closeStore = openStore()
+		defer closeStore()
+	}
 	return modelsync.Refresh(context.Background(), modelsync.Options{
 		RoutingPath: routingPath,
 		CachePath:   cachePath,
@@ -111,7 +122,9 @@ func runModelRefresh(routingPath, cachePath string, now time.Time) error {
 			modelsync.CodexDiscoverer{},
 			modelsync.ClaudeDiscoverer{},
 		},
-		Log: func(f string, a ...any) { fmt.Printf("  "+f+"\n", a...) },
+		Store: store,
+		Embed: emb,
+		Log:   func(f string, a ...any) { fmt.Printf("  "+f+"\n", a...) },
 	})
 }
 

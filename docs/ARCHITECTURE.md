@@ -167,12 +167,16 @@ Its migration pass is a surgical, idempotent text rewrite of legacy routing
 tokens: `codex:<version>` becomes bare `codex`, and pinned Claude versions such
 as `claude:opus-4-7` collapse to their class alias. Interactive entries,
 `agy`, and `ollama` routes are left untouched. `Refresh` orchestrates discovery,
-migration, cache writes, and optional global routing-correction memories; each
+migration, cache writes, and global routing-correction memories; each
 discoverer is isolated with a short timeout so one failed channel only logs a
 warning and the rest of the refresh continues. `styx doctor` runs this refresh
 on every invocation and prints the applied routing de-pins as status output;
 `loadApp()` runs it only when the cache is stale, covering verbs, one-shot
-turns, and the REPL. Effort remains a separate dispatch-time axis:
+turns, and the REPL, and re-reads routing only when a migration actually
+rewrote the file. Both call sites pass a lazy `correctionStoreOpener` so each
+de-pin is recorded as a `routing-preference` memory in the global store; the
+store and ollama embedder are opened only on the stale/refresh path, keeping the
+common fresh-cache hot path free of any sqlite or embedder setup. Effort remains a separate dispatch-time axis:
 `Rule.Effort` flows through `Decision.Effort` into `channel.Request.Effort`,
 where codex maps it to `model_reasoning_effort` and claude maps it to
 `--effort` without styx validating provider-specific values. agy already
