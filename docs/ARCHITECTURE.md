@@ -99,9 +99,12 @@ Shared pieces:
 `channel.Channel` is the provider abstraction: `Name()`, `Send(ctx, Request)`,
 `BudgetState(ctx)`. `Request` carries model, optional pass-through reasoning
 effort, system, prompt, attachments, `Interactive` (hand the TTY to the child —
-build verb), `WorkingDir`, and `Write` (let the channel edit files / run
-commands autonomously — the `implement` verb). Token counts in `Response` are
-`len/4` estimates.
+build verb), `WorkingDir`, `Write` (let the channel edit files / run commands
+autonomously — the `implement` verb), and `ExtraRoots []string` (additional repo
+roots for cross-repo work: claude, codex, and agy each emit `--add-dir <root>`
+per non-empty entry; the process cwd stays `WorkingDir` — ExtraRoots is purely
+additive; for codex, `--add-dir` flags sit after the `exec` subcommand). Token
+counts in `Response` are `len/4` estimates.
 
 - Subprocess adapters (claude, codex, agy) classify exec failures into
   `channel.ClassifiedError{Kind: timeout|429|5xx|other}` so the router/budget
@@ -226,7 +229,14 @@ structured-output format. Capability cards describe claude, codex, agy, and
 ollama on every brain turn; `styx doctor` uses the same cards as drift probes
 for expected CLI flags and resume support. `BuildPrompt` combines those cards
 with the current user utterance, rolling summary, recent turns, live-thread
-status, and memory hits. The installed Codex CLI exposes `exec`, `--model`,
+status, and memory hits; it also injects a project registry — `Turn.BoundProjects`
+and `Turn.KnownProjects` (pre-rendered one-liners) are emitted as "Bound projects:" /
+"Known projects:" blocks in the user prompt (after memory hits, before the utterance)
+so the model can map repo names the user mentions onto the `project`/`extra_roots`
+dispatch fields. The brain package stays free of `internal/config`/`internal/project`:
+`cmd/styx/repl.go` renders the registry one-liners via `renderProject`,
+`renderBoundProjects`, and `renderKnownProjects` and passes them in as plain `[]string`.
+The installed Codex CLI exposes `exec`, `--model`,
 `--add-dir`, and `resume`; styx v1 still presents codex to the brain as a
 headless `codex exec` dispatch target rather than an interactive handoff target.
 `Ollama.Decide` posts the prompt to `/api/chat` with `ActionSchema` as the
@@ -277,7 +287,15 @@ persist the store after lifecycle decisions. `testdata/fakeagent` is an
 executable stream-json fixture for runner and manager lifecycle tests, including
 resume argument assertions and dead-session simulation.
 
-`Manager` owns a project's thread lifecycle. `Dispatch` resolves the adapter,
+`Manager` owns a project's thread lifecycle. `DispatchSpec` carries an
+`ExtraRoots []string` field (absolute repo roots for cross-repo dispatch);
+`Manager.Dispatch` renders them via `addDirArgs` into `--add-dir <root>` pairs,
+merges them once into the `extra` slice, and passes that same merged slice at
+both the first-attempt and crash-recovery `run.Send` sites. The codex agent
+adapter's `ArgsFn` places the merged `--add-dir` flags after `exec` — the same
+arg-order rule as the channel layer (the installed Codex CLI exposes `exec`,
+`--model`, `--add-dir`, and `resume`, as noted above).
+`Dispatch` resolves the adapter,
 creates the thread on first use, seeds fresh/restarted sessions with a project
 role line or last distillation, runs the turn, records real token usage and the
 routed model to the budget log under verb `thread`, maintains rolling summaries
