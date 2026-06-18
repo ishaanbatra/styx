@@ -457,6 +457,106 @@ func TestRecallSpansBoundRepos(t *testing.T) {
 	}
 }
 
+func TestAllReposResolve(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	if err := config.SaveProjects([]config.Project{
+		{ID: "alpha", Name: "alpha", Path: t.TempDir()},
+		{ID: "beta", Name: "beta", Path: t.TempDir()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name   string
+		tokens []string
+		wantOK bool
+	}{
+		{"all resolve", []string{"alpha", "beta"}, true},
+		{"single resolves", []string{"alpha"}, true},
+		{"one token unknown", []string{"alpha", "nope-xyz"}, false},
+		{"utterance (none resolve)", []string{"fix", "the", "bug"}, false},
+		{"empty", nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := allReposResolve(tt.tokens)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v (got=%v)", ok, tt.wantOK, got)
+			}
+			if ok && len(got) != len(tt.tokens) {
+				t.Errorf("returned tokens = %v, want len %d", got, len(tt.tokens))
+			}
+			if !ok && got != nil {
+				t.Errorf("expected nil tokens on false, got %v", got)
+			}
+		})
+	}
+}
+
+func TestFocusSlashResolvesAndFailsLoud(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "alpha", bud)
+	b := bindTestProject(t, "beta", bud)
+	if err := config.SaveProjects([]config.Project{
+		{ID: "alpha", Name: "alpha", Path: a.proj.Path},
+		{ID: "beta", Name: "beta", Path: b.proj.Path},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := &bytes.Buffer{}
+	s := &replSession{
+		bound: map[string]*boundProject{"alpha": a, "beta": b}, focus: "alpha",
+		emb: replEmbedder{}, tracker: bud,
+		in: bufio.NewReader(strings.NewReader("")), out: out,
+	}
+	// Known name flips focus.
+	if quit := s.slash("/focus beta"); quit {
+		t.Fatal("/focus should not quit")
+	}
+	if s.focus != "beta" {
+		t.Errorf("focus = %q, want beta", s.focus)
+	}
+	// Unresolved name: focus unchanged, error surfaced.
+	if quit := s.slash("/focus nope-xyz"); quit {
+		t.Fatal("/focus should not quit")
+	}
+	if s.focus != "beta" {
+		t.Errorf("focus changed on unresolved name: %q", s.focus)
+	}
+	if !strings.Contains(out.String(), "focus:") {
+		t.Errorf("no error surfaced for unresolved /focus: %q", out.String())
+	}
+	// Missing argument: usage message, no quit, focus unchanged.
+	if quit := s.slash("/focus"); quit {
+		t.Fatal("/focus should not quit")
+	}
+	if s.focus != "beta" {
+		t.Errorf("focus changed on usage error: %q", s.focus)
+	}
+}
+
+func TestReposListsBoundWithFocusMarker(t *testing.T) {
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "alpha", bud)
+	b := bindTestProject(t, "beta", bud)
+	out := &bytes.Buffer{}
+	s := &replSession{
+		bound: map[string]*boundProject{"alpha": a, "beta": b}, focus: "alpha",
+		in: bufio.NewReader(strings.NewReader("")), out: out,
+	}
+	if quit := s.slash("/repos"); quit {
+		t.Fatal("/repos should not quit")
+	}
+	got := out.String()
+	if !strings.Contains(got, "alpha") || !strings.Contains(got, "beta") {
+		t.Errorf("/repos missing a bound repo:\n%s", got)
+	}
+	if !strings.Contains(got, "→") {
+		t.Errorf("/repos missing focus marker:\n%s", got)
+	}
+}
+
 func TestTwoRepoScriptedSession(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
