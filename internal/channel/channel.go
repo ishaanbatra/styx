@@ -17,6 +17,7 @@ type Channel interface {
 // Request is a single outbound call.
 type Request struct {
 	Model       string       // provider-specific identifier ("sonnet-4-6", "qwen2.5-coder:14b")
+	Effort      string       // optional reasoning-effort, pass-through to the channel CLI
 	System      string       // optional system prompt
 	Prompt      string       // user prompt
 	Attachments []Attachment // file contents to inline-include

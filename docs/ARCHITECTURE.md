@@ -90,10 +90,11 @@ Shared pieces:
 ## Channels (internal/channel + adapters)
 
 `channel.Channel` is the provider abstraction: `Name()`, `Send(ctx, Request)`,
-`BudgetState(ctx)`. `Request` carries model, system, prompt, attachments,
-`Interactive` (hand the TTY to the child — build verb), `WorkingDir`, and
-`Write` (let the channel edit files / run commands autonomously — the
-`implement` verb). Token counts in `Response` are `len/4` estimates.
+`BudgetState(ctx)`. `Request` carries model, optional pass-through reasoning
+effort, system, prompt, attachments, `Interactive` (hand the TTY to the child —
+build verb), `WorkingDir`, and `Write` (let the channel edit files / run
+commands autonomously — the `implement` verb). Token counts in `Response` are
+`len/4` estimates.
 
 - Subprocess adapters (claude, codex, agy) classify exec failures into
   `channel.ClassifiedError{Kind: timeout|429|5xx|other}` so the router/budget
@@ -102,6 +103,9 @@ Shared pieces:
 - `Write` requests grant autonomous file access: claude prepends
   `--dangerously-skip-permissions`; codex runs `exec --sandbox workspace-write`.
   This is what lets the router send `implement` work to codex.
+- Codex one-shot requests omit `--model` when routing supplies an empty model,
+  deferring to the Codex CLI default; when `Request.Effort` is set, the adapter
+  passes `-c model_reasoning_effort=<effort>`.
 - `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the macOS
   Ollama app with a 20s wait if it's down.
 - `decorator.go` — `WithProgress` narrates each Send as a progress stage;
