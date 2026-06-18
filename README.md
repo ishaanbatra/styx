@@ -22,6 +22,16 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 
 ## Verbs
 
+### Global flags
+
+| Flag | What it does |
+|---|---|
+| `--project <alias>` | Run the verb against a registered project, from anywhere (exact name or unique prefix) |
+| `--dir <path>` | Run the verb against the repo at `<path>`, from anywhere |
+
+Without either flag, styx uses the current directory's repo. An explicit target
+that can't be resolved is a clear error, never a silent fallback.
+
 ### Conversational
 
 | Verb | What it does |

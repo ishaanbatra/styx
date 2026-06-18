@@ -21,7 +21,7 @@ Styx is a Go CLI that routes dev work between four AI channels — claude
 (local HTTP) — using a hand-curated rules table with budget-aware fallback.
 
 ```
-argv ──► cmd/styx/main.go (global flags: --quiet --verbose)
+argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir)
               │ bare `styx` opens the REPL; otherwise ensureFirstRun():
               │ seed ~/.config/styx/routing.toml, v0.1→v0.2 upgrade
               ▼
@@ -50,9 +50,10 @@ One file per verb (`research.go`, `plan.go`, `build.go`, `review.go`,
 `repl.go`, `runs.go`, …).
 Shared pieces:
 
-- `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose`; `ensureFirstRun`
-  seeds config; bare `styx` constructs the app and opens the REPL; errors exit
-  1 with a `styx:` prefix.
+- `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose` plus
+  `--project <alias>` / `--dir <path>`; `ensureFirstRun` seeds config; bare
+  `styx` constructs the app and opens the REPL; errors exit 1 with a `styx:`
+  prefix.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first; the rest construct `app{routing, tracker, router, channels,
   progress}` via `loadApp()`. `loadApp()` runs a best-effort model refresh when
@@ -60,9 +61,13 @@ Shared pieces:
   shares the budget tracker with the router for both cap checks and
   3-failures-in-10-minutes circuit breaking. `rawChannel()` unwraps the
   progress decorator for orchestration verbs that narrate themselves, leaving
-  timeout protection in place. `seedMessageLimits` applies routing.toml message
-  caps (with built-in fallbacks) to the budget tracker. Unknown verbs fall
-  through to one-shot brain turns, so
+  timeout protection in place. `resolveGlobalTarget(arg)` combines a verb's
+  positional target with global `--project` / `--dir` flags and routes every
+  project-scoped verb and the REPL through `internal/target.Resolve`; this
+  replaces the old `resolveTarget` / `resolveProjectArg` split and removes the
+  silent cwd fallback for failed explicit targets. `seedMessageLimits` applies
+  routing.toml message caps (with built-in fallbacks) to the budget tracker.
+  Unknown verbs fall through to one-shot brain turns, so
   `styx "fix the flaky test"` is treated as an utterance rather than an error.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
@@ -298,6 +303,16 @@ into `~/.config/styx/projects.toml` (slugged name, sniffed language, default
 ConfigDir, StateDir, CacheDir, LogDir, RoutingPath, ProjectsPath, UsageDBPath,
 MemoryDir, AuditDir, and ThreadsDir. All file writes in config/brief/intel use atomic
 tmp+rename.
+
+## Target resolution (internal/target)
+
+`target.Resolve(Spec{Alias, Dir, Cwd})` is the single seam every verb and the
+REPL use to turn a `--project alias` / `--dir path` / cwd into a `Project`.
+Precedence is Alias -> Dir -> Cwd; alias resolution is exact-name -> unique
+prefix -> existing-path -> error listing candidates. It never silently falls
+back to the cwd when an explicit target was given and failed. `cmd/styx` wraps
+it as `resolveGlobalTarget(arg)`, combining a verb's positional target with the
+global flags.
 
 ## Intel (internal/intel)
 
