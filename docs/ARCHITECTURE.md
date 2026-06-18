@@ -159,6 +159,10 @@ transparency, and `ClaudeDiscoverer`, which reports the stable class aliases
 `opus`, `sonnet`, `haiku`, and `fable`. Discovery output is persisted in an
 atomic `models.json` cache with a `refreshed_at` timestamp so callers can skip
 refresh work until `[models].refresh_interval_hours` says the cache is stale.
+Its migration pass is a surgical, idempotent text rewrite of legacy routing
+tokens: `codex:<version>` becomes bare `codex`, and pinned Claude versions such
+as `claude:opus-4-7` collapse to their class alias. Interactive entries,
+`agy`, and `ollama` routes are left untouched.
 
 ## Brain (internal/brain)
 
