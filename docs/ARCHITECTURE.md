@@ -254,7 +254,8 @@ rather than rough character estimates. Hook, tool-use-only, and malformed
 stream lines are ignored.
 
 Each project has a JSON thread store under
-`~/.config/styx/state/threads/<project>.json`. Threads are named durable
+`~/.config/styx/state/threads/<id>.json`, keyed by the stable project ID rather
+than the mutable registry name. Threads are named durable
 conversations with a CLI, optional Claude session ID, rolling summary for
 non-resume CLIs, last distillation checkpoint, context-token meter, turn count,
 and update timestamp. Stores are created lazily and saved with tmp+rename.
@@ -288,21 +289,45 @@ then best-effort ingests a summary back into thread state and memory.
 
 Append-only SQLite log at `~/.config/styx/state/usage.db` (`usage` table:
 ts/channel/verb/model/tokens/success/error_kind; `cooldown` table). `Tracker`
-computes `State` per channel: legacy token percentages plus message counts in
-rolling 5h (`WindowSession`) and 168h (`WindowWeek`) windows against limits
-from routing.toml. `ModelCount(channel, model, window)` counts per-model rows
-for tier-aware degradation. `ShouldCircuitBreak(channel, threshold, window)`
-counts recent failures; app routing opens a channel circuit after 3 failures in
-10 minutes.
+opens the database with `journal_mode(WAL)` and `busy_timeout(5000)` so multiple
+styx processes can append without immediate `SQLITE_BUSY` failures. It computes
+`State` per channel: legacy token percentages plus message counts in rolling 5h
+(`WindowSession`) and 168h (`WindowWeek`) windows against limits from
+routing.toml. `ModelCount(channel, model, window)` counts per-model rows for
+tier-aware degradation. `ShouldCircuitBreak(channel, threshold, window)` counts
+recent failures; app routing opens a channel circuit after 3 failures in 10
+minutes.
+
+The other multi-terminal state surfaces were already hardened before the budget
+WAL change: `projects.toml` is written via `config.SaveProjects` tmp+rename,
+the model cache is written via `modelsync.Cache.Save` tmp+rename, and
+same-repo pipeline runs are serialized by `internal/pipeline/lock.go`.
 
 ## Projects & paths (internal/project, internal/config/projects.go, internal/paths)
 
 `project.Current()` walks up to the git root and auto-registers unknown repos
-into `~/.config/styx/projects.toml` (slugged name, sniffed language, default
-`styx/research` + `styx/plans` dirs). `paths` resolves XDG-style locations:
-ConfigDir, StateDir, CacheDir, LogDir, RoutingPath, ProjectsPath, UsageDBPath,
-MemoryDir, AuditDir, and ThreadsDir. All file writes in config/brief/intel use atomic
-tmp+rename.
+into `~/.config/styx/projects.toml` (stable `id`, slugged name, sniffed
+language, default `styx/research` + `styx/plans` dirs). `config.Project.ID` is
+a stable 12-hex-character hash of the absolute project path, produced by
+`config.ProjectID(path)`. `LoadProjects` backfills missing IDs for legacy
+registry entries, so old `projects.toml` files remain loadable while new
+per-project state keys stop depending on mutable project names.
+
+`styx project scan [root] [--depth N]` bulk-discovers repositories by walking
+down from `root` (default `~`) to a bounded depth (default 4), pruning
+`node_modules`, `vendor`, `.git`, virtualenv, and build-output directories. Once
+it finds a git root, it registers that repo and does not descend into it, so
+nested or vendored repos are not accidentally imported.
+
+`paths` resolves XDG-style locations: ConfigDir, StateDir, CacheDir, LogDir,
+RoutingPath, ProjectsPath, UsageDBPath, MemoryDir, AuditDir, and ThreadsDir. All
+file writes in config/brief/intel use atomic tmp+rename.
+
+`config.MigrateProjectState` is an idempotent startup and `doctor` migration
+that renames legacy name-keyed memory DBs, audit dirs, intel dirs, and thread
+files to stable ID-keyed paths. It only renames when the old path exists and the
+new path does not; if both exist, it leaves the legacy copy in place and warns
+rather than deleting user data.
 
 ## Target resolution (internal/target)
 
@@ -316,7 +341,7 @@ global flags.
 
 ## Intel (internal/intel)
 
-Builds a per-project codebase index (`~/.config/styx/state/intel/<project>/
+Builds a per-project codebase index (`~/.config/styx/state/intel/<id>/
 index.json`, schema-versioned): file tree, module map + purposes, conventions,
 key symbols, recent commits, TODOs, external deps. Module summaries and key
 symbols come from agy calls with per-call timeouts. Staleness: >5 commits or
@@ -328,8 +353,9 @@ Claude Code auto-loads project context.
 ## Memory (internal/memory)
 
 Long-term memory is stored in SQLite databases under
-`~/.config/styx/state/memory/`. Each store has a `memory` table of typed items
-(`decision`, `todo`, `distillation`, `brief`, `fact`, or
+`~/.config/styx/state/memory/`: `<id>.db` for per-project memory and
+`global.db` for shared cross-project memory. Each store has a `memory` table of
+typed items (`decision`, `todo`, `distillation`, `brief`, `fact`, or
 `routing-preference`) with source metadata, provenance columns (`project`,
 `scope`, `confidence`, `last_used_at`), creation time, and a float32 embedding
 packed as a little-endian blob. Old memory DBs are migrated additively on open;
@@ -345,7 +371,7 @@ abstracts text to float32 vectors; the production `OllamaEmbedder` posts to
 ## Audit (internal/audit)
 
 Per-session REPL audit trails are append-only JSONL files under
-`~/.config/styx/state/audit/<project>/YYYYMMDD-HHMMSS.jsonl`. Each record has
+`~/.config/styx/state/audit/<id>/YYYYMMDD-HHMMSS.jsonl`. Each record has
 an RFC3339 timestamp, kind, detail, and optional string metadata. The REPL logs
 turns, brain decisions, dispatches, pipeline runs, memory writes, and ship-risk
 prompts, then `/audit` tails the last 20 records from the current session.
@@ -407,11 +433,12 @@ vars out of shell rc files.
                                              plus brain/tier defaults for REPL routing
 ~/.config/styx/models.json                  model discovery cache timestamp + results
 ~/.config/styx/projects.toml                project registry (auto-managed)
-~/.config/styx/state/usage.db               sqlite usage log
-~/.config/styx/state/memory/                per-project memory sqlite databases
-~/.config/styx/state/audit/<proj>/*.jsonl   per-session REPL audit trails
-~/.config/styx/state/threads/               agent-thread state
-~/.config/styx/state/intel/<proj>/index.json
+~/.config/styx/state/usage.db               sqlite usage log (WAL + busy_timeout)
+~/.config/styx/state/memory/<id>.db         per-project memory sqlite
+~/.config/styx/state/memory/global.db       shared cross-project memory
+~/.config/styx/state/audit/<id>/*.jsonl     per-session REPL audit trails
+~/.config/styx/state/threads/<id>.json      agent-thread state
+~/.config/styx/state/intel/<id>/index.json  per-project codebase intel
 <project>/.claude/context.md                rendered intel (Claude Code loads it)
 <project>/.styx/runs/<run-id>/state.json    pipeline state
 <project>/styx/research, styx/plans         briefs + plans (per-project config)
