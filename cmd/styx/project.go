@@ -22,6 +22,8 @@ func cmdProject(args []string) error {
 			fmt.Printf("%-20s %s\n", p.Name, p.Path)
 		}
 		return nil
+	case "scan":
+		return cmdProjectScan(args[1:])
 	case "add":
 		if len(args) < 3 {
 			return fmt.Errorf("usage: styx project add <name> <path>")
