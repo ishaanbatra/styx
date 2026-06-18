@@ -41,16 +41,7 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 }
 
 func (c *Channel) sendOneShot(ctx context.Context, req channel.Request) (channel.Response, error) {
-	args := []string{"-p", req.Prompt}
-	if req.Write {
-		// Implement-class requests apply edits / run commands autonomously,
-		// mirroring execute.Apply's built-in claude path.
-		args = append([]string{"--dangerously-skip-permissions"}, args...)
-	}
-	if req.Model != "" {
-		args = append([]string{"--model", req.Model}, args...)
-	}
-	cmd := exec.CommandContext(ctx, c.binary(), args...)
+	cmd := exec.CommandContext(ctx, c.binary(), claudeArgs(req)...)
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
 	}
@@ -64,6 +55,22 @@ func (c *Channel) sendOneShot(ctx context.Context, req channel.Request) (channel
 		EstTokensIn:  estimateTokens(req.Prompt + req.System),
 		EstTokensOut: estimateTokens(text),
 	}, nil
+}
+
+func claudeArgs(req channel.Request) []string {
+	args := []string{"-p", req.Prompt}
+	if req.Write {
+		// Implement-class requests apply edits / run commands autonomously,
+		// mirroring execute.Apply's built-in claude path.
+		args = append([]string{"--dangerously-skip-permissions"}, args...)
+	}
+	if req.Model != "" {
+		args = append([]string{"--model", req.Model}, args...)
+	}
+	if req.Effort != "" {
+		args = append(args, "--effort", req.Effort)
+	}
+	return args
 }
 
 func (c *Channel) sendInteractive(ctx context.Context, req channel.Request) (channel.Response, error) {

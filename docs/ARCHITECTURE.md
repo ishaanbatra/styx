@@ -106,6 +106,8 @@ commands autonomously — the `implement` verb). Token counts in `Response` are
 - Codex one-shot requests omit `--model` when routing supplies an empty model,
   deferring to the Codex CLI default; when `Request.Effort` is set, the adapter
   passes `-c model_reasoning_effort=<effort>`.
+- Claude one-shot requests keep `--model <alias>` when routed to a class alias
+  and pass `--effort <effort>` when `Request.Effort` is set.
 - `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the macOS
   Ollama app with a 20s wait if it's down.
 - `decorator.go` — `WithProgress` narrates each Send as a progress stage;
