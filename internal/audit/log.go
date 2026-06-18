@@ -27,10 +27,11 @@ const (
 
 // Record is one audited event.
 type Record struct {
-	At     time.Time         `json:"at"`
-	Kind   Kind              `json:"kind"`
-	Detail string            `json:"detail"`
-	Meta   map[string]string `json:"meta,omitempty"`
+	At      time.Time         `json:"at"`
+	Kind    Kind              `json:"kind"`
+	Detail  string            `json:"detail"`
+	Project string            `json:"project,omitempty"`
+	Meta    map[string]string `json:"meta,omitempty"`
 }
 
 // Logger appends records to one session's JSONL file.

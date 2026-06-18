@@ -131,7 +131,7 @@ func (s *replSession) recallAll(ctx context.Context, utterance string) ([]memory
 
 // turn runs one full loop iteration: recall -> decide -> act.
 func (s *replSession) turn(ctx context.Context, utterance string) error {
-	s.auditf(audit.KindTurn, utterance, nil)
+	s.auditf(audit.KindTurn, utterance, s.focus, nil)
 	hits, err := s.recallAll(ctx, utterance)
 	if err != nil {
 		hits = nil // recall is an enhancement, never a blocker
@@ -153,7 +153,7 @@ func (s *replSession) turn(ctx context.Context, utterance string) error {
 		return err
 	}
 	s.lastAction = &act
-	s.auditf(audit.KindDecision, string(act.Action), map[string]string{
+	s.auditf(audit.KindDecision, string(act.Action), s.focus, map[string]string{
 		"risk":       string(act.EffectiveRisk()),
 		"confidence": fmt.Sprintf("%.2f", act.Confidence),
 	})
@@ -172,7 +172,7 @@ func (s *replSession) execute(ctx context.Context, utterance string, act brain.A
 		if !confirmed {
 			result = "declined"
 		}
-		s.auditf(audit.KindRiskPrompt, riskSummary(act), map[string]string{"result": result})
+		s.auditf(audit.KindRiskPrompt, riskSummary(act), s.focus, map[string]string{"result": result})
 		if !confirmed {
 			s.println("◆ cancelled - ship-risk action declined")
 			s.pushRecent(utterance, "(cancelled: ship-risk)")
@@ -188,7 +188,7 @@ func (s *replSession) execute(ctx context.Context, utterance string, act brain.A
 		return s.runDispatches(ctx, utterance, act.Dispatches)
 	case brain.ActionPipeline:
 		s.println(fmt.Sprintf("◆ pipeline › %s", act.Pipeline))
-		s.auditf(audit.KindPipeline, act.Pipeline, nil)
+		s.auditf(audit.KindPipeline, act.Pipeline, s.focus, nil)
 		fn, ok := s.pipelines[act.Pipeline]
 		if !ok {
 			return fmt.Errorf("no pipeline %q wired", act.Pipeline)
@@ -268,8 +268,8 @@ func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, mode
 		}
 		roots = append(roots, rp.Path)
 	}
-	// 2. audit (3-arg, unchanged for this task)
-	s.auditf(audit.KindDispatch, d.Thread+"·"+model, map[string]string{"msg": d.Message})
+	// 2. audit — tagged with the resolved project, not s.focus (may differ in multi-repo sessions)
+	s.auditf(audit.KindDispatch, d.Thread+"·"+model, bp.proj.ID, map[string]string{"msg": d.Message})
 	// 3. ollama branch (unchanged)
 	if d.Thread == "ollama" {
 		if s.ollamaSend == nil {
@@ -415,7 +415,7 @@ func (s *replSession) saveMemoryText(ctx context.Context, text string) error {
 	}); err != nil {
 		return fmt.Errorf("save memory: %w", err)
 	}
-	s.auditf(audit.KindMemoryWrite, text, nil)
+	s.auditf(audit.KindMemoryWrite, text, s.proj().ID, nil)
 	s.println("◆ remembered")
 	return nil
 }
@@ -456,11 +456,11 @@ func (s *replSession) print(text string) {
 	fmt.Fprint(s.out, text)
 }
 
-func (s *replSession) auditf(kind audit.Kind, detail string, meta map[string]string) {
+func (s *replSession) auditf(kind audit.Kind, detail, projectID string, meta map[string]string) {
 	if s.audit == nil {
 		return
 	}
-	_ = s.audit.Append(audit.Record{Kind: kind, Detail: detail, Meta: meta})
+	_ = s.audit.Append(audit.Record{Kind: kind, Detail: detail, Project: projectID, Meta: meta})
 }
 
 func renderHits(hits []memory.Hit) []string {
@@ -750,7 +750,11 @@ func (s *replSession) slash(line string) bool {
 			return false
 		}
 		for _, r := range recs {
-			s.println(fmt.Sprintf("%s  %-12s %s", r.At.Format("15:04:05"), r.Kind, r.Detail))
+			tag := r.Project
+			if tag == "" {
+				tag = "-"
+			}
+			s.println(fmt.Sprintf("%s  %-12s %-12s %s", r.At.Format("15:04:05"), tag, r.Kind, r.Detail))
 		}
 	default:
 		s.println("unknown command (try /status /budget /threads /why /audit /quit)")
