@@ -41,14 +41,32 @@ func (replEmbedder) Embed(context.Context, string) ([]float32, error) {
 	return []float32{1, 0, 0}, nil
 }
 
-func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *bytes.Buffer) {
+func bindTestProject(t *testing.T, name string, bud *budget.Tracker) *boundProject {
 	t.Helper()
 	dir := t.TempDir()
 	mem, err := memory.Open(filepath.Join(dir, "mem.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { mem.Close() })
+	threads, _ := agent.LoadThreadsFrom(filepath.Join(dir, "threads.json"))
+	fake, _ := filepath.Abs("../../testdata/fakeagent")
+	p := config.Project{ID: name, Name: name, Path: dir}
+	return &boundProject{
+		proj: p,
+		mem:  mem,
+		mgr: &agent.Manager{
+			Project: p, ProjectID: name, Threads: threads,
+			Adapters: map[string]agent.Adapter{"claude": &agent.ClaudeAdapter{BinPath: fake}},
+			Budget:   bud, Mem: mem, Emb: replEmbedder{},
+			ThresholdPct: 70, DistillModel: "haiku", Timeout: 10 * time.Second,
+		},
+		closers: []func() error{mem.Close},
+	}
+}
+
+func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *bytes.Buffer) {
+	t.Helper()
+	dir := t.TempDir()
 	glob, err := memory.Open(filepath.Join(dir, "glob.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -64,30 +82,17 @@ func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *b
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { al.Close() })
-	threads, err := agent.LoadThreadsFrom(filepath.Join(dir, "threads.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	fake, err := filepath.Abs("../../testdata/fakeagent")
-	if err != nil {
-		t.Fatal(err)
-	}
+	bp := bindTestProject(t, "testproj", bud)
+	t.Cleanup(func() {
+		for _, c := range bp.closers {
+			_ = c()
+		}
+	})
 	out := &bytes.Buffer{}
 	s := &replSession{
-		proj:  config.Project{Name: "testproj", Path: dir},
-		brain: b,
-		mgr: &agent.Manager{
-			Project:      config.Project{Name: "testproj", Path: dir},
-			Threads:      threads,
-			Adapters:     map[string]agent.Adapter{"claude": &agent.ClaudeAdapter{BinPath: fake}},
-			Budget:       bud,
-			Mem:          mem,
-			Emb:          replEmbedder{},
-			ThresholdPct: 70,
-			DistillModel: "haiku",
-			Timeout:      10 * time.Second,
-		},
-		mem:      mem,
+		bound:    map[string]*boundProject{"testproj": bp},
+		focus:    "testproj",
+		brain:    b,
 		glob:     glob,
 		emb:      replEmbedder{},
 		audit:    al,
@@ -142,7 +147,7 @@ func TestTurnRememberStoresRoutingPreference(t *testing.T) {
 	if err := s.turn(context.Background(), "no, codex should review"); err != nil {
 		t.Fatalf("turn: %v", err)
 	}
-	items, err := s.mem.All(context.Background())
+	items, err := s.mem().All(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +249,7 @@ func TestRoutingPreferenceIsLowConfidenceAndScoped(t *testing.T) {
 	if err := s.turn(context.Background(), "no, codex should do reviews"); err != nil {
 		t.Fatalf("turn: %v", err)
 	}
-	items, err := s.mem.All(context.Background())
+	items, err := s.mem().All(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,12 +322,12 @@ func TestScriptedSession(t *testing.T) {
 	}
 
 	// The dispatch persisted a durable thread with the CLI's session id.
-	th := s.mgr.Threads.Get("claude", "claude")
+	th := s.mgr().Threads.Get("claude", "claude")
 	if th.SessionID != "sess-e2e" || th.Turns != 1 {
 		t.Errorf("thread after session = %+v", th)
 	}
 	// The remember landed in project memory and is recallable.
-	hits, err := memory.Recall(ctx, s.emb, "what's our retry policy?", 1, s.mem)
+	hits, err := memory.Recall(ctx, s.emb, "what's our retry policy?", 1, s.mem())
 	if err != nil {
 		t.Fatal(err)
 	}
