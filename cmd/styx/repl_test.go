@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -282,6 +283,78 @@ func TestAuditTrail(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("/audit output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestDispatchTargetsNamedRepoWithExtraRoots(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "done")
+
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "ai-ta-backend", bud)
+	b := bindTestProject(t, "ai-ta-teacher-ui", bud)
+	// Register both so target.Resolve / extra-root resolution find them.
+	if err := config.SaveProjects([]config.Project{
+		{ID: "ai-ta-backend", Name: "ai-ta-backend", Path: a.proj.Path},
+		{ID: "ai-ta-teacher-ui", Name: "ai-ta-teacher-ui", Path: b.proj.Path},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := &bytes.Buffer{}
+	s := &replSession{
+		bound:   map[string]*boundProject{"ai-ta-backend": a, "ai-ta-teacher-ui": b},
+		focus:   "ai-ta-backend",
+		emb:     replEmbedder{},
+		tracker: bud,
+		tiers:   map[string]string{"opus": "opus", "haiku": "haiku"},
+		in:      bufio.NewReader(strings.NewReader("")),
+		out:     out,
+	}
+	d := brain.Dispatch{
+		Thread: "claude", Message: "trace upload",
+		Project: "ai-ta-teacher-ui", ExtraRoots: []string{"ai-ta-backend"},
+	}
+	if err := s.runOneDispatch(context.Background(), d, "opus"); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	// The teacher-ui thread ran; backend's did not.
+	if b.mgr.Threads.Get("claude", "claude").Turns != 1 {
+		t.Errorf("teacher-ui thread did not run")
+	}
+	if a.mgr.Threads.Get("claude", "claude").Turns != 0 {
+		t.Errorf("backend thread should be untouched")
+	}
+}
+
+func TestDispatchUnknownTargetSurfacesError(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+
+	bud, _ := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	a := bindTestProject(t, "backend", bud)
+	_ = config.SaveProjects([]config.Project{{ID: "backend", Name: "backend", Path: a.proj.Path}})
+
+	s := &replSession{
+		bound: map[string]*boundProject{"backend": a}, focus: "backend",
+		emb: replEmbedder{}, tracker: bud,
+		tiers: map[string]string{"opus": "opus"},
+		in:    bufio.NewReader(strings.NewReader("")), out: &bytes.Buffer{},
+	}
+	err := s.runOneDispatch(context.Background(), brain.Dispatch{
+		Thread: "claude", Message: "x", Project: "nope-not-registered",
+	}, "opus")
+	if err == nil || !strings.Contains(err.Error(), "unknown project") {
+		t.Fatalf("want unknown-project error, got %v", err)
+	}
+	if !errors.Is(err, errUnresolvedRepo) {
+		t.Errorf("error should wrap errUnresolvedRepo so the turn loop escalates")
+	}
+	if a.mgr.Threads.Get("claude", "claude").Turns != 0 {
+		t.Errorf("no thread should run on an unresolved target (no silent fallback to focus)")
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/pipeline"
 	"github.com/ishaanbatra/styx/internal/project"
+	"github.com/ishaanbatra/styx/internal/target"
 )
 
 const maxRecentTurns = 8
@@ -145,7 +146,12 @@ func (s *replSession) turn(ctx context.Context, utterance string) error {
 		"risk":       string(act.EffectiveRisk()),
 		"confidence": fmt.Sprintf("%.2f", act.Confidence),
 	})
-	return s.execute(ctx, utterance, act)
+	err = s.execute(ctx, utterance, act)
+	if errors.Is(err, errUnresolvedRepo) {
+		s.println("◆ " + err.Error())
+		return s.askUserRoute(ctx, utterance)
+	}
+	return err
 }
 
 func (s *replSession) execute(ctx context.Context, utterance string, act brain.Action) error {
@@ -223,8 +229,37 @@ func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []
 	return errors.Join(errs...)
 }
 
+// errUnresolvedRepo marks a brain-named repo that did not resolve, so the turn
+// loop escalates to the user instead of guessing.
+var errUnresolvedRepo = errors.New("unresolved repo")
+
 func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, model string) error {
+	// 1. resolve target repo (default = focus) + extra roots
+	bp := s.bound[s.focus]
+	if d.Project != "" {
+		p, err := target.Resolve(target.Spec{Alias: d.Project})
+		if err != nil {
+			return fmt.Errorf("%w: dispatch target %q: %v", errUnresolvedRepo, d.Project, err)
+		}
+		bp, err = s.bind(p)
+		if err != nil {
+			return err
+		}
+	}
+	var roots []string
+	for _, name := range d.ExtraRoots {
+		rp, err := target.Resolve(target.Spec{Alias: name})
+		if err != nil {
+			return fmt.Errorf("%w: extra root %q: %v", errUnresolvedRepo, name, err)
+		}
+		if _, err := s.bind(rp); err != nil {
+			return err
+		}
+		roots = append(roots, rp.Path)
+	}
+	// 2. audit (3-arg, unchanged for this task)
 	s.auditf(audit.KindDispatch, d.Thread+"·"+model, map[string]string{"msg": d.Message})
+	// 3. ollama branch (unchanged)
 	if d.Thread == "ollama" {
 		if s.ollamaSend == nil {
 			return errors.New("ollama dispatch not wired")
@@ -236,18 +271,20 @@ func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, mode
 		s.println(text)
 		return nil
 	}
-	res, err := s.mgr().Dispatch(ctx, agent.DispatchSpec{
-		Thread:   d.Thread,
-		CLI:      d.Thread,
-		Model:    model,
-		Message:  d.Message,
-		Extra:    d.CLIOptions,
-		ReadOnly: d.Risk == brain.RiskRead,
+	// 4. dispatch on the resolved project's manager with ExtraRoots
+	res, err := bp.mgr.Dispatch(ctx, agent.DispatchSpec{
+		Thread:     d.Thread,
+		CLI:        d.Thread,
+		Model:      model,
+		Message:    d.Message,
+		Extra:      d.CLIOptions,
+		ExtraRoots: roots,
+		ReadOnly:   d.Risk == brain.RiskRead,
 	}, s.printEvent)
 	if err != nil {
 		return fmt.Errorf("%s: %w", d.Thread, err)
 	}
-	if ad, ok := s.mgr().Adapters[d.Thread]; ok && !ad.SupportsStream() {
+	if ad, ok := bp.mgr.Adapters[d.Thread]; ok && !ad.SupportsStream() {
 		s.println(res.Text)
 	}
 	return nil
