@@ -127,7 +127,9 @@ optional pass-through `effort` string; styx stores it without validating
 provider-specific values and the router copies it onto `Decision.Effort`.
 Bare channel tokens such as `codex` are valid and mean "let that CLI choose its
 current default model." `[models].refresh_interval_hours` controls the
-model-refresh staleness threshold and defaults to 24 hours.
+model-refresh staleness threshold and defaults to 24 hours. The seeded
+`default_routing.go` table is already in that de-pinned form, with
+`research.critic` showing `effort = "high"` as the pass-through example.
 
 The `implement` verb routes autonomous plan application: codex is primary
 (well-scoped execution), claude is the fallback, and the `complex` signal
