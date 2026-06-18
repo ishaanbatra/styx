@@ -3,6 +3,7 @@ package budget
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -289,5 +290,37 @@ func TestModelColumnMigratesExistingDB(t *testing.T) {
 	defer tr2.Close()
 	if err := tr2.Record(context.Background(), Event{Channel: "claude", Verb: "x", Model: "haiku", Success: true}); err != nil {
 		t.Fatalf("record after reopen: %v", err)
+	}
+}
+
+func TestConcurrentWritersNoLock(t *testing.T) {
+	dir := t.TempDir()
+	tr, err := New(filepath.Join(dir, "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+
+	const writers = 8
+	const each = 25
+	var wg sync.WaitGroup
+	errs := make(chan error, writers*each)
+	for w := 0; w < writers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < each; i++ {
+				if err := tr.Record(context.Background(), Event{
+					Channel: "claude", Verb: "thread", Model: "haiku", Success: true,
+				}); err != nil {
+					errs <- err
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent Record errored (database locked?): %v", err)
 	}
 }

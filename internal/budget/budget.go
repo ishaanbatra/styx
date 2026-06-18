@@ -96,7 +96,7 @@ func Default() (*Tracker, error) {
 
 // New opens (and migrates) the sqlite database at path.
 func New(path string) (*Tracker, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
