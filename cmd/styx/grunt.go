@@ -8,6 +8,7 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
+	"github.com/ishaanbatra/styx/internal/pipeline"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
 )
@@ -37,7 +38,7 @@ func cmdOneShot(a *app, verb string, args []string) error {
 	}
 
 	req := router.Request{Verb: verb, Args: args, Signals: sigs}
-	resp, picked, err := sendWithFallback(a, context.Background(), req, channel.Request{
+	resp, picked, err := sendWithFallback(a, context.Background(), proj.ID, req, channel.Request{
 		Prompt:      prompt,
 		Attachments: attachments,
 	}, false)
@@ -57,7 +58,8 @@ func cmdOneShot(a *app, verb string, args []string) error {
 // raw, when true, unwraps each channel's progress decorator before sending —
 // used by orchestration callers (e.g. the auto pipeline) that narrate at their
 // own level and must not open a competing progress stage.
-func sendWithFallback(a *app, ctx context.Context, req router.Request, cr channel.Request, raw bool) (channel.Response, router.ChannelModel, error) {
+func sendWithFallback(a *app, ctx context.Context, projectID string, req router.Request, cr channel.Request, raw bool) (channel.Response, router.ChannelModel, error) {
+	runID := pipeline.NewRunID(req.Verb)
 	dec, err := a.router.Route(ctx, req)
 	if err != nil {
 		return channel.Response{}, router.ChannelModel{}, err
@@ -83,6 +85,8 @@ func sendWithFallback(a *app, ctx context.Context, req router.Request, cr channe
 			TokensOut: resp.EstTokensOut,
 			Success:   err == nil,
 			ErrorKind: errorKindOf(err),
+			Project:   projectID,
+			RunID:     runID,
 		})
 		if err == nil {
 			return resp, t, nil

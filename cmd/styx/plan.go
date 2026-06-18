@@ -88,7 +88,7 @@ Use the research brief below if relevant. If the brief is empty, note that assum
 `, desc, contextMD, briefBody)
 
 	sigs := signals.Extract("plan", args, proj)
-	resp, picked, err := sendWithFallback(a, context.Background(),
+	resp, picked, err := sendWithFallback(a, context.Background(), proj.ID,
 		router.Request{Verb: "plan", Args: args, Signals: sigs},
 		channel.Request{Prompt: prompt, WorkingDir: proj.Path}, false)
 	if err != nil {

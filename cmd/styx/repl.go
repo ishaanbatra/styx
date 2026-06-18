@@ -22,6 +22,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
+	"github.com/ishaanbatra/styx/internal/pipeline"
 )
 
 const maxRecentTurns = 8
@@ -441,9 +442,12 @@ func newREPLSession(a *app) (*replSession, func(), error) {
 	if a.routing.Budget.Claude.TimeoutMinutes > 0 {
 		timeout = time.Duration(a.routing.Budget.Claude.TimeoutMinutes) * time.Minute
 	}
+	runID := pipeline.NewRunID("repl-" + proj.Name)
 	mgr := &agent.Manager{
-		Project: proj,
-		Threads: threads,
+		Project:   proj,
+		ProjectID: proj.ID,
+		RunID:     runID,
+		Threads:   threads,
 		Adapters: map[string]agent.Adapter{
 			"claude": agent.NewClaudeAdapter(),
 			"codex":  agent.NewCodexAdapter(),

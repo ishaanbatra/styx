@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-18
+last_verified: 2026-06-18 (Task 3.2)
 ---
 
 # Styx Architecture

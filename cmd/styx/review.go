@@ -8,6 +8,8 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
+	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/pipeline"
 	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/router"
 )
@@ -24,7 +26,8 @@ func cmdReview(a *app, args []string) error {
 	if strings.TrimSpace(diff) == "" {
 		return fmt.Errorf("no diff between current branch and default branch; nothing to review")
 	}
-	text, err := runReviewSynthesized(a, context.Background(), a.progress, proj.Path, diff)
+	runID := pipeline.NewRunID("review")
+	text, err := runReviewSynthesized(a, context.Background(), a.progress, runID, proj.Path, diff)
 	if err != nil {
 		return err
 	}
@@ -35,7 +38,8 @@ func cmdReview(a *app, args []string) error {
 // runReviewSynthesized runs the routed review (parallel + synthesize, or single-channel)
 // and returns the synthesized text. Shared by cmdReview and auto's review stage.
 // prog is used for serial narration; pass progress.Quiet() to suppress output.
-func runReviewSynthesized(a *app, ctx context.Context, prog *progress.Tracker, projectPath, diff string) (string, error) {
+func runReviewSynthesized(a *app, ctx context.Context, prog *progress.Tracker, runID, projectPath, diff string) (string, error) {
+	projectID := config.ProjectID(projectPath)
 	if prog == nil {
 		prog = progress.Quiet()
 	}
@@ -54,9 +58,14 @@ func runReviewSynthesized(a *app, ctx context.Context, prog *progress.Tracker, p
 		prompt := "Review this diff. Identify BLOCKING/IMPORTANT findings only. Be specific (file:line).\n\n--- DIFF ---\n" + diff
 		resp, err := raw.Send(ctx, channel.Request{Model: dec.Model, Prompt: prompt, WorkingDir: projectPath})
 		_ = a.tracker.Record(ctx, budget.Event{
-			Channel: dec.Channel, Verb: "review",
-			TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
-			Success: err == nil, ErrorKind: errorKindOf(err),
+			Channel:   dec.Channel,
+			Verb:      "review",
+			TokensIn:  resp.EstTokensIn,
+			TokensOut: resp.EstTokensOut,
+			Success:   err == nil,
+			ErrorKind: errorKindOf(err),
+			Project:   projectID,
+			RunID:     runID,
 		})
 		if err != nil {
 			st.Fail(err)
@@ -98,6 +107,8 @@ func runReviewSynthesized(a *app, ctx context.Context, prog *progress.Tracker, p
 				TokensOut: resp.EstTokensOut,
 				Success:   err == nil,
 				ErrorKind: errorKindOf(err),
+				Project:   projectID,
+				RunID:     runID,
 			})
 			results[i] = result{Target: t, Text: resp.Text, Err: err}
 		}()

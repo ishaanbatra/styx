@@ -31,6 +31,8 @@ type DispatchSpec struct {
 // distill-and-restart, crash recovery, budget recording, interactive handoff.
 type Manager struct {
 	Project      config.Project
+	ProjectID    string // stable id of the bound project; tags budget events
+	RunID        string // session run-id; tags budget events
 	Threads      *ThreadStore
 	Adapters     map[string]Adapter
 	Budget       *budget.Tracker                                        // nil ok (tests)
@@ -125,6 +127,8 @@ func (m *Manager) record(ctx context.Context, spec DispatchSpec, res TurnResult,
 		TokensOut: res.OutputTokens,
 		Success:   sendErr == nil,
 		ErrorKind: kind,
+		Project:   m.ProjectID,
+		RunID:     m.RunID,
 	})
 }
 

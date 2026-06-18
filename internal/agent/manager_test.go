@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,6 +171,45 @@ func TestDispatchRecoversFromDeadSession(t *testing.T) {
 	}
 	if !strings.Contains(calls, "we had decided to use sqlite") {
 		t.Errorf("recovery call not seeded with last distillation:\n%s", calls)
+	}
+}
+
+func TestDispatchRecordsProjectAndRunID(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "usage.db")
+	bud, err := budget.New(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bud.Close()
+	threads, _ := LoadThreadsFrom(filepath.Join(dir, "threads.json"))
+	m := &Manager{
+		Project:   config.Project{ID: "pid123", Name: "proj", Path: dir},
+		ProjectID: "pid123",
+		RunID:     "run-xyz",
+		Threads:   threads,
+		Adapters:  map[string]Adapter{"claude": &ClaudeAdapter{BinPath: fakeBin(t)}},
+		Budget:    bud,
+		Timeout:   10 * time.Second,
+	}
+	t.Setenv("FAKEAGENT_TEXT", "ok")
+	if _, err := m.Dispatch(context.Background(), DispatchSpec{Thread: "claude", CLI: "claude", Message: "hi"}, nil); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	// Read the row back via an independent connection (driver registered by the budget import).
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var project, runID string
+	row := db.QueryRowContext(context.Background(),
+		`SELECT project, run_id FROM usage ORDER BY ts DESC LIMIT 1`)
+	if err := row.Scan(&project, &runID); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if project != "pid123" || runID != "run-xyz" {
+		t.Errorf("got (%q,%q), want (pid123, run-xyz)", project, runID)
 	}
 }
 

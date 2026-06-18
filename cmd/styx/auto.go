@@ -181,7 +181,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 %s
 `, g, ctxMD, briefBody)
 		sigs := signals.Extract("plan", []string{g}, proj)
-		resp, _, err := sendWithFallback(a, ctx,
+		resp, _, err := sendWithFallback(a, ctx, proj.ID,
 			router.Request{Verb: "plan", Args: []string{g}, Signals: sigs},
 			channel.Request{Prompt: prompt, WorkingDir: proj.Path}, true)
 		if err != nil {
@@ -261,7 +261,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		// The pipeline already opens a "stage N/7 review" around this closure.
 		// Pass progress.Quiet() so the inner review stays silent and doesn't
 		// collapse the pipeline stage.
-		text, err := runReviewSynthesized(a, ctx, progress.Quiet(), proj.Path, diff)
+		text, err := runReviewSynthesized(a, ctx, progress.Quiet(), rr.State.RunID, proj.Path, diff)
 		if err != nil {
 			return 0, 0, "", err
 		}
