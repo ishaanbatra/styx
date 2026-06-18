@@ -43,7 +43,7 @@ type Escalator interface {
 // Ollama is the production brain: a small local model with structured output.
 type Ollama struct {
 	BaseURL             string  // e.g. http://localhost:11434
-	Model               string  // e.g. llama3.2:3b (a fast non-reasoning instruct model)
+	Model               string  // e.g. qwen2.5-coder:7b (a fast non-reasoning instruct model)
 	ConfidenceThreshold float64 // escalate below this (0 disables)
 	Escalator           Escalator
 
@@ -112,7 +112,7 @@ func (b *Ollama) Decide(ctx context.Context, t Turn) (Action, error) {
 
 func (b *Ollama) chat(ctx context.Context, system, user string) (string, error) {
 	body, err := json.Marshal(brainChatRequest{
-		Model: b.Model,
+		Model:  b.Model,
 		Stream: false,
 		// Disable reasoning-model thinking (qwen3, r1, …). Routing is a
 		// schema-constrained classification, not a reasoning task; thinking adds

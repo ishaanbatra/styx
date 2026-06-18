@@ -32,14 +32,7 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 }
 
 func (c *Channel) sendOneShot(ctx context.Context, req channel.Request) (channel.Response, error) {
-	// Codex CLI invocation: `codex --model <model> exec "<prompt>"`.
-	// If the actual CLI uses a different verb, this is the single spot to adjust.
-	args := []string{}
-	if req.Model != "" {
-		args = append(args, "--model", req.Model)
-	}
-	args = append(args, "exec", req.Prompt)
-	cmd := exec.CommandContext(ctx, "codex", args...)
+	cmd := exec.CommandContext(ctx, "codex", codexArgs(req)...)
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
 	}
@@ -53,6 +46,26 @@ func (c *Channel) sendOneShot(ctx context.Context, req channel.Request) (channel
 		EstTokensIn:  estimateTokens(req.Prompt + req.System),
 		EstTokensOut: estimateTokens(text),
 	}, nil
+}
+
+// codexArgs builds the exec argv (excluding the binary name) for req.
+func codexArgs(req channel.Request) []string {
+	args := []string{}
+	if req.Effort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+req.Effort)
+	}
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
+	}
+	args = append(args, "exec")
+	if req.Write {
+		// Implement-class requests must apply edits and run commands autonomously.
+		// workspace-write lets codex write within the repo without per-action prompts,
+		// mirroring the claude `--dangerously-skip-permissions` implement path.
+		args = append(args, "--sandbox", "workspace-write")
+	}
+	args = append(args, req.Prompt)
+	return args
 }
 
 func (c *Channel) sendInteractive(ctx context.Context, req channel.Request) (channel.Response, error) {

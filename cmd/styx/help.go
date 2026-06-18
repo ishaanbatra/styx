@@ -6,12 +6,16 @@ const helpText = `styx — multi-model dev orchestration
 
 USAGE
   styx [--quiet|--verbose] <verb> [args]
+  styx [--quiet|--verbose]
+  styx [--quiet|--verbose] "<anything>"
 
 GLOBAL FLAGS
   --quiet      Suppress progress narration (only final results print)
   --verbose    Show extra detail (prompt sizes, model names) during long ops
 
 VERBS
+  styx                      Open the conversational REPL in this project
+  styx "<anything>"         One brain-routed turn, then exit
   research <query>          Gemini draft + Codex critique -> brief
   deep-research <query>     Open Gemini + ChatGPT in browser; synthesis template
   plan <description>        Draft an implementation plan using the latest brief
@@ -24,6 +28,7 @@ VERBS
   critique <text|file>      Devil's-advocate critique (Codex)
   check                     Dashboard: git status, ollama, latest briefs/plans
   budget                    Per-channel usage summary
+  doctor [--fix]            Preflight CLIs, capability cards, ollama models
   route --explain <verb> "..." Show routing decision for a hypothetical request
   project ls|add|rm|rename  Manage project registry
   migrate-secrets           One-time: move env-var secrets to macOS Keychain
@@ -37,6 +42,9 @@ VERBS
   runs show <run-id>        Show JSON state of a specific run
   runs unlock               Force-release a stale pipeline lock (after a crash)
   help                      Show this menu
+
+REPL
+  Slash commands: /status /budget /threads /why /audit /quit
 
 CONFIG
   ~/.config/styx/routing.toml      routes (you edit)

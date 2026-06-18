@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/progress"
 )
@@ -44,4 +45,27 @@ func (w *WithProgress) Send(ctx context.Context, req Request) (Response, error) 
 	}
 	s.Done("returned ~%d tokens", len(resp.Text)/4)
 	return resp, nil
+}
+
+// WithTimeout decorates a Channel so every non-interactive Send gets a
+// deadline. Interactive sends hand the terminal to the child process and are
+// never timed out.
+type WithTimeout struct {
+	Inner Channel
+	D     time.Duration
+}
+
+func (w *WithTimeout) Name() string { return w.Inner.Name() }
+
+func (w *WithTimeout) BudgetState(ctx context.Context) (Budget, error) {
+	return w.Inner.BudgetState(ctx)
+}
+
+func (w *WithTimeout) Send(ctx context.Context, req Request) (Response, error) {
+	if w.D <= 0 || req.Interactive {
+		return w.Inner.Send(ctx, req)
+	}
+	ctx, cancel := context.WithTimeout(ctx, w.D)
+	defer cancel()
+	return w.Inner.Send(ctx, req)
 }

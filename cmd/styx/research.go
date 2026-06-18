@@ -54,8 +54,8 @@ func cmdResearch(a *app, args []string) error {
 		return fmt.Errorf("unknown critic channel %q", criticDec.Channel)
 	}
 
-	drafter := &channelAdapter{ch: rawChannel(drafterCh), model: drafterDec.Model, projectPath: proj.Path}
-	critic := &channelAdapter{ch: rawChannel(criticCh), model: criticDec.Model}
+	drafter := &channelAdapter{ch: rawChannel(drafterCh), model: drafterDec.Model, effort: drafterDec.Effort, projectPath: proj.Path}
+	critic := &channelAdapter{ch: rawChannel(criticCh), model: criticDec.Model, effort: criticDec.Effort}
 
 	logStatus("research: drafter=%s:%s critic=%s:%s%s",
 		drafterDec.Channel, drafterDec.Model, criticDec.Channel, criticDec.Model,
@@ -105,12 +105,14 @@ func cmdResearch(a *app, args []string) error {
 type channelAdapter struct {
 	ch          channel.Channel
 	model       string
+	effort      string
 	projectPath string // only used for drafter to enable agy's --add-dir
 }
 
 func (a *channelAdapter) Send(ctx context.Context, prompt string) (string, error) {
 	resp, err := a.ch.Send(ctx, channel.Request{
 		Model:      a.model,
+		Effort:     a.effort,
 		Prompt:     prompt,
 		WorkingDir: a.projectPath,
 	})

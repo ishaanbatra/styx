@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
@@ -13,6 +15,8 @@ import (
 	"github.com/ishaanbatra/styx/internal/channel/codex"
 	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/memory"
+	"github.com/ishaanbatra/styx/internal/modelsync"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
@@ -89,6 +93,23 @@ func loadApp() (*app, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load routing: %w", err)
 	}
+	if rp, perr := paths.RoutingPath(); perr == nil {
+		if cp, perr := paths.ModelsCachePath(); perr == nil {
+			opener := func() (*memory.Store, memory.Embedder, func()) {
+				return globalCorrectionStore(r.Brain.EmbedModel)
+			}
+			refreshed, rerr := maybeRefreshModels(rp, cp, r.Models.RefreshIntervalHours, time.Now(), opener)
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "[styx] model refresh skipped: %v\n", rerr)
+			} else if refreshed {
+				// Only re-read routing when a migration actually rewrote it.
+				r2, rerr := config.LoadRouting()
+				if rerr == nil {
+					r = r2
+				}
+			}
+		}
+	}
 	t, err := budget.Default()
 	if err != nil {
 		return nil, fmt.Errorf("open budget tracker: %w", err)
@@ -101,17 +122,77 @@ func loadApp() (*app, error) {
 	// Create the progress tracker once and share it with both app.progress and
 	// defaultChannels so the decorator narrates the same tracker output.
 	p := newProgress()
-	rt := router.FromConfig(r, &budgetSource{t: t})
+	bs := &budgetSource{t: t}
+	rt := router.FromConfig(r, bs)
+	rt.Breaker = bs
 	return &app{
 		routing:  r,
 		tracker:  t,
 		router:   rt,
-		channels: defaultChannels(p),
+		channels: defaultChannels(p, r),
 		progress: p,
 	}, nil
 }
 
-func defaultChannels(prog *progress.Tracker) map[string]channel.Channel {
+// correctionStoreOpener lazily opens the global memory store + embedder used to
+// record routing de-pin corrections. It returns a closer the caller always
+// defers (a no-op on failure). A nil opener means "do not record corrections"
+// (used by tests and any path without a memory store).
+type correctionStoreOpener func() (*memory.Store, memory.Embedder, func())
+
+// globalCorrectionStore opens the shared global.db and an ollama embedder so a
+// de-pin migration is recorded as a routing-preference memory. Best-effort: any
+// failure yields a nil store (recording is skipped) rather than blocking the
+// refresh, and the embedder is only contacted when there is a change to record.
+func globalCorrectionStore(embedModel string) (*memory.Store, memory.Embedder, func()) {
+	noop := func() {}
+	memDir, err := paths.MemoryDir()
+	if err != nil {
+		return nil, nil, noop
+	}
+	if err := paths.EnsureDir(memDir); err != nil {
+		return nil, nil, noop
+	}
+	store, err := memory.Open(filepath.Join(memDir, "global.db"))
+	if err != nil {
+		return nil, nil, noop
+	}
+	emb := memory.NewOllamaEmbedder("http://localhost:11434", embedModel)
+	return store, emb, func() { store.Close() }
+}
+
+func maybeRefreshModels(routingPath, cachePath string, intervalHours int, now time.Time, openStore correctionStoreOpener) (bool, error) {
+	c, err := modelsync.LoadCache(cachePath)
+	if err != nil {
+		return false, err
+	}
+	if !c.IsStale(now, time.Duration(intervalHours)*time.Hour) {
+		return false, nil
+	}
+	// Open the correction store only on the stale path so the common
+	// fresh-cache case stays free of any sqlite/embedder setup.
+	var store *memory.Store
+	var emb memory.Embedder
+	if openStore != nil {
+		var closeStore func()
+		store, emb, closeStore = openStore()
+		defer closeStore()
+	}
+	err = modelsync.Refresh(context.Background(), modelsync.Options{
+		RoutingPath: routingPath,
+		CachePath:   cachePath,
+		Now:         now,
+		Discoverers: []modelsync.Discoverer{
+			modelsync.CodexDiscoverer{},
+			modelsync.ClaudeDiscoverer{},
+		},
+		Store: store,
+		Embed: emb,
+	})
+	return err == nil, err
+}
+
+func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channel.Channel {
 	a := agy.New()
 	raw := map[string]channel.Channel{
 		"claude": claude.New(),
@@ -120,9 +201,22 @@ func defaultChannels(prog *progress.Tracker) map[string]channel.Channel {
 		"gemini": a, // alias for backward-compatible routing rules
 		"ollama": ollama.New(),
 	}
+	timeouts := map[string]int{
+		"claude": r.Budget.Claude.TimeoutMinutes,
+		"codex":  r.Budget.Codex.TimeoutMinutes,
+		"agy":    r.Budget.Agy.TimeoutMinutes,
+		"gemini": r.Budget.Agy.TimeoutMinutes,
+	}
 	wrapped := make(map[string]channel.Channel, len(raw))
 	for name, ch := range raw {
-		wrapped[name] = &channel.WithProgress{Inner: ch, Tracker: prog, Label: name}
+		inner := ch
+		if mins, ok := timeouts[name]; ok {
+			if mins <= 0 {
+				mins = 10 // claude/codex previously had no timeout at all
+			}
+			inner = &channel.WithTimeout{Inner: inner, D: time.Duration(mins) * time.Minute}
+		}
+		wrapped[name] = &channel.WithProgress{Inner: inner, Tracker: prog, Label: name}
 	}
 	return wrapped
 }
@@ -132,6 +226,11 @@ type budgetSource struct{ t *budget.Tracker }
 
 func (b *budgetSource) UsedPct(ctx context.Context, ch string) (float64, error) {
 	return b.t.UsedPct(ctx, ch)
+}
+
+func (b *budgetSource) Broken(ctx context.Context, ch string) bool {
+	broken, err := b.t.ShouldCircuitBreak(ctx, ch, 3, 10*time.Minute)
+	return err == nil && broken
 }
 
 func dispatch(verb string, args []string) error {
@@ -149,6 +248,8 @@ func dispatch(verb string, args []string) error {
 		return cmdRoute(args)
 	case "budget":
 		return cmdBudget(args)
+	case "doctor":
+		return cmdDoctor(args)
 	case "check":
 		return cmdCheck(args)
 	case "deep-research":
@@ -183,7 +284,10 @@ func dispatch(verb string, args []string) error {
 	case "grunt", "think", "explain", "summarize", "critique":
 		return cmdOneShot(a, verb, args)
 	}
-	return fmt.Errorf("unknown verb %q (run `styx help`)", verb)
+	// Anything that isn't a verb is an utterance: `styx "fix the flaky test"`
+	// runs one brain turn and exits.
+	utterance := strings.TrimSpace(strings.Join(append([]string{verb}, args...), " "))
+	return cmdBrainTurn(a, utterance)
 }
 
 // ensureFirstRun creates the config dir and seeds routing.toml on first run.
@@ -208,11 +312,17 @@ func ensureFirstRun() error {
 		}
 		logStatus("wrote default routing.toml to %s", routingPath)
 	}
-	// v0.2 auto-upgrade: rewrite gemini:* -> agy:default if present.
-	if n, err := config.UpgradeRoutingFile(routingPath); err != nil {
+	// Auto-upgrade: v0.2 rewrites gemini:* -> agy:default; v0.3 injects the
+	// `implement` verb rules. Both back up to routing.v0.1.toml.bak.
+	if n, injected, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
-	} else if n > 0 {
-		logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", n)
+	} else {
+		if n > 0 {
+			logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", n)
+		}
+		if injected {
+			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")
+		}
 	}
 	return nil
 }
@@ -237,4 +347,3 @@ func resolveTarget(arg string) (project.Project, error) {
 	}
 	return project.Current()
 }
-

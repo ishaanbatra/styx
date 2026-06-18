@@ -11,14 +11,16 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 // Options configure an Apply call.
 type Options struct {
-	PlanContent string // markdown plan text
-	ProjectPath string // working dir for claude
-	Model       string // optional claude model id; empty = default
+	PlanContent string          // markdown plan text
+	ProjectPath string          // working dir for the implementer
+	Model       string          // optional model id; empty = channel default
+	Channel     channel.Channel // implementer; nil = built-in claude CLI (streams live stderr)
 }
 
 // Apply invokes claude --dangerously-skip-permissions -p with a structured
@@ -32,6 +34,12 @@ func Apply(ctx context.Context, o Options, prog *progress.Tracker) (string, erro
 		return "", fmt.Errorf("PlanContent is empty")
 	}
 	prompt := buildPrompt(o.PlanContent)
+	// When a channel is injected (e.g. the router picked codex for the
+	// `implement` verb), route the apply through it. nil keeps the built-in
+	// claude path below, which streams claude's stderr live.
+	if o.Channel != nil {
+		return applyViaChannel(ctx, o, prompt, prog)
+	}
 	args := []string{"--dangerously-skip-permissions", "-p", prompt}
 	if o.Model != "" {
 		args = append([]string{"--model", o.Model}, args...)
@@ -64,6 +72,26 @@ func Apply(ctx context.Context, o Options, prog *progress.Tracker) (string, erro
 	}
 	s.Done("done")
 	return strings.TrimRight(stdout.String(), "\n"), nil
+}
+
+// applyViaChannel runs the plan through an injected channel (e.g. codex) with
+// Write enabled so it can edit files and run commands autonomously. Unlike the
+// built-in claude path it captures output rather than streaming it live.
+func applyViaChannel(ctx context.Context, o Options, prompt string, prog *progress.Tracker) (string, error) {
+	s := prog.Stage(fmt.Sprintf("Applying plan via %s", o.Channel.Name()))
+	s.Info("plan size: %d bytes", len(o.PlanContent))
+	resp, err := o.Channel.Send(ctx, channel.Request{
+		Model:      o.Model,
+		Prompt:     prompt,
+		WorkingDir: o.ProjectPath,
+		Write:      true,
+	})
+	if err != nil {
+		s.Fail(err)
+		return "", err
+	}
+	s.Done("done")
+	return strings.TrimRight(resp.Text, "\n"), nil
 }
 
 func buildPrompt(plan string) string {

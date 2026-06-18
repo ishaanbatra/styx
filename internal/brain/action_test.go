@@ -1,6 +1,7 @@
 package brain
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -11,9 +12,9 @@ func TestActionUnmarshal(t *testing.T) {
 		"dispatches": [{
 			"thread": "claude",
 			"model": "sonnet",
-			"message": "refactor the session loader",
+			"message": "design the session loader refactor across the auth and storage layers",
 			"cli_options": ["--add-dir", "../other"],
-			"rationale": "implementation work"
+			"rationale": "ambiguous multi-file architecture work"
 		}],
 		"confidence": 0.9
 	}`
@@ -41,7 +42,7 @@ func TestActionValid(t *testing.T) {
 		{"reply ok", Action{Action: ActionReply, Reply: "hi", Confidence: 0.8}, true},
 		{"reply missing text", Action{Action: ActionReply, Confidence: 0.8}, false},
 		{"dispatch ok", Action{Action: ActionDispatch, Confidence: 0.7,
-			Dispatches: []Dispatch{{Thread: "claude", Message: "do it"}}}, true},
+			Dispatches: []Dispatch{{Thread: "codex", Message: "do it"}}}, true},
 		{"dispatch empty", Action{Action: ActionDispatch, Confidence: 0.7}, false},
 		{"dispatch bad thread", Action{Action: ActionDispatch, Confidence: 0.7,
 			Dispatches: []Dispatch{{Thread: "gpt9", Message: "x"}}}, false},
@@ -69,5 +70,44 @@ func TestActionSchemaIsValidJSON(t *testing.T) {
 	}
 	if v["type"] != "object" {
 		t.Errorf("schema root type = %v", v["type"])
+	}
+}
+
+func TestEffectiveRisk(t *testing.T) {
+	tests := []struct {
+		name string
+		a    Action
+		want RiskLevel
+	}{
+		{"default edit when unset", Action{Action: ActionDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "x"}}}, RiskEdit},
+		{"explicit read", Action{Action: ActionDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: RiskRead}}}, RiskRead},
+		{"max across dispatches", Action{Action: ActionParallelDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "a", Risk: RiskRead}, {Thread: "codex", Message: "b", Risk: RiskShip}}}, RiskShip},
+		{"auto pipeline is ship", Action{Action: ActionPipeline, Pipeline: "auto"}, RiskShip},
+		{"research pipeline defaults edit", Action{Action: ActionPipeline, Pipeline: "research"}, RiskEdit},
+		{"action-level ship", Action{Action: ActionHandoff, Risk: RiskShip}, RiskShip},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.a.EffectiveRisk(); got != tt.want {
+				t.Errorf("EffectiveRisk() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActionValidRisk(t *testing.T) {
+	good := Action{Action: ActionDispatch, Confidence: 0.7, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: RiskShip}}}
+	if !good.Valid() {
+		t.Error("valid risk rejected")
+	}
+	bad := Action{Action: ActionDispatch, Confidence: 0.7, Dispatches: []Dispatch{{Thread: "claude", Message: "x", Risk: "nuke"}}}
+	if bad.Valid() {
+		t.Error("invalid risk accepted")
+	}
+}
+
+func TestRiskInSchema(t *testing.T) {
+	if !bytes.Contains(ActionSchema, []byte(`"risk"`)) {
+		t.Error("ActionSchema missing risk property")
 	}
 }

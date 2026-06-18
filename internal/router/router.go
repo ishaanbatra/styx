@@ -16,11 +16,18 @@ type BudgetSource interface {
 	UsedPct(ctx context.Context, channel string) (float64, error)
 }
 
+// BreakerSource reports whether a channel's circuit is open (too many recent
+// failures). The router routes around broken channels like over-cap ones.
+type BreakerSource interface {
+	Broken(ctx context.Context, channel string) bool
+}
+
 // Router evaluates rules + budget state to produce a Decision.
 type Router struct {
-	Rules  []config.Rule
-	Caps   config.BudgetCaps
-	Budget BudgetSource
+	Rules   []config.Rule
+	Caps    config.BudgetCaps
+	Budget  BudgetSource
+	Breaker BreakerSource // optional
 }
 
 // Request is the input to Route.
@@ -40,6 +47,7 @@ type ChannelModel struct {
 type Decision struct {
 	Channel  string
 	Model    string
+	Effort   string
 	Fallback []ChannelModel
 	RuleIdx  int    // -1 if no rule matched (default)
 	Reason   string // human-readable trace
@@ -49,7 +57,7 @@ type Decision struct {
 	ParallelTargets []ChannelModel
 	SynthesizeWith  ChannelModel
 
-	// Degraded is true when budget caused a fallback to be selected.
+	// Degraded is true when budget or reliability checks caused fallback selection.
 	Degraded bool
 }
 
@@ -84,6 +92,7 @@ func (r *Router) Route(ctx context.Context, req Request) (Decision, error) {
 		}
 		return Decision{
 			Channel: targets[0].Channel, Model: targets[0].Model,
+			Effort:  rule.Effort,
 			RuleIdx: idx, Parallel: true,
 			ParallelTargets: targets, SynthesizeWith: synth,
 			Reason: fmt.Sprintf("matched rule #%d (parallel)", idx),
@@ -103,15 +112,16 @@ func (r *Router) Route(ctx context.Context, req Request) (Decision, error) {
 		fallback = append(fallback, cm)
 	}
 
-	// Budget-aware degradation: if primary is over its cap, walk into fallback.
+	// Availability-aware degradation: if primary is over cap or circuit-open,
+	// walk into fallback.
 	chosen := primary
 	degraded := false
 	reason := fmt.Sprintf("matched rule #%d -> %s:%s", idx, chosen.Channel, chosen.Model)
-	if r.overCap(ctx, chosen.Channel) {
+	if r.unavailable(ctx, chosen.Channel) {
 		degraded = true
 		for _, f := range fallback {
-			if !r.overCap(ctx, f.Channel) {
-				reason = fmt.Sprintf("rule #%d primary (%s:%s) over cap; degraded to %s:%s",
+			if !r.unavailable(ctx, f.Channel) {
+				reason = fmt.Sprintf("rule #%d primary (%s:%s) unavailable (over cap or circuit open); degraded to %s:%s",
 					idx, primary.Channel, primary.Model, f.Channel, f.Model)
 				chosen = f
 				break
@@ -119,7 +129,7 @@ func (r *Router) Route(ctx context.Context, req Request) (Decision, error) {
 		}
 	}
 	return Decision{
-		Channel: chosen.Channel, Model: chosen.Model,
+		Channel: chosen.Channel, Model: chosen.Model, Effort: rule.Effort,
 		Fallback: fallback, RuleIdx: idx, Reason: reason, Degraded: degraded,
 	}, nil
 }
@@ -179,6 +189,15 @@ func signalsContainAll(have, want []string) bool {
 	return true
 }
 
+// unavailable reports whether a channel should be routed around: over its
+// budget cap or with an open failure circuit.
+func (r *Router) unavailable(ctx context.Context, ch string) bool {
+	if r.overCap(ctx, ch) {
+		return true
+	}
+	return r.Breaker != nil && r.Breaker.Broken(ctx, ch)
+}
+
 func (r *Router) overCap(ctx context.Context, channel string) bool {
 	cap := r.capFor(channel)
 	if cap <= 0 || r.Budget == nil {
@@ -208,7 +227,10 @@ func (r *Router) capFor(channel string) float64 {
 func parseChannelModel(s string) (ChannelModel, error) {
 	idx := strings.Index(s, ":")
 	if idx < 0 {
-		return ChannelModel{}, fmt.Errorf("invalid channel:model %q", s)
+		if s == "" {
+			return ChannelModel{}, fmt.Errorf("empty channel:model")
+		}
+		return ChannelModel{Channel: s, Model: ""}, nil
 	}
 	return ChannelModel{Channel: s[:idx], Model: s[idx+1:]}, nil
 }

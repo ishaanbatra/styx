@@ -4,10 +4,56 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/progress"
 )
+
+// recordingChannel is an in-memory channel.Channel that captures the last
+// Request it received and returns a canned response.
+type recordingChannel struct {
+	got  channel.Request
+	resp string
+}
+
+func (r *recordingChannel) Name() string { return "fake" }
+func (r *recordingChannel) BudgetState(ctx context.Context) (channel.Budget, error) {
+	return channel.Budget{}, nil
+}
+func (r *recordingChannel) Send(ctx context.Context, req channel.Request) (channel.Response, error) {
+	r.got = req
+	return channel.Response{Text: r.resp}, nil
+}
+
+func TestApply_RoutesThroughInjectedChannelWithWrite(t *testing.T) {
+	fake := &recordingChannel{resp: "applied via codex"}
+	out, err := Apply(context.Background(), Options{
+		PlanContent: "# Plan\n\nAdd the feature.",
+		ProjectPath: "/some/proj",
+		Model:       "gpt-5",
+		Channel:     fake,
+	}, progress.Quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "applied via codex" {
+		t.Errorf("Apply returned %q, want the channel response", out)
+	}
+	if !fake.got.Write {
+		t.Error("injected channel must receive Write=true")
+	}
+	if fake.got.Model != "gpt-5" {
+		t.Errorf("Model = %q, want gpt-5", fake.got.Model)
+	}
+	if fake.got.WorkingDir != "/some/proj" {
+		t.Errorf("WorkingDir = %q, want /some/proj", fake.got.WorkingDir)
+	}
+	if !strings.Contains(fake.got.Prompt, "Add the feature.") {
+		t.Errorf("prompt missing plan content: %q", fake.got.Prompt)
+	}
+}
 
 func fakeClaude(t *testing.T, script string) string {
 	t.Helper()

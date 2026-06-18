@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,7 @@ type Tracker struct {
 type Event struct {
 	Channel   string
 	Verb      string
+	Model     string // model/tier used, e.g. "fable", "sonnet", "qwen2.5-coder:14b"
 	TokensIn  int
 	TokensOut int
 	Success   bool
@@ -102,6 +104,14 @@ func New(path string) (*Tracker, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	// v0.3 migration: per-model message counters for tier-aware degradation.
+	if _, err := db.ExecContext(context.Background(),
+		`ALTER TABLE usage ADD COLUMN model TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			db.Close()
+			return nil, fmt.Errorf("migrate usage.model column: %w", err)
+		}
+	}
 	return &Tracker{
 		db:   db,
 		caps: map[string]int{},
@@ -163,12 +173,26 @@ func (t *Tracker) Record(ctx context.Context, e Event) error {
 		successInt = 1
 	}
 	_, err := t.db.ExecContext(ctx,
-		`INSERT INTO usage (ts, channel, verb, tokens_in, tokens_out, success, error_kind) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		time.Now().Unix(), e.Channel, e.Verb, e.TokensIn, e.TokensOut, successInt, e.ErrorKind)
+		`INSERT INTO usage (ts, channel, verb, model, tokens_in, tokens_out, success, error_kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().Unix(), e.Channel, e.Verb, e.Model, e.TokensIn, e.TokensOut, successInt, e.ErrorKind)
 	if err != nil {
 		return fmt.Errorf("record usage: %w", err)
 	}
 	return nil
+}
+
+// ModelCount returns the number of usage rows for (channel, model) within
+// window. The REPL uses this for tier-aware degradation (fable -> opus).
+func (t *Tracker) ModelCount(ctx context.Context, channel, model string, window time.Duration) (int, error) {
+	cutoff := time.Now().Add(-window).Unix()
+	row := t.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage WHERE channel = ? AND model = ? AND ts >= ?`,
+		channel, model, cutoff)
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return 0, fmt.Errorf("count model messages for %s/%s: %w", channel, model, err)
+	}
+	return n, nil
 }
 
 // State computes UsedPct + cooldown for a channel, and also populates

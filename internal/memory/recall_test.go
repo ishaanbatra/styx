@@ -2,8 +2,10 @@ package memory
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // fakeEmbedder returns a fixed vector per exact text, so recall is deterministic.
@@ -77,5 +79,20 @@ func mustAdd(t *testing.T, s *Store, it Item) {
 	t.Helper()
 	if _, err := s.Add(context.Background(), it); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDecayedScore(t *testing.T) {
+	base := decayedScore(1.0, 1.0, time.Duration(0))
+	older := decayedScore(1.0, 1.0, recallHalfLife)
+	lowConf := decayedScore(1.0, 0.5, 0)
+	if base <= older {
+		t.Errorf("older memory not decayed: base=%v older=%v", base, older)
+	}
+	if math.Abs(older-0.5) > 1e-9 {
+		t.Errorf("half-life decay = %v, want ~0.5", older)
+	}
+	if math.Abs(lowConf-0.5) > 1e-9 {
+		t.Errorf("confidence weighting = %v, want 0.5", lowConf)
 	}
 }

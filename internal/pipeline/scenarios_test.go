@@ -7,7 +7,7 @@ import (
 
 // scenarioRunner builds a Runner with all adapters as configurable per-test stubs.
 type scenarioOpts struct {
-	testFailUntilAttempt   int  // 0 = never fail; N = pass at attempt N
+	testFailUntilAttempt   int // 0 = never fail; N = pass at attempt N
 	reviewFailUntilAttempt int
 	executeReturnsError    bool
 }

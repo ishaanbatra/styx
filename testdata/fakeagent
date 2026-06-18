@@ -1,0 +1,27 @@
+#!/bin/bash
+# Fake agent CLI speaking claude's stream-json protocol. Drives thread
+# lifecycle tests without real CLIs. Knobs (env):
+#   FAKEAGENT_SESSION      session id to emit            (default sess-1)
+#   FAKEAGENT_TEXT         assistant + result text       (default ok)
+#   FAKEAGENT_IN           input_tokens in result usage  (default 100)
+#   FAKEAGENT_OUT          output_tokens in result usage (default 20)
+#   FAKEAGENT_FAIL_RESUME  "1": exit 1 if --resume present (crash-recovery tests)
+#   FAKEAGENT_ARGS_LOG     append "$@" to this file (arg assertions)
+if [ -n "$FAKEAGENT_ARGS_LOG" ]; then
+  echo "$@" >> "$FAKEAGENT_ARGS_LOG"
+fi
+if [ "$FAKEAGENT_FAIL_RESUME" = "1" ]; then
+  for a in "$@"; do
+    if [ "$a" = "--resume" ]; then
+      echo "No conversation found with session ID" >&2
+      exit 1
+    fi
+  done
+fi
+S=${FAKEAGENT_SESSION:-sess-1}
+T=${FAKEAGENT_TEXT:-ok}
+IN=${FAKEAGENT_IN:-100}
+OUT=${FAKEAGENT_OUT:-20}
+echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$S\"}"
+echo "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"$T\"}]}}"
+echo "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$T\",\"session_id\":\"$S\",\"is_error\":false,\"usage\":{\"input_tokens\":$IN,\"output_tokens\":$OUT}}"

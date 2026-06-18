@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -19,8 +20,8 @@ func (s *stubBudget) UsedPct(_ context.Context, channel string) (float64, error)
 
 func newRouter(rules []config.Rule, caps config.BudgetCaps, used map[string]float64) *Router {
 	return &Router{
-		Rules: rules,
-		Caps:  caps,
+		Rules:  rules,
+		Caps:   caps,
 		Budget: &stubBudget{used: used},
 	}
 }
@@ -135,6 +136,37 @@ func TestRoute_ParallelRule(t *testing.T) {
 	}
 	if dec.SynthesizeWith.Channel != "claude" || dec.SynthesizeWith.Model != "sonnet-4-6" {
 		t.Errorf("SynthesizeWith = %+v, want claude:sonnet-4-6", dec.SynthesizeWith)
+	}
+}
+
+func TestParseChannelModel_BareChannel(t *testing.T) {
+	cm, err := parseChannelModel("codex")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cm.Channel != "codex" || cm.Model != "" {
+		t.Errorf("got %+v, want {codex }", cm)
+	}
+}
+
+func TestRoute_CarriesEffort(t *testing.T) {
+	r := newRouter(
+		[]config.Rule{
+			{Verb: "plan", Use: "codex", Effort: "high"},
+		},
+		config.BudgetCaps{},
+		nil,
+	)
+	dec, err := r.Route(context.Background(), Request{Verb: "plan"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	effort := reflect.ValueOf(dec).FieldByName("Effort")
+	if !effort.IsValid() {
+		t.Fatal("Decision.Effort missing")
+	}
+	if got := effort.String(); got != "high" {
+		t.Errorf("Effort = %q, want high", got)
 	}
 }
 

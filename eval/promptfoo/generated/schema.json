@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["reply", "dispatch", "parallel_dispatch", "pipeline", "handoff", "remember", "escalate"]
+    },
+    "dispatches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "thread": {"type": "string", "enum": ["claude", "codex", "agy", "ollama"]},
+          "model": {"type": "string"},
+          "message": {"type": "string"},
+          "cli_options": {"type": "array", "items": {"type": "string"}},
+          "rationale": {"type": "string"},
+          "risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}
+        },
+        "required": ["thread", "message"]
+      }
+    },
+	"pipeline": {"type": "string", "enum": ["research", "auto", "review", "intel", ""]},
+	"reply": {"type": "string"},
+	"remember": {"type": "string"},
+	"confidence": {"type": "number"}
+  },
+  "required": ["action", "confidence"]
+}

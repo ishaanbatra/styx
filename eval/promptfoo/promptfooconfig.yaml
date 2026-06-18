@@ -1,0 +1,28 @@
+# promptfoo harness for the styx routing brain.
+# Fast iteration loop ONLY — the canonical gate is the Go test
+# `STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy`.
+# Run from this directory:
+#   npx promptfoo@latest eval -j 1            # serial, faithful to the Go gate
+#   npx promptfoo@latest view                 # inspect per-utterance misses
+# Regenerate generated/ after any cards.go/prompt.go change:
+#   (cd ../.. && go run ./eval/promptfoo/braindump -outdir eval/promptfoo/generated)
+description: styx routing-brain accuracy (faithful to internal/brain/brain.go)
+
+providers:
+  - id: file://provider.js
+    label: qwen2.5-coder:7b
+
+# Default matrix: v14 (the previous shipped prompt, no risk language) vs v15
+# (what ships now, == internal/brain/prompt.go's systemPreamble after the
+# per-dispatch risk-tier rework). Each prompt label maps to a variants/<label>.txt
+# file via prompt.js. The full history (baseline, v1..v14) is kept in variants/ —
+# add any to this list to reproduce the search. gen-tests.js reads the expanded
+# testdata/brain/utterances.json (192 cases) at run time. The canonical gate is
+# the Go test, which exercises prompt.go (== v15) directly; promptfoo must agree.
+prompts:
+  - id: file://prompt.js:v14
+    label: v14
+  - id: file://prompt.js:v15
+    label: v15
+
+tests: file://gen-tests.js

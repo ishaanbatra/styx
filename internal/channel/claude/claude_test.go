@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ishaanbatra/styx/internal/channel"
@@ -32,6 +33,43 @@ func TestSend_OneShotCapturesStdout(t *testing.T) {
 	}
 	if resp.Text == "" {
 		t.Error("expected non-empty Text")
+	}
+}
+
+func TestSend_WriteEnabledPassesSkipPermissions(t *testing.T) {
+	dir := fakeCLI(t, `echo "$@"`)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	c := New()
+	resp, err := c.Send(context.Background(), channel.Request{Model: "sonnet-4-6", Prompt: "implement", Write: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Text, "--dangerously-skip-permissions") {
+		t.Errorf("Write request args = %q, want --dangerously-skip-permissions", resp.Text)
+	}
+}
+
+func TestSend_NoSkipPermissionsByDefault(t *testing.T) {
+	dir := fakeCLI(t, `echo "$@"`)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	c := New()
+	resp, err := c.Send(context.Background(), channel.Request{Model: "sonnet-4-6", Prompt: "summarize"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(resp.Text, "dangerously-skip-permissions") {
+		t.Errorf("default request must not skip permissions, args = %q", resp.Text)
+	}
+}
+
+func TestClaudeArgs_Effort(t *testing.T) {
+	got := claudeArgs(channel.Request{Prompt: "hi", Model: "opus", Effort: "ultracode"})
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "--effort ultracode") {
+		t.Errorf("missing --effort ultracode in %v", got)
+	}
+	if !strings.Contains(joined, "--model opus") {
+		t.Errorf("missing --model opus in %v", got)
 	}
 }
 

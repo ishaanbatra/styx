@@ -1222,14 +1222,14 @@ var Cards = []Card{
 	{
 		CLI: "claude",
 		Bin: "claude",
-		Condensed: "claude — Claude Code CLI. Models by tier: opus (deep planning, architecture, hard debugging, complex implementation — the top callable tier), sonnet (default implementation/review), haiku (cheap classify/distill). Best for: multi-file implementation, debugging with repo context, planning, code review. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work. (A 'fable' tier exists for the most demanding work but is currently suspended and maps to opus — prefer opus.)",
+		Condensed: "claude — Claude Code CLI. Models by tier: opus (deep planning, architecture, hard debugging, complex/ambiguous implementation — the top callable tier), sonnet (reviews and claude-side implementation/refactors), haiku (cheap classify/distill). Best for: planning, architecture, debugging with repo context, ambiguous or multi-file work, and code review. Hand well-scoped implementation from a clear plan to codex (it is faster to a first diff); keep ambiguous/architectural implementation here. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work. (A 'fable' tier exists for the most demanding work but is currently suspended and maps to opus — prefer opus.)",
 		ExpectedFlags: []string{"--resume", "--output-format", "--model", "--add-dir", "--dangerously-skip-permissions"},
 		ResumeProbe:   "--resume",
 	},
 	{
 		CLI: "codex",
 		Bin: "codex",
-		Condensed: "codex — OpenAI Codex CLI (gpt-5 class). Best for: sandboxed script checks, quick second-opinion code reviews, algorithmic one-shots, cross-checking claude's work. Headless `codex exec`. No interactive handoff.",
+		Condensed: "codex — OpenAI Codex CLI (gpt-5 class). PRIMARY IMPLEMENTER: best for applying well-scoped work from a clear plan or spec (fast to a first diff) — fixing tests, writing/refactoring functions, single-file or tightly-scoped multi-file edits; also algorithmic one-shots, sandboxed script checks, and second-opinion reviews. Headless `codex exec` (applies edits autonomously with `--sandbox workspace-write`). No interactive handoff; route ambiguous or architectural implementation to claude instead.",
 		ExpectedFlags: []string{"exec", "--model"},
 		ResumeProbe:   "resume",
 	},
@@ -1287,7 +1287,8 @@ Actions:
 - remember: the user states a durable fact, decision, or preference to keep ("note this", "remember that..."). Put it in "remember". If the user is correcting a routing choice you made, prefix it with "routing-preference: ".
 - escalate: you are genuinely unsure how to route.
 
-Model tiers for claude dispatches: opus = judgment-heavy work (brainstorm, architecture, planning, hard debugging) and complex implementation. sonnet = normal implementation, refactors, review. haiku = trivial classification. (There is also a "fable" tier for the most demanding work, but it is currently suspended and maps to opus — prefer opus.)
+Implementation routing: send well-scoped implementation from a clear plan/spec to codex (it is faster to a first diff); send ambiguous, architectural, or multi-file-judgment implementation to claude.
+Model tiers for claude dispatches: opus = judgment-heavy work (brainstorm, architecture, planning, hard debugging) and complex/ambiguous implementation. sonnet = claude-side implementation, refactors, review. haiku = trivial classification. (There is also a "fable" tier for the most demanding work, but it is currently suspended and maps to opus — prefer opus.)
 Set "confidence" to your honest routing confidence (0-1). Respect routing-preference memories — they are corrections from this user.
 
 Capability cards:
@@ -1810,22 +1811,25 @@ git commit -m "test(brain): env-gated routing accuracy suite with labeled fixtur
 > agrees with the 22 utterances *you wrote*. Prove it on inputs you did not
 > author before building threads/REPL on top of it.
 
-- [ ] **Expand the fixture from real usage.** Add 25–40 utterances drawn from
+- [x] **Expand the fixture from real usage.** Add 25–40 utterances drawn from
   how you actually talk to a dev assistant (skim recent shell history / Claude
   Code sessions) to `testdata/brain/utterances.json`, labeling
   `want_action`/`want_thread`/`want_pipeline` honestly *before* running the brain.
-- [ ] **Run for real and read every miss:**
+  *(Done: fixture set is now 99 labeled utterances.)*
+- [x] **Run for real and read every miss:**
   `ollama pull llama3.2:3b && STYX_BRAIN_IT=1 go test ./internal/brain/ -run TestRoutingAccuracy -v`
   Read each `MISS` line — do not just look at the ratio.
-- [ ] **Triage misses** into: prompt-fixable (tune `systemPreamble`),
+- [x] **Triage misses** into: prompt-fixable (tune `systemPreamble`),
   card-fixable (sharpen a capability card), or genuinely ambiguous (acceptable —
   the REPL escalates low-confidence turns to haiku anyway).
-- [ ] **Decision gate.** If accuracy on the *expanded* set stays < 80% after
+  *(Done: see `eval/promptfoo/RESULTS.md` for the per-miss triage.)*
+- [x] **Decision gate.** If accuracy on the *expanded* set stays < 80% after
   tuning, STOP and reconsider before Phase 4: raise `confidence_threshold` so
   more turns escalate to haiku, try a larger brain model, or accept a
   confirm-the-route UX. Record the achieved accuracy and the decision in the
   decisions-log addendum at the end of this plan.
-- [ ] **Commit** only the expanded fixtures + any prompt/card tuning:
+  *(Done: 96% — comfortably clears the gate; see the addendum follow-on entry.)*
+- [x] **Commit** only the expanded fixtures + any prompt/card tuning:
 
 ```bash
 git add testdata/brain/ internal/brain/
@@ -4800,6 +4804,11 @@ git commit -m "feat(repl): conversational frontend — bare styx, one-shot turns
 
 - [ ] **Use it.** Run `styx` in the styx repo and drive one small real change
   end to end (a tiny refactor or a doc fix) through dispatch + a pipeline.
+  Implementation dispatches should land on **codex** (the primary implementer
+  per the v0.3 `implement` rework — see the decisions-log entry below); the brain
+  routes well-scoped code-work to codex and reserves claude for ambiguous/
+  architectural work. Confirm the dogfood run actually dispatches code-work to
+  codex, not claude — if it doesn't, that is a brain-preamble miss to record.
 - [ ] **Inspect by hand afterward:**
   - every memory row written: `sqlite3 ~/.config/styx/state/memory/styx.db 'select kind,text,source from memory'`
   - thread state JSON under the threads dir; `/why` output; `styx budget` rows
@@ -4819,6 +4828,28 @@ brain-dispatch the *default* path, which silently widens the autonomy surface
 versus today's explicit `styx auto`/`execute`. They are deliberately small and
 spec-consistent (the brain proposes; the REPL — not the model — enforces).
 Run them after Checkpoint B so the design is informed by real use.
+
+> **Prompt-freeze note (2026-06-16, branch `brain/fixture-policy-align`).** Task
+> 19.1's risk work is the *only* change in the rest of this plan that touches the
+> brain's gate-tested prompt (preamble / cards / `ActionSchema`). Audited: 19.2
+> changes only memory-hit *display* (`renderHits`), which the gate/promptfoo never
+> sees (the gate prompt is utterance-only); 19.3 is audit-only; Task 20 only adds a
+> REPL test. So once 19.1's reconciled preamble + the risk-eval extension (Step 4a)
+> land and the canonical promptfoo run confirms them, **the brain prompt is
+> frozen** — everything remaining is pure Go. Risk was reconciled to **per-dispatch
+> only** (Step 3): the original top-level-schema design broke the 3B (51%); the
+> shipped design holds routing at ~91% and teaches risk via a few read/ship
+> few-shot anchors.
+>
+> **FROZEN (confirmed 2026-06-16).** Run on the new default brain
+> `qwen2.5-coder:7b` (192 fixtures, 8 risk-labeled): the canonical Go gate and the
+> promptfoo harness agree **byte-for-byte** — `v15` scores routing **178/192
+> (93%)**, risk-emission **6/8 (75%)**, folded gate **176/192 (92%)**, same
+> 16-miss set. Adding the per-dispatch risk prose was routing-neutral (`v14`
+> no-risk baseline: 177/192) while lifting risk 2/8 → 6/8, so `v15` was kept (not
+> reverted) and **the brain prompt is now frozen**. `prompt.go` ==
+> `variants/v15.txt` == `generated/preamble_shipped.txt`. Everything remaining
+> (19.2 / 19.3 / Task 20) is pure Go.
 
 ### Task 19.1: risk tiers on the Action + REPL ship-confirmation gate
 
@@ -4984,14 +5015,39 @@ and inside the dispatch loop, extend the guard:
 		}
 ```
 
-In `ActionSchema`, add a `risk` enum to the dispatch item properties and to the
-top-level properties (both: `"risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}`).
+In `ActionSchema`, add a `risk` enum to the **dispatch item properties only**
+(`"risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}`). Do **not**
+add a top-level `risk` to the schema. Empirically (2026-06-16, `llama3.2:3b`): a
+top-level optional risk scalar makes the 3B "satisfy" the schema by emitting
+`risk` and dropping the required `dispatches` array — routing collapsed to 51%
+(96/190). The Go `Action.Risk` field still exists (EffectiveRisk reads it), but
+it is **code-derived only** — set by the REPL / `EffectiveRisk` (e.g. `auto` →
+ship), never emitted by the model — so it needs no schema slot. Risk the model
+proposes rides **per-dispatch**.
 
-- [ ] **Step 4: Teach the brain to set risk** — in `internal/brain/prompt.go`, insert into `systemPreamble` just before the `Capability cards:` line:
+- [ ] **Step 4: Teach the brain to set risk** — in `internal/brain/prompt.go`, insert into `systemPreamble` just before the `Capability cards:` line. Per-dispatch only — no pipeline/handoff promise, since the schema carries risk per-dispatch:
 
 ```
-Risk: set "risk" on each dispatch (and on pipeline/handoff actions) to "read" (no writes — research, explain, review, status), "edit" (modifies files; the default), or "ship" (commits, pushes, opens PRs, deploys). When unsure, choose "edit". styx confirms with the user before any "ship" action, so never use "ship" to mean "important".
+Risk: each dispatch may carry an optional "risk" - "read" (no writes: research, explain, review, status), "edit" (changes files; this is the default, so omit it), or "ship" (commits, pushes, opens PRs, deploys). Omit "risk" unless the dispatch clearly only reads or clearly ships. Never use "ship" to mean "important" - styx asks the user before any ship action.
 ```
+
+This prose alone recovered routing to v14's level (172–173/192) on the live gate
+(2026-06-16) **and** fixed a structural failure the earlier wording caused (the
+3B emitted invalid JSON on "add a risk tier field … wire it into the REPL"). If
+the risk-eval subset (Step 4a) shows weak risk emission, anchor risk into one or
+two few-shot examples rather than expanding this prose — the 3B tunes to
+examples, not rules (see `eval/promptfoo/RESULTS.md`).
+
+- [ ] **Step 4a: Make the gate score risk** — so promptfoo and the Go gate
+  regression-test risk *emission*, not just routing:
+  - Label ~8 fixtures in `testdata/brain/utterances.json` with `"want_risk"`:
+    clear `read` explains/summaries, a couple of `edit` implements, and 2 new
+    explicit-thread `ship` cases ("have codex commit … and push it"). The
+    fixtures stay the single source of truth.
+  - Extend `eval/promptfoo/gate.js` (+ `gate-assert.js`, `gen-tests.js`) and
+    `internal/brain/integration_test.go` to check `dispatches[0].risk` when a
+    fixture is risk-labeled — an empty/omitted risk counts as `edit` (mirroring
+    `EffectiveRisk`). Report routing, risk, and folded gate accuracy separately.
 
 - [ ] **Step 5: Read-class permission drop (adapter)** — add `ReadOnly bool` to `agent.DispatchSpec`, thread it through `Manager.Dispatch` → runner, and in the claude arg builder (Task 11) append the write-permission flag conditionally. Extract the builder if needed so it is unit-testable:
 
@@ -5931,5 +5987,120 @@ the single biggest miss bucket — and (b) sharpen thread selection
 Lesson for re-execution: the brain must be a *non-reasoning* instruct model.
 Some embedded code/test snippets above still show the original `qwen3:4b`; the
 as-built default and the `[brain] model`/`applyBrainDefaults`/test defaults are
-`llama3.2:3b`. The remaining ~15% misses are mostly debatable fixture labels and
-are the intended job of the haiku-escalation valve at low confidence.
+`llama3.2:3b`. The remaining misses were first assumed to be mostly debatable
+labels handled by the haiku-escalation valve — that assumption was **refined and
+partly corrected** by the preamble rework below.
+
+**Routing preamble rework — 85% → 96% (2026-06-15, Checkpoint A follow-on):**
+
+Building on the `llama3.2:3b` swap above, `systemPreamble` was reworked (prompt
+only — no model, dataset, or code-logic change) and re-validated on the canonical
+gate: **95/99 = 96%**, stable across two runs with identical misses (up from
+84/99). The baseline's dominant failure was *pipeline-verb leakage* (the 3B
+keyword-matched `intel`/`review`/`research` on any "codebase"/"find"/"context"/
+"diff" mention). The fix reserves pipeline verbs for the four exact styx ops and
+sends repo code-work to claude, plus crisp boundaries for `research` (answers
+that live *outside* the repo), `review` (the current diff/changes vs a PR/
+design), `handoff`, `remember` (store the fact, don't acknowledge via `reply`),
+and `agy` (size routes large-file explains), with a `parallel_dispatch` anchor
+example.
+
+Two corrections to the assumption in the entry above:
+
+- The residual misses are **not** mostly debatable labels recovered by escalation.
+  The 4 remaining are: 1 structured-output JSON-serialization limit (routing is
+  *correct* — `dispatch:codex` — but the 3B emits truncated JSON when the
+  utterance contains `()`), 2 genuinely debatable labels (`is this approach
+  sound?` / `what's the blast radius?` — reply vs dispatch:claude), and 1 real
+  `auto`-vs-dispatch miss. **All four are emitted at confidence 0.8–0.9**, so
+  raising `confidence_threshold` would *not* catch them — the haiku valve is for
+  *low-confidence* turns, of which the fixture set has none. The real levers for
+  the residual are JSON-repair reliability and dataset expansion, not the
+  threshold.
+- Prompt tuning has hit diminishing returns on a 3B: intermediate variants that
+  added more rules/examples regressed (destabilized `parallel_dispatch`/`auto`),
+  and one rule that forced analysis-questions to claude cost ~7 points of
+  collateral. Further accuracy should come from a bigger brain or more fixtures,
+  not more rules — consistent with Checkpoint A's decision-gate options.
+
+The two debatable labels are surfaced for adjudication (not tuned to, since
+forcing them regressed other cases). The prompt was iterated with a byte-faithful
+promptfoo harness now in `eval/promptfoo/` (dev tool, `npx`, no `go.mod` deps)
+that mirrors `brain.go`'s `/api/chat` request and `TestRoutingAccuracy`'s match
+logic exactly and generates its tests from the same `utterances.json`; the Go
+test stays canonical. Full writeup + miss buckets: `eval/promptfoo/RESULTS.md`.
+
+**Codex becomes the primary implementer — v0.3 `implement` verb (2026-06-15, pre-Checkpoint B):**
+
+A deep, adversarially-verified research pass (25 claims / 26 sources, 2025–2026)
+confirmed the differentiated split this plan assumed but had mis-encoded: Opus/
+Claude are the planners/architects (ambiguous, multi-file, long-context, hard
+debugging); **codex is the primary implementer for well-scoped work from a clear
+plan** ("faster to a first diff"). The justification is **task-fit, not cost** —
+the "codex is ~4× cheaper" and "planner-executor saves 60–80%" claims were
+*refuted* in verification, so they are deliberately not the rationale.
+
+Shipped in the verb-table system (branch `feat/codex-implementer`, PR #3), the
+authority for `styx auto`/`plan`/`execute`:
+
+- `channel.Request` gained a `Write` field for autonomous file access: codex →
+  `exec --sandbox workspace-write`; claude → `--dangerously-skip-permissions`.
+- New `implement` verb in `routing.toml`/`default_routing.go`: **codex primary,
+  claude fallback**; the `complex` signal (architecture/refactor/migrate/
+  redesign/rewrite) keeps the work on claude. `execute.Apply` takes an injected
+  channel (nil = built-in streaming claude path); `auto.go` routes the execute +
+  fix-loop stages through it. `config.EnsureImplementRules` injects the rules
+  into pre-v0.3 configs on next run, with a backup.
+
+Plan content updated to match: the **codex** and **claude** capability cards
+(`internal/brain/cards.go` block above) and the system-preamble tier guidance now
+position codex as the implementer and claude as the planner/architect/reviewer;
+Checkpoint B notes implementation dispatches should land on codex. Mechanical
+test fixtures that use `claude·sonnet/"implementation"` as generic plumbing
+samples (Action unmarshal, TUI render, `claudeArgs`) were left as-is — they
+exercise wiring, not routing policy, and several are claude-specific.
+
+**Open follow-up (required to make the REPL brain match):** the as-built brain
+preamble (`internal/brain/prompt.go`) and the `utterances.json` fixtures still
+encode the prior policy — the 96% routing-accuracy gate above was tuned with
+"send repo code-work to claude," and the entry above records that *forcing*
+routing changes onto a 3B brain **regressed** accuracy (e.g. one rule cost ~7
+points). So flipping the brain to route well-scoped implementation → codex is not
+free: it needs preamble rework + re-labeling `utterances.json` (the implementation
+utterances now expect `dispatch:codex`) + re-running `TestRoutingAccuracy` and the
+promptfoo harness to confirm the gate holds. Until that lands, the cards/guidance
+here state the intended policy but the live brain may still route code-work to
+claude — verify during Checkpoint B and record the deltas. The verb-table path
+(`styx auto`/`execute`) already routes to codex correctly today.
+
+**REPL brain aligned to codex-as-implementer + labelled set expanded 99->190 (2026-06-15, branch `brain/fixture-policy-align`):**
+
+The open follow-up above is now actioned (prompt/cards reworked; promptfoo re-tune handed to a separate session). Three parts:
+
+1. **Dataset expansion + audit (`testdata/brain/utterances.json`, 99 -> 190).** Added **91 new user-voice utterances** spanning every action, weighted to real usage and covering gaps the 99-set lacked: exa/websearch/deep `research` (answers outside the repo), superpowers handoff-vs-`writing-plans`, well-scoped `codex` implementation, the pipelines/parallel/remember/reply/agy/ollama surfaces, **2 `escalate` exemplars (previously zero)**, and an internal-vs-external "find out" boundary pair ("find out how OUR cooldown is configured" -> claude vs external-lib WAL -> research). Audited all 99: **8 well-scoped implementation fixtures relabelled `claude`->`codex`** (implement-retry-logic, fix-TestRecall, ship-risk-gate, provenance-columns+migration, rename-ParseClaudeEvent, mocks->fakes, per-channel-timeouts, distill-and-restart@70%). **4 candidate flips were deliberately reversed** (kept claude): wire-circuit-breaker-into-router, harden-stream-json-parser, tighten-systemPreamble, risk-tier-field+wire-REPL -- architectural/integration/tuning judgment that serves as load-bearing claude anchors ~6 new fixtures contrast against. Built via a fan-out generation workflow (one agent per action category) + an adversarial dedup/label critic; contentious labels (superpowers handoff-vs-claude, compound -> terminal-intent, the `escalate`/boundary cases) were decided by judgment and documented for review (fixtures are user-editable).
+
+2. **Preamble + cards rework (`prompt.go`, `cards.go`).** Mirrored the 2026-06-15 capability cards (codex = PRIMARY IMPLEMENTER; claude = planner/architect/reviewer who hands well-scoped work to codex). Preamble: rewrote the claude/codex thread-choice lines, added an explicit "Implementation routing: well-scoped -> codex, ambiguous/architectural/refactor/multi-file-judgment -> claude; honor an explicit thread name" line, updated the tier line (opus = complex/ambiguous implementation; sonnet = claude-side implementation), flipped the distiller few-shot example to codex (to match the relabelled fixture), and added codex-implementation few-shot anchors (`implement ... we discussed`, `fix the failing TestRoute test`) plus a planning->claude anchor. Edits kept minimal per the decision-log lesson that piling rules onto a 3B destabilizes it.
+
+3. **Measurement + harness.** On the **expanded 190-case gate the pre-rework prompt scores 80%** (152/190) -- the expected floor: it routes the new/relabelled `codex` cases to claude under the old policy. (The prior **96%** was on the 99-case, pre-codex-policy set and is not comparable.) The reworked preamble is **not yet re-tuned/re-measured** -- that promptfoo iteration is being done in a separate session. Harness wired for it: `eval/promptfoo/generated/` regenerated from source, `variants/v7.txt` = the new shipped preamble (byte-identical to `prompt.go`), `prompt.js`/`promptfooconfig.yaml` compare `v5` (old shipped) vs `v7` (new shipped) on the 190-case set; `ARCHITECTURE.md` + `eval/promptfoo/README.md` updated. `gofmt`/`vet`/`build`/unit-tests clean. `RESULTS.md` final numbers to be completed after the re-tune.
+
+**Routing preamble re-tuned to 91% on the 190-case gate (2026-06-15, branch `brain/fixture-policy-align`):**
+
+The promptfoo re-tune above is now done (prompt-only -- no model, dataset, code-logic, or label change). The reworked-but-untuned preamble (`v7`) scored **83.7% (159/190)** as the starting point; iterating few-shot example anchors only brought the shipped preamble to **91.1% (173/190)** on the canonical Go gate (`TestRoutingAccuracy`), **stable across two runs with an identical 17-miss set**, and byte-matching the promptfoo harness prediction exactly. Net **+14 cases** over the untuned baseline (+16 fixed, 2 regressed).
+
+What worked, in order of yield (re-confirming the prior lesson that **examples anchor a 3B far more than prose rules** -- no prose rules were added):
+
+- **+8: five generalizing codex few-shot anchors** for the well-scoped-implementation verb-classes the policy flip targets but the 3B kept sending to claude -- `add a <column> ... plus the migration`, `add a --<flag> ... and thread it through`, `rename the <type> and fix all the call sites`, `convert these mocks to fakes`, `write unit tests for the <named target>`. Codex miss bucket fell 13->5. The examples are class-teaching, not fixture lifts (different identifiers/targets than any fixture).
+- **+4: `reply`/`review`/`intel`/`auto` anchors** for novel user phrasings the 99-set never exercised ("which threads are busy and what are they working on" -> reply; "give my working tree a once-over and flag anything risky" -> review; "regenerate context.md ..." -> intel; "run the full build cycle on this change" -> auto). Recovered all reply misses plus the build-cycle->auto collateral.
+- **+2: a `jot down ...` -> remember anchor and a collaborative-framing `let's think through ... together` -> handoff anchor** (handoff distinct from the one-shot "run the <skill>" -> claude case).
+
+Rejected probes (the **3B "example budget"** is the binding constraint -- adding examples to one bucket deterministically knocks over cases in another): an ollama-stub/review/intel batch (`v9`) and a budget-neutral codex swap that dropped the load-bearing `find out how our cooldown is configured -> claude` example (`v13`) both *destabilized the hard-won codex bucket* and were discarded. The model is **deterministic at temperature 0** (a control variant's 17-miss set was byte-identical across two separate runs), which made every collateral effect attributable rather than noise.
+
+Residual 17 misses, bucketed (left deliberately, consistent with "don't force contentious labels / don't ship a regression"):
+
+- **2 true regressions vs the untuned `v7` baseline:** `build test and ship the new ollama HTTP adapter` (-> claude/codex, want auto) and `research whether the codex cli added a non-interactive batch mode upstream` (-> codex, want research) -- both jittery keyword casualties of the codex anchors ("ollama adapter"/"codex"). Net is +14, so chasing these 2 (which re-destabilizes codex) is the diminishing-returns trap; left and reported.
+- **~6 codex/claude frontier cases** the 3B won't move without collateral: ship-risk-gate, per-channel-timeouts, fix-off-by-one-in-budget-window, apply-ClassifiedError-pattern, dry-run-flag, ParseClaudeEvent-tests (all want codex; the 3B reads them as architectural/systemy and sends to claude).
+- **Documented-hard / model-limit (unchanged from prior analysis):** `cosine()` structured-output JSON limit (routing is correct codex, the 3B emits truncated/empty JSON on `()`); the 2 `escalate` exemplars; `is this routing approach sound?` (the reply-vs-claude dispute); `run the brainstorming skill ...` (the brainstorm-token-vs-one-shot-skill clash, lands on intel); compound `do the entire intel index rebuild feature and ship it` (terminal intent = auto, the 3B keys on "intel"); `exa: ...mcp server auth...` (one exa case of many that misroutes); `stub out an empty implementation of the Channel interface` (the word "implementation" pulls it off ollama).
+
+Surfaced for the user's adjudication (not tuned to, since forcing them regressed others on a 3B): the `is this approach sound?` reply-vs-`dispatch:claude` label, and whether the 2 `escalate` exemplars / the compound-terminal-intent cases are realistically learnable by a 3B or should be accepted as out-of-reach (bigger brain / more fixtures are the real levers, per Checkpoint A).
+
+Shipped: `prompt.go`'s `systemPreamble` == `variants/v7.txt` (byte-identical, verified via `braindump` + `diff`); `cards.go` untouched; `eval/promptfoo/generated/` regenerated; `variants/v8`..`v14` retain the iteration trail; `promptfooconfig.yaml` restored to the `v5`-vs-`v7` default; `RESULTS.md` updated with the full iteration table + buckets. `gofmt`/`vet`/`build`/unit-tests clean; canonical gate run twice. `utterances.json` labels were **not** changed (treated as the user's fixed gate).

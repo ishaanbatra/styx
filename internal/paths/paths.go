@@ -73,6 +73,15 @@ func ProjectsPath() (string, error) {
 	return filepath.Join(d, "projects.toml"), nil
 }
 
+// ModelsCachePath is where the model-discovery cache (models.json) lives.
+func ModelsCachePath() (string, error) {
+	dir, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "models.json"), nil
+}
+
 // UsageDBPath returns the absolute path to the sqlite usage log.
 func UsageDBPath() (string, error) {
 	d, err := StateDir()
@@ -89,6 +98,15 @@ func MemoryDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(s, "memory"), nil
+}
+
+// AuditDir returns the directory holding per-project session audit logs.
+func AuditDir() (string, error) {
+	s, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s, "audit"), nil
 }
 
 // ThreadsDir returns the directory holding per-project agent-thread state.

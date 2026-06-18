@@ -6,17 +6,18 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/progress"
 )
 
 // fakeInner is a minimal Channel double used only in decorator tests.
 type fakeInner struct {
-	name       string
-	sendErr    error
-	respText   string
-	lastReq    Request
-	callCount  int
+	name      string
+	sendErr   error
+	respText  string
+	lastReq   Request
+	callCount int
 }
 
 func (f *fakeInner) Name() string { return f.name }
@@ -35,9 +36,10 @@ func (f *fakeInner) BudgetState(_ context.Context) (Budget, error) {
 }
 
 // TestWithProgress_NarratesSendAndForwards verifies that a non-interactive Send:
-//   (a) forwards the exact request to the inner channel,
-//   (b) returns the inner channel's Response unchanged,
-//   (c) the buffer contains a start line and a done line mentioning the label.
+//
+//	(a) forwards the exact request to the inner channel,
+//	(b) returns the inner channel's Response unchanged,
+//	(c) the buffer contains a start line and a done line mentioning the label.
 func TestWithProgress_NarratesSendAndForwards(t *testing.T) {
 	var buf bytes.Buffer
 	tr := progress.New(&buf, false, true) // verbose so Info shows too
@@ -169,4 +171,47 @@ func TestWithProgress_BudgetState_ForwardsToInner(t *testing.T) {
 	if b.UsedPct != 42.0 {
 		t.Errorf("UsedPct = %.1f, want 42.0", b.UsedPct)
 	}
+}
+
+// slowChannel blocks until its context is cancelled.
+type slowChannel struct{}
+
+func (slowChannel) Name() string { return "slow" }
+func (slowChannel) BudgetState(context.Context) (Budget, error) {
+	return Budget{}, nil
+}
+func (slowChannel) Send(ctx context.Context, _ Request) (Response, error) {
+	<-ctx.Done()
+	return Response{}, ctx.Err()
+}
+
+func TestWithTimeoutCancelsSlowSend(t *testing.T) {
+	w := &WithTimeout{Inner: slowChannel{}, D: 50 * time.Millisecond}
+	start := time.Now()
+	_, err := w.Send(context.Background(), Request{Prompt: "x"})
+	if err == nil {
+		t.Fatal("want timeout error, got nil")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("timeout did not fire promptly")
+	}
+}
+
+func TestWithTimeoutSkipsInteractive(t *testing.T) {
+	// Interactive sends hand over the terminal; they must never be timed out.
+	w := &WithTimeout{Inner: &fakeOK{}, D: time.Nanosecond}
+	if _, err := w.Send(context.Background(), Request{Interactive: true}); err != nil {
+		t.Fatalf("interactive send timed out: %v", err)
+	}
+}
+
+// fakeOK returns immediately.
+type fakeOK struct{}
+
+func (*fakeOK) Name() string { return "ok" }
+func (*fakeOK) BudgetState(context.Context) (Budget, error) {
+	return Budget{}, nil
+}
+func (*fakeOK) Send(context.Context, Request) (Response, error) {
+	return Response{Text: "ok"}, nil
 }

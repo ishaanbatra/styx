@@ -17,11 +17,13 @@ type Channel interface {
 // Request is a single outbound call.
 type Request struct {
 	Model       string       // provider-specific identifier ("sonnet-4-6", "qwen2.5-coder:14b")
+	Effort      string       // optional reasoning-effort, pass-through to the channel CLI
 	System      string       // optional system prompt
 	Prompt      string       // user prompt
 	Attachments []Attachment // file contents to inline-include
 	Interactive bool         // if true, exec interactively (build verb); response will be empty
 	WorkingDir  string       // execute relative to this dir (used for interactive verbs)
+	Write       bool         // if true, the channel may autonomously edit files / run commands (implement verb)
 }
 
 // Attachment is a file the channel should consider as context.
