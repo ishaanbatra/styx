@@ -149,6 +149,15 @@ wiring. `Brain` configures the planned local ollama routing brain and memory
 embedding model; `Tiers` maps brain tier names to claude CLI model aliases, with
 `fable` currently mapped to `opus` while the fable tier is suspended.
 
+## Model Sync (internal/modelsync)
+
+`modelsync` owns model discovery state that keeps routing in the
+defer-to-latest form. The package defines a small `Discoverer` interface and
+per-channel `Result` records. The shipped discoverers are `CodexDiscoverer`,
+which reads the top-level `model` setting from the Codex CLI config for
+transparency, and `ClaudeDiscoverer`, which reports the stable class aliases
+`opus`, `sonnet`, `haiku`, and `fable`.
+
 ## Brain (internal/brain)
 
 The REPL brain emits schema-constrained `Action` JSON from a small, fast,
