@@ -111,3 +111,28 @@ func TestRiskInSchema(t *testing.T) {
 		t.Error("ActionSchema missing risk property")
 	}
 }
+
+func TestDispatchProjectAndExtraRootsRoundTrip(t *testing.T) {
+	raw := `{"action":"dispatch","confidence":0.9,"dispatches":[
+		{"thread":"claude","message":"trace the upload","project":"ai-ta-teacher-ui","extra_roots":["/repos/ai-ta-backend"]}
+	]}`
+	var a Action
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		t.Fatal(err)
+	}
+	d := a.Dispatches[0]
+	if d.Project != "ai-ta-teacher-ui" {
+		t.Errorf("Project = %q", d.Project)
+	}
+	if len(d.ExtraRoots) != 1 || d.ExtraRoots[0] != "/repos/ai-ta-backend" {
+		t.Errorf("ExtraRoots = %v", d.ExtraRoots)
+	}
+}
+
+func TestProjectAndExtraRootsInSchema(t *testing.T) {
+	for _, want := range []string{`"project"`, `"extra_roots"`} {
+		if !bytes.Contains(ActionSchema, []byte(want)) {
+			t.Errorf("ActionSchema missing %s", want)
+		}
+	}
+}
