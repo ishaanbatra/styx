@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-18 (Task 3.3)
+last_verified: 2026-06-18
 ---
 
 # Styx Architecture
@@ -300,8 +300,13 @@ routing opens a channel circuit after 3 failures in 10 minutes.
 
 `Event` carries two attribution fields added in v0.4: `Project` (the resolved
 stable project ID, "" if none) and `RunID` (a per-session/per-verb correlation
-string, "" if none). Both columns are added via idempotent `ALTER TABLE` on
-open, so existing `usage.db` files are migrated transparently on first access.
+string, "" if none). Run-ids are minted via `pipeline.NewRunID` — once per REPL
+session (`repl-<name>`), once per `sendWithFallback` invocation (keyed by verb),
+and the auto pipeline reuses its own `State.RunID` for the review stage. Every
+budget `Record` call site now tags its event, making `project`/`run_id` the seam
+the planned self-improvement tooling reads back to attribute usage. Both columns
+are added via idempotent `ALTER TABLE` on open, so existing `usage.db` files are
+migrated transparently on first access.
 
 The other multi-terminal state surfaces were already hardened before the budget
 WAL change: `projects.toml` is written via `config.SaveProjects` tmp+rename,
