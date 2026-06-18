@@ -11,7 +11,6 @@ import (
 	"github.com/ishaanbatra/styx/internal/brief"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/intel"
-	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
 )
@@ -21,7 +20,7 @@ func cmdPlan(a *app, args []string) error {
 		return fmt.Errorf("usage: styx plan <description>")
 	}
 	desc := strings.Join(args, " ")
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
 	}

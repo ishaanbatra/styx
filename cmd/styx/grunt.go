@@ -8,7 +8,6 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
-	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
 )
@@ -27,7 +26,7 @@ func cmdOneShot(a *app, verb string, args []string) error {
 		return err
 	}
 
-	proj, _ := project.Current() // ok if not in a repo
+	proj, _ := resolveGlobalTarget("") // ok if not in a repo
 	sigs := signals.Extract(verb, args, proj)
 
 	// Large-context signal for explain/summarize: rough estimate by combined attachment size.

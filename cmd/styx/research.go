@@ -8,7 +8,6 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/brief"
 	"github.com/ishaanbatra/styx/internal/channel"
-	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/research"
 	"github.com/ishaanbatra/styx/internal/router"
 )
@@ -31,7 +30,7 @@ func cmdResearch(a *app, args []string) error {
 	}
 	query := strings.Join(queryParts, " ")
 
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
 	}

@@ -50,7 +50,7 @@ func cmdAuto(a *app, args []string) error {
 		}
 	}
 
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
 	}

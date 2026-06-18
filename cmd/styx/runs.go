@@ -8,7 +8,6 @@ import (
 	"sort"
 
 	"github.com/ishaanbatra/styx/internal/pipeline"
-	"github.com/ishaanbatra/styx/internal/project"
 )
 
 func cmdRuns(args []string) error {
@@ -30,7 +29,7 @@ func cmdRuns(args []string) error {
 }
 
 func cmdRunsUnlock() error {
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
 	}
@@ -47,7 +46,7 @@ func cmdRunsUnlock() error {
 }
 
 func cmdRunsLs() error {
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
 	}
@@ -79,7 +78,7 @@ func cmdRunsLs() error {
 }
 
 func cmdRunsShow(runID string) error {
-	proj, err := project.Current()
+	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
 	}
