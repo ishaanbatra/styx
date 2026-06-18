@@ -38,6 +38,11 @@ that can't be resolved is a clear error, never a silent fallback.
 |---|---|
 | `styx` | Open the conversational REPL in the current project |
 | `styx "<anything>"` | Run one brain-routed turn, then exit |
+| `styx <repo...>` | Open the REPL bound to one or more named repos (first is focus) |
+
+Within a multi-repo session, `/repos` lists all bound repos (focus-marked),
+`/focus <name>` switches to a different bound repo (binding it lazily if not yet
+open), and naming a repo mid-conversation binds it without restarting the session.
 
 ### Deep research + planning
 

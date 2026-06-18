@@ -67,8 +67,10 @@ Shared pieces:
   replaces the old `resolveTarget` / `resolveProjectArg` split and removes the
   silent cwd fallback for failed explicit targets. `seedMessageLimits` applies
   routing.toml message caps (with built-in fallbacks) to the budget tracker.
-  Unknown verbs fall through to one-shot brain turns, so
-  `styx "fix the flaky test"` is treated as an utterance rather than an error.
+  When every positional token resolves to a registered project, the dispatcher
+  opens the REPL bound to those repos (first becomes the focus); otherwise the
+  tokens are treated as a one-shot utterance (`styx "fix the flaky test"` is an
+  utterance, not an error).
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
@@ -81,7 +83,7 @@ Shared pieces:
   pulled. `--fix` pulls missing Ollama models.
 - `repl.go` — the conversational frontend and session core. `cmdREPL` runs the
   persistent bare-`styx` loop with `/status`, `/budget`, `/threads`, `/why`,
-  `/audit`, and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
+  `/audit`, `/repos`, `/focus`, and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
   recalls project/global memory, asks the local brain for an action, then
   replies, dispatches to persistent agent threads, runs a wired pipeline,
   performs an interactive handoff, or stores explicit memory. If the brain is
@@ -91,6 +93,46 @@ Shared pieces:
   session also opens a per-project audit log and `/audit` tails the last 20
   records. Session cleanup stores a best-effort distillation back to project
   memory and closes open stores/logs.
+
+### Multi-project session
+
+A REPL session can be bound to more than one repo at a time. `replSession.bound` is
+a map from stable project ID to a per-repo slot (agent `Manager`, memory store,
+thread store) created on first reference by `bind(p)` — a lazy memoized helper
+that initialises only what is needed for that repo. `s.focus` is a pointer into
+`bound` naming the current primary repo; `proj()`, `mgr()`, and `mem()` are
+accessors that delegate to the focus slot. One session-global embedder, budget
+tracker, brain, run-id, and audit logger are shared across every bound repo.
+
+**Per-dispatch repo routing.** When the brain emits a dispatch with a non-empty
+`Dispatch.Project` field, the REPL resolves that name via `internal/target`,
+lazily binds the resulting repo, and dispatches on that repo's `Manager` instead
+of the focus repo's. Any `Dispatch.ExtraRoots` are forwarded through
+`DispatchSpec.ExtraRoots` and rendered as `--add-dir` flags by the agent layer
+(see `## Agent threads` and `## Channels`). An unresolvable name is wrapped in
+`errUnresolvedRepo` and routed through `askUserRoute` — the same escalation path
+as a brain `ErrNeedUser` — so the session surfaces the problem rather than
+silently falling back to the focus repo.
+
+**Cross-repo recall.** `Recall` spans every bound repo's memory store plus the
+global store, so a fact learned while working in one repo surfaces when the focus
+is elsewhere. Memory writes target the focus repo's store, tagged with its
+project ID.
+
+**Project-tagged audit.** A single audit logger is shared for the whole session;
+each record carries a `Project` field (the stable project ID of the repo
+actually touched) so one session audit stream can span repos and `/audit` can
+render the per-record project tag.
+
+**Slash commands.** `/repos` lists all bound repos, marking the current focus.
+`/focus <name>` resolves the given name, lazily binds it if needed, and flips
+`s.focus` to that repo. `/status` and `/threads` iterate all bound repos.
+
+**Launch binding.** `styx <repo...>` with every token resolving to a registered
+project opens the REPL bound to those repos (first becomes focus); see the
+dispatch.go bullet above. Naming a repo mid-conversation binds it lazily without
+restarting the session.
+
 - `logStatus()` writes `[styx]` status lines to stderr unless `--quiet`;
   final results go to stdout and are never suppressed.
 
@@ -398,7 +440,9 @@ lower confidence and may carry a scope hint such as `reviews`. The store API
 supports open, close, insert, and newest-first full scans. `Recall` embeds a
 query and ranks items across one or more stores by brute-force cosine
 similarity weighted by confidence and recency (`confidence * 0.5^(age/90d)`),
-so stale or low-confidence corrections fade at personal scale. `Embedder`
+so stale or low-confidence corrections fade at personal scale. In a
+multi-project REPL session, recall spans every bound repo's store plus the
+global store, giving cross-repo recall without an explicit scope hint. `Embedder`
 abstracts text to float32 vectors; the production `OllamaEmbedder` posts to
 `/api/embed` with a 30s HTTP client timeout and caller-provided context.
 
@@ -406,9 +450,11 @@ abstracts text to float32 vectors; the production `OllamaEmbedder` posts to
 
 Per-session REPL audit trails are append-only JSONL files under
 `~/.config/styx/state/audit/<id>/YYYYMMDD-HHMMSS.jsonl`. Each record has
-an RFC3339 timestamp, kind, detail, and optional string metadata. The REPL logs
-turns, brain decisions, dispatches, pipeline runs, memory writes, and ship-risk
-prompts, then `/audit` tails the last 20 records from the current session.
+an RFC3339 timestamp, kind, detail, optional string metadata, and a `Project`
+field (the stable project ID of the repo actually touched). A single session
+audit stream can therefore span multiple bound repos, with each record attributed
+to the project it touched. `/audit` tails the last 20 records and renders the
+project tag alongside each entry.
 
 ## Pipelines (internal/pipeline + cmd/styx/auto.go)
 
