@@ -58,6 +58,8 @@ routing table to match, before tasks run.
 - Refreshing the brain capability cards in `cards.go`. They name models at the
   *tier* level (`opus`/`sonnet`/`haiku`, `qwen2.5-coder:*`), not version pins,
   so they do not rot the same way. Revisit later.
+- agy and ollama discoverers (agy ignores `--model`; ollama is doctor-covered).
+  The `Discoverer` registry leaves room to add them later without rework.
 
 ## Key insight: the four channels name models differently
 
@@ -65,18 +67,24 @@ Discovery is feasible for all four channels, but via four different native
 mechanisms. The staleness pain is concentrated in version-pinned ids (codex,
 and the pinned claude versions); alias-based and enumerable channels barely rot.
 
-| Channel | Enumerates? | Stale risk | Native mechanism | `Current` |
-|---------|-------------|------------|------------------|-----------|
-| codex   | no list cmd | **high**   | read `~/.codex/config.toml` → `model` | that value (e.g. `gpt-5.5`) |
-| agy     | `agy models` ("List available models") | low | parse the list | configured `default`, validated |
-| ollama  | `GET /api/tags` (doctor already parses) | low | enumerate installed | n/a — validate pinned ids exist |
-| claude  | none | none | stable aliases (`opus`/`sonnet`/`haiku`/`fable`) | the alias |
+| Channel | Adapter sends `--model`? | Stale risk | In rewrite scope? | Why |
+|---------|--------------------------|------------|-------------------|-----|
+| codex   | **yes** (`--model req.Model`) | **high** | **yes** | pinned `gpt-5` retired → break. Discover from `~/.codex/config.toml`. |
+| claude  | **yes** (`--model req.Model`) | medium | **yes** | rules pin `opus-4-7`/`sonnet-4-6` (not a valid alias nor full name). De-pin to aliases. |
+| agy     | **no** — ignores `req.Model` | none | no | `agy/agy.go` Send never passes `--model`; always uses agy's own default. `agy:default` is cosmetic and can't break. |
+| ollama  | yes | low | no | a removed pulled model is already detected by doctor's `ollamaModelsMissing` + `--fix` pull. No duplication. |
 
-The design stance for the two pinned channels is **stop pinning**: codex defers
-to its own config (styx broke precisely by *overriding* it with `--model`);
-claude defers to aliases (the `[tiers]` block already maps tiers to aliases, but
-the rules pin `claude:opus-4-7` / `claude:sonnet-4-6`). agy and ollama get
-genuine enumeration because they offer it.
+The design stance for the two in-scope channels is **stop pinning**: codex
+defers to its own config (styx broke precisely by *overriding* it with
+`--model`); claude defers to aliases (the `[tiers]` block already maps tiers to
+aliases, but the rules pin `claude:opus-4-7` / `claude:sonnet-4-6`).
+
+**Scope refinement (from adapter investigation, post-initial-spec):** the
+original spec named four discoverers. Inspecting the adapters showed agy never
+sends a model id (so it cannot go stale) and ollama staleness is already
+covered by doctor. MVP therefore ships **two discoverers — codex and claude**.
+The `Discoverer` abstraction and registry remain, so agy/ollama discoverers can
+be added later if their adapters change.
 
 ## Architecture
 
@@ -95,8 +103,6 @@ doctor (always) / loadApp when cache stale
  modelsync.Refresh(ctx, cfg)
         │  for each registered Discoverer (best-effort, per-channel timeout):
         ├─► codexDiscoverer   reads ~/.codex/config.toml
-        ├─► agyDiscoverer     runs `agy models`
-        ├─► ollamaDiscoverer  GET /api/tags
         └─► claudeDiscoverer  returns stable aliases
         │
         ▼
@@ -124,19 +130,13 @@ type Result struct {
 }
 ```
 
-Each discoverer is tiny and independently testable. Per-channel behavior:
+Each discoverer is tiny and independently testable. MVP ships two:
 
-- **codex** — read `model` (and note `model_reasoning_effort`, unused for
-  routing in MVP) from `~/.codex/config.toml`. `Current` = that model.
-  `Source = "codex-config"`. Missing file → error (channel skipped, warned).
-- **agy** — run `agy models`, parse ids into `Available`; `Current` = the
-  configured `default` if present in the list, else the first listed.
-  `Source = "agy-models"`.
-- **ollama** — `GET /api/tags`, parse installed model names into `Available`
-  (reuse doctor's existing tags parsing). No single `Current`; used only to
-  validate pinned ids. `Source = "ollama-tags"`.
+- **codex** — read the top-level `model = "..."` line from `~/.codex/config.toml`
+  (line scan, no TOML-schema coupling). `Current` = that model. `Source =
+  "codex-config"`. Missing file / no model line → error (channel skipped, warned).
 - **claude** — pure: return `Available = [opus, sonnet, haiku, fable]`
-  (the stable aliases). `Source = "claude-alias"`.
+  (the stable aliases). `Source = "claude-alias"`. No `Current`.
 
 ## Staleness cache & trigger
 
@@ -147,8 +147,6 @@ Each discoverer is tiny and independently testable. Per-channel behavior:
   "refreshed_at": "2026-06-18T12:00:00Z",
   "channels": {
     "codex":  {"current": "gpt-5.5", "source": "codex-config"},
-    "agy":    {"available": ["default", "..."], "source": "agy-models"},
-    "ollama": {"available": ["qwen2.5-coder:7b", "qwen2.5-coder:14b"], "source": "ollama-tags"},
     "claude": {"available": ["opus","sonnet","haiku","fable"], "source": "claude-alias"}
   }
 }
@@ -175,12 +173,11 @@ Each discoverer is tiny and independently testable. Per-channel behavior:
   Atomic tmp+rename. Rules:
   - **codex:** any `codex:<x>` where `<x> != Current` → `codex:<Current>`.
   - **claude:** de-pin a pinned version to its alias by tier-prefix match
-    (`claude:opus-4-7` → `claude:opus`, `claude:sonnet-4-6` → `claude:sonnet`).
-    One-time; afterward claude tokens are aliases and never rewrite again.
-    `claude:interactive` is left untouched.
-  - **agy / ollama:** if the pinned id is absent from `Available` and a single
-    unambiguous replacement exists, swap it; otherwise **leave it and warn**
-    (never invent a model).
+    against `Available` (`claude:opus-4-7` → `claude:opus`, `claude:sonnet-4-6`
+    → `claude:sonnet`). A token already equal to an alias, or `claude:interactive`,
+    is left untouched. One-time; afterward claude tokens are aliases and never
+    rewrite again.
+  - **agy / ollama:** not rewritten (out of scope — see the channel table).
 - **Record:** one memory item per applied change, global scope, high
   confidence, via the provenance system (Task 19.2). Example text:
   `"routing: codex model gpt-5 → gpt-5.5 (source: codex-config), 2026-06-18"`.
@@ -203,13 +200,11 @@ context with timeout, per styx convention.
 
 Table-driven, fakes over mocks, matching styx conventions:
 
-- **Per discoverer:** temp-dir fake `~/.codex/config.toml` (inject the codex
-  home path); scripted `agy models` output via a `testdata` fake binary (like
-  `testdata/fakeagent`); `httptest` for ollama `/api/tags`; claude alias path is
-  pure.
+- **Per discoverer:** temp-dir fake `~/.codex/config.toml` (inject the config
+  path) covering present/missing/no-model cases; claude alias path is pure.
 - **Rewrite:** fixture `routing.toml` + a discovery `Result` → assert new ids
   present, comments preserved, untargeted lines byte-identical, and the write is
-  atomic. Cover codex bump, claude de-pin, agy/ollama ambiguous-leave-and-warn.
+  atomic. Cover codex bump, claude de-pin, and the no-change idempotent case.
 - **Staleness:** inject a clock (no inline `time.Now()`); assert refresh fires
   when the cache is stale and is skipped when fresh.
 - **Record:** assert the routing-correction memory is written with correct
