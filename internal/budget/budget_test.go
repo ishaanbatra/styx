@@ -293,6 +293,36 @@ func TestModelColumnMigratesExistingDB(t *testing.T) {
 	}
 }
 
+func TestProjectAndRunIDColumnsMigrateAndPersist(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "usage.db")
+	tr, err := New(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr.Close()
+	tr2, err := New(p) // reopen: ALTERs must be idempotent
+	if err != nil {
+		t.Fatalf("reopen after migration: %v", err)
+	}
+	defer tr2.Close()
+	if err := tr2.Record(context.Background(), Event{
+		Channel: "claude", Verb: "thread", Model: "opus",
+		Project: "abc123def456", RunID: "20260618-101500-fix", Success: true,
+	}); err != nil {
+		t.Fatalf("record with project/run_id: %v", err)
+	}
+	// Assert the columns persisted.
+	var gotProject, gotRun string
+	row := tr2.db.QueryRowContext(context.Background(),
+		`SELECT project, run_id FROM usage ORDER BY ts DESC LIMIT 1`)
+	if err := row.Scan(&gotProject, &gotRun); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if gotProject != "abc123def456" || gotRun != "20260618-101500-fix" {
+		t.Errorf("got (%q,%q), want (abc123def456, 20260618-101500-fix)", gotProject, gotRun)
+	}
+}
+
 func TestConcurrentWritersNoLock(t *testing.T) {
 	dir := t.TempDir()
 	tr, err := New(filepath.Join(dir, "usage.db"))

@@ -288,15 +288,20 @@ then best-effort ingests a summary back into thread state and memory.
 ## Budget (internal/budget)
 
 Append-only SQLite log at `~/.config/styx/state/usage.db` (`usage` table:
-ts/channel/verb/model/tokens/success/error_kind; `cooldown` table). `Tracker`
-opens the database with `journal_mode(WAL)` and `busy_timeout(5000)` so multiple
-styx processes can append without immediate `SQLITE_BUSY` failures. It computes
-`State` per channel: legacy token percentages plus message counts in rolling 5h
-(`WindowSession`) and 168h (`WindowWeek`) windows against limits from
-routing.toml. `ModelCount(channel, model, window)` counts per-model rows for
-tier-aware degradation. `ShouldCircuitBreak(channel, threshold, window)` counts
-recent failures; app routing opens a channel circuit after 3 failures in 10
-minutes.
+ts/channel/verb/model/tokens/success/error_kind/project/run_id; `cooldown`
+table). `Tracker` opens the database with `journal_mode(WAL)` and
+`busy_timeout(5000)` so multiple styx processes can append without immediate
+`SQLITE_BUSY` failures. It computes `State` per channel: legacy token
+percentages plus message counts in rolling 5h (`WindowSession`) and 168h
+(`WindowWeek`) windows against limits from routing.toml. `ModelCount(channel,
+model, window)` counts per-model rows for tier-aware degradation.
+`ShouldCircuitBreak(channel, threshold, window)` counts recent failures; app
+routing opens a channel circuit after 3 failures in 10 minutes.
+
+`Event` carries two attribution fields added in v0.4: `Project` (the resolved
+stable project ID, "" if none) and `RunID` (a per-session/per-verb correlation
+string, "" if none). Both columns are added via idempotent `ALTER TABLE` on
+open, so existing `usage.db` files are migrated transparently on first access.
 
 The other multi-terminal state surfaces were already hardened before the budget
 WAL change: `projects.toml` is written via `config.SaveProjects` tmp+rename,
