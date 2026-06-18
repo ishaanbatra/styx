@@ -162,7 +162,10 @@ refresh work until `[models].refresh_interval_hours` says the cache is stale.
 Its migration pass is a surgical, idempotent text rewrite of legacy routing
 tokens: `codex:<version>` becomes bare `codex`, and pinned Claude versions such
 as `claude:opus-4-7` collapse to their class alias. Interactive entries,
-`agy`, and `ollama` routes are left untouched.
+`agy`, and `ollama` routes are left untouched. `Refresh` orchestrates discovery,
+migration, cache writes, and optional global routing-correction memories; each
+discoverer is isolated with a short timeout so one failed channel only logs a
+warning and the rest of the refresh continues.
 
 ## Brain (internal/brain)
 
