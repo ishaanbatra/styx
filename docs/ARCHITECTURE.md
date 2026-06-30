@@ -97,8 +97,9 @@ Shared pieces:
   router decision and a budget snapshot. Exports `routeArgs` (Task, Verb,
   Signals, Project), `routeResult` (Channel, Model, Effort, FallbackChain,
   Reasoning, Budget, Degraded), `budgetSnapshot` (Channel, SessionCount/Limit,
-  WeeklyCount/Limit, percentages, CooldownUntil, Stale flag), and public
-  functions `handleRoute()` and `budgetSnapshotFor()` for use by `internal/mcpserver`.
+  WeeklyCount/Limit, percentages, CooldownUntil, Stale flag), and handler
+  functions `handleRoute()` and `budgetSnapshotFor()` (package main), served
+  via the `internal/mcpserver` protocol layer by the upcoming `styx mcp` command.
 
 ### Multi-project session
 
