@@ -46,3 +46,25 @@ func TestHandleRoute_RequiresTask(t *testing.T) {
 		t.Fatal("expected error when task is empty")
 	}
 }
+
+func TestHandleBudgetStatus_AllChannels(t *testing.T) {
+	_, tr := testRouterAndTracker(t)
+	out, err := handleBudgetStatus(context.Background(), tr, budgetStatusArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 4 {
+		t.Fatalf("want 4 channels, got %d", len(out))
+	}
+}
+
+func TestHandleBudgetStatus_SingleChannel(t *testing.T) {
+	_, tr := testRouterAndTracker(t)
+	out, err := handleBudgetStatus(context.Background(), tr, budgetStatusArgs{Channel: "claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].Channel != "claude" {
+		t.Fatalf("want [claude], got %+v", out)
+	}
+}

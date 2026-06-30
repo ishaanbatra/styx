@@ -95,3 +95,24 @@ func handleRoute(ctx context.Context, r *router.Router, t *budget.Tracker, a rou
 		Degraded:      dec.Degraded,
 	}, nil
 }
+
+type budgetStatusArgs struct {
+	Channel string `json:"channel"`
+}
+
+// defaultChannelNames is the canonical channel set (mirrors cmd/styx/budget.go).
+var defaultChannelNames = []string{"claude", "codex", "agy", "ollama"}
+
+// handleBudgetStatus reports the budget snapshot for one channel, or all four
+// when Channel is empty.
+func handleBudgetStatus(ctx context.Context, t *budget.Tracker, a budgetStatusArgs) ([]budgetSnapshot, error) {
+	channels := defaultChannelNames
+	if a.Channel != "" {
+		channels = []string{a.Channel}
+	}
+	out := make([]budgetSnapshot, 0, len(channels))
+	for _, ch := range channels {
+		out = append(out, budgetSnapshotFor(ctx, t, ch))
+	}
+	return out, nil
+}

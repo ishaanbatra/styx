@@ -93,13 +93,15 @@ Shared pieces:
   session also opens a per-project audit log and `/audit` tails the last 20
   records. Session cleanup stores a best-effort distillation back to project
   memory and closes open stores/logs.
-- `mcp.go` — MCP tool handler for the `route` tool, adapting JSON args to a
-  router decision and a budget snapshot. Exports `routeArgs` (Task, Verb,
-  Signals, Project), `routeResult` (Channel, Model, Effort, FallbackChain,
-  Reasoning, Budget, Degraded), `budgetSnapshot` (Channel, SessionCount/Limit,
-  WeeklyCount/Limit, percentages, CooldownUntil, Stale flag), and handler
-  functions `handleRoute()` and `budgetSnapshotFor()` (package main), served
-  via the `internal/mcpserver` protocol layer by the upcoming `styx mcp` command.
+- `mcp.go` — MCP tool handlers for the `route` and `budget_status` tools. Exports
+  `routeArgs` (Task, Verb, Signals, Project), `routeResult` (Channel, Model,
+  Effort, FallbackChain, Reasoning, Budget, Degraded), `budgetStatusArgs`
+  (Channel), `budgetSnapshot` (Channel, SessionCount/Limit, WeeklyCount/Limit,
+  percentages, CooldownUntil, Stale flag), and handler functions `handleRoute()`,
+  `handleBudgetStatus()`, and `budgetSnapshotFor()` (package main). Handler logic
+  is kept simple: route decision + snapshot for one task, budget snapshot for one
+  or all four channels. Served via the `internal/mcpserver` protocol layer by the
+  upcoming `styx mcp` command.
 
 ### Multi-project session
 
