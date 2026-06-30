@@ -94,8 +94,32 @@ func TestServe_ToolsList(t *testing.T) {
 func TestServe_ToolsCall(t *testing.T) {
 	lines := serve(t, testServer(),
 		`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
-	if !strings.Contains(lines[0], `"isError":false`) || !strings.Contains(lines[0], `"ok": true`) {
-		t.Fatalf("bad tools/call result: %s", lines[0])
+	var resp struct {
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v (%q)", err, lines[0])
+	}
+	if resp.Result.IsError {
+		t.Fatalf("isError should be false: %s", lines[0])
+	}
+	if len(resp.Result.Content) == 0 || resp.Result.Content[0].Type != "text" {
+		t.Fatalf("expected a text content block: %s", lines[0])
+	}
+	var payload struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.Unmarshal([]byte(resp.Result.Content[0].Text), &payload); err != nil {
+		t.Fatalf("content text should be JSON: %v (%q)", err, resp.Result.Content[0].Text)
+	}
+	if !payload.OK {
+		t.Fatalf("expected ok=true in tool result, got: %s", resp.Result.Content[0].Text)
 	}
 }
 
