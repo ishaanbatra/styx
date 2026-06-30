@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-18
+last_verified: 2026-06-30
 ---
 
 # Styx Architecture
@@ -93,6 +93,12 @@ Shared pieces:
   session also opens a per-project audit log and `/audit` tails the last 20
   records. Session cleanup stores a best-effort distillation back to project
   memory and closes open stores/logs.
+- `mcp.go` — MCP tool handler for the `route` tool, adapting JSON args to a
+  router decision and a budget snapshot. Exports `routeArgs` (Task, Verb,
+  Signals, Project), `routeResult` (Channel, Model, Effort, FallbackChain,
+  Reasoning, Budget, Degraded), `budgetSnapshot` (Channel, SessionCount/Limit,
+  WeeklyCount/Limit, percentages, CooldownUntil, Stale flag), and public
+  functions `handleRoute()` and `budgetSnapshotFor()` for use by `internal/mcpserver`.
 
 ### Multi-project session
 

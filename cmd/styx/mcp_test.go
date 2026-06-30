@@ -1,0 +1,48 @@
+package main
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/ishaanbatra/styx/internal/budget"
+	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/router"
+)
+
+func testRouterAndTracker(t *testing.T) (*router.Router, *budget.Tracker) {
+	t.Helper()
+	tr, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tr.Close() })
+	r := router.FromConfig(config.Routing{
+		Rules: []config.Rule{{Verb: "build", Use: "codex:gpt-5"}},
+	}, tr)
+	return r, tr
+}
+
+func TestHandleRoute_ReturnsChannelModelReasoningBudget(t *testing.T) {
+	r, tr := testRouterAndTracker(t)
+	res, err := handleRoute(context.Background(), r, tr, routeArgs{Task: "add dark mode", Verb: "build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Channel != "codex" || res.Model != "gpt-5" {
+		t.Fatalf("got %s:%s, want codex:gpt-5", res.Channel, res.Model)
+	}
+	if res.Reasoning == "" {
+		t.Error("expected non-empty reasoning")
+	}
+	if res.Budget.Channel != "codex" {
+		t.Errorf("budget snapshot channel = %q, want codex", res.Budget.Channel)
+	}
+}
+
+func TestHandleRoute_RequiresTask(t *testing.T) {
+	r, tr := testRouterAndTracker(t)
+	if _, err := handleRoute(context.Background(), r, tr, routeArgs{}); err == nil {
+		t.Fatal("expected error when task is empty")
+	}
+}
