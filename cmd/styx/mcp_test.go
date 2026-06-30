@@ -101,6 +101,18 @@ func TestHandleRecordUsage_RequiresChannel(t *testing.T) {
 	}
 }
 
+func TestBudgetSnapshotFor_StaleOnError(t *testing.T) {
+	_, tr := testRouterAndTracker(t)
+	tr.Close() // closing the tracker forces State() to error
+	snap := budgetSnapshotFor(context.Background(), tr, "codex")
+	if !snap.Stale {
+		t.Fatal("expected Stale=true after tracker closed")
+	}
+	if snap.Channel != "codex" {
+		t.Fatalf("channel = %q, want codex", snap.Channel)
+	}
+}
+
 func TestMCPTools_EndToEndRoute(t *testing.T) {
 	r, tr := testRouterAndTracker(t)
 	a := &app{router: r, tracker: tr}

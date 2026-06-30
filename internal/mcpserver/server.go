@@ -65,6 +65,8 @@ type rpcError struct {
 // It returns nil on a clean EOF (the host closed the connection).
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	scanner := bufio.NewScanner(in)
+	// A line larger than this cap makes scanner.Err() return bufio.ErrTooLong and
+	// Serve returns — acceptable for a local, single-host v1 (no untrusted input).
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024) // tolerate large tool payloads
 	enc := json.NewEncoder(out)
 	for scanner.Scan() {
@@ -74,8 +76,10 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 		var req rpcRequest
 		if err := json.Unmarshal(line, &req); err != nil {
-			_ = enc.Encode(rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"),
-				Error: &rpcError{Code: -32700, Message: "parse error"}})
+			if encErr := enc.Encode(rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"),
+				Error: &rpcError{Code: -32700, Message: "parse error"}}); encErr != nil {
+				return fmt.Errorf("write parse error: %w", encErr)
+			}
 			continue
 		}
 		resp, isNotification := s.handle(ctx, req)

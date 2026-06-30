@@ -131,6 +131,29 @@ func TestServe_UnknownMethod(t *testing.T) {
 	}
 }
 
+func TestServe_ToolsCallUnknownTool(t *testing.T) {
+	lines := serve(t, testServer(),
+		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"nope","arguments":{}}}`)
+	if !strings.Contains(lines[0], `"error"`) || !strings.Contains(lines[0], "-32602") || !strings.Contains(lines[0], "unknown tool") {
+		t.Fatalf("want -32602 unknown tool error: %s", lines[0])
+	}
+}
+
+func TestServe_MalformedJSONRecovers(t *testing.T) {
+	lines := serve(t, testServer(),
+		`{ this is not json`,
+		`{"jsonrpc":"2.0","id":8,"method":"tools/list"}`)
+	if len(lines) != 2 {
+		t.Fatalf("want 2 responses (parse error + tools/list), got %d: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "-32700") {
+		t.Fatalf("first response should be parse error -32700: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"tools"`) {
+		t.Fatalf("server should continue and answer tools/list: %s", lines[1])
+	}
+}
+
 func TestServe_ToolHandlerErrorIsToolResult(t *testing.T) {
 	s := New("styx", "test", []Tool{{
 		Name: "boom", Description: "always fails", InputSchema: map[string]any{"type": "object"},

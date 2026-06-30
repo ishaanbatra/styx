@@ -217,8 +217,10 @@ func mcpTools(a *app) []mcpserver.Tool {
 			InputSchema: routeSchema,
 			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 				var in routeArgs
-				if err := json.Unmarshal(raw, &in); err != nil {
-					return nil, fmt.Errorf("route: invalid arguments: %w", err)
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &in); err != nil {
+						return nil, fmt.Errorf("route: invalid arguments: %w", err)
+					}
 				}
 				return handleRoute(ctx, a.router, a.tracker, in)
 			},
@@ -243,8 +245,10 @@ func mcpTools(a *app) []mcpserver.Tool {
 			InputSchema: recordUsageSchema,
 			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 				var in recordUsageArgs
-				if err := json.Unmarshal(raw, &in); err != nil {
-					return nil, fmt.Errorf("record_usage: invalid arguments: %w", err)
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &in); err != nil {
+						return nil, fmt.Errorf("record_usage: invalid arguments: %w", err)
+					}
 				}
 				return handleRecordUsage(ctx, a.tracker, in)
 			},

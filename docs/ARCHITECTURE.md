@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-30T12:00:00Z
+last_verified: 2026-06-30
 ---
 
 # Styx Architecture
@@ -518,6 +518,10 @@ through that channel with `Write: true` and captures output; when nil it uses
 the built-in claude path (`--dangerously-skip-permissions -p`), which streams
 claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 `--no-pr`/`--no-push`.
+
+## MCP server (internal/mcpserver + cmd/styx/mcp.go)
+
+A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the routing brain as three tools — `route`, `budget_status`, `record_usage` — for MCP hosts like OpenClaw. Pure stdlib, no provider SDK; stdout carries the protocol, status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto `internal/router` and `internal/budget`.
 
 ## Progress (internal/progress)
 
