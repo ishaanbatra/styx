@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
 )
@@ -167,4 +170,93 @@ func handleRecordUsage(ctx context.Context, t *budget.Tracker, a recordUsageArgs
 		}
 	}
 	return recordResult{Recorded: true, Budget: budgetSnapshotFor(ctx, t, a.Channel)}, nil
+}
+
+const mcpServerVersion = "0.1.0"
+
+var routeSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"task":    map[string]any{"type": "string", "description": "The task or goal, in natural language."},
+		"verb":    map[string]any{"type": "string", "description": "Optional styx verb (plan, build, research, review). Defaults to build."},
+		"signals": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Optional routing signal tags; auto-derived from the task if omitted."},
+		"project": map[string]any{"type": "string", "description": "Optional project path for context."},
+	},
+	"required": []string{"task"},
+}
+
+var budgetStatusSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"channel": map[string]any{"type": "string", "description": "Optional channel name; omit for all channels."},
+	},
+}
+
+var recordUsageSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"channel":    map[string]any{"type": "string"},
+		"messages":   map[string]any{"type": "integer", "description": "Messages consumed (default 1)."},
+		"tokens_in":  map[string]any{"type": "integer"},
+		"tokens_out": map[string]any{"type": "integer"},
+		"verb":       map[string]any{"type": "string"},
+		"model":      map[string]any{"type": "string"},
+		"success":    map[string]any{"type": "boolean", "description": "Defaults to true."},
+		"project":    map[string]any{"type": "string"},
+		"run_id":     map[string]any{"type": "string"},
+	},
+	"required": []string{"channel"},
+}
+
+// mcpTools builds the MCP tool set bound to this app's router and tracker.
+func mcpTools(a *app) []mcpserver.Tool {
+	return []mcpserver.Tool{
+		{
+			Name:        "route",
+			Description: "Choose which AI coding agent (channel) should handle a task, with budget-aware fallback. Returns the chosen channel, model, fallback chain, transparent reasoning, and the current budget snapshot.",
+			InputSchema: routeSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in routeArgs
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("route: invalid arguments: %w", err)
+				}
+				return handleRoute(ctx, a.router, a.tracker, in)
+			},
+		},
+		{
+			Name:        "budget_status",
+			Description: "Report subscription budget per channel: 5h and weekly message counts/limits, percentages, and cooldowns.",
+			InputSchema: budgetStatusSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in budgetStatusArgs
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &in); err != nil {
+						return nil, fmt.Errorf("budget_status: invalid arguments: %w", err)
+					}
+				}
+				return handleBudgetStatus(ctx, a.tracker, in)
+			},
+		},
+		{
+			Name:        "record_usage",
+			Description: "Record that a consumer ran a channel, so styx's budget stays accurate when something other than styx executed the agent.",
+			InputSchema: recordUsageSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in recordUsageArgs
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("record_usage: invalid arguments: %w", err)
+				}
+				return handleRecordUsage(ctx, a.tracker, in)
+			},
+		},
+	}
+}
+
+// cmdMCP runs styx as an MCP stdio server. stdout carries the JSON-RPC
+// protocol; status goes to stderr via logStatus. The server runs until the
+// host closes stdin (EOF).
+func cmdMCP(a *app, args []string) error {
+	srv := mcpserver.New("styx", mcpServerVersion, mcpTools(a))
+	logStatus("mcp server ready on stdio (route, budget_status, record_usage)")
+	return srv.Serve(context.Background(), os.Stdin, os.Stdout)
 }

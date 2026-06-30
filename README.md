@@ -90,6 +90,7 @@ open), and naming a repo mid-conversation binds it without restarting the sessio
 | `route --explain <verb> "..."` | Why did styx pick that channel? |
 | `project ls/add/rm/rename/scan` | Manage project registry |
 | `project scan [root] [--depth N]` | Walk down from `root` (default `~`), find git repos, bulk-register them (prunes node_modules/vendor; depth default 4) |
+| `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0); exposes `route`, `budget_status`, and `record_usage` tools to any MCP host |
 | `migrate-secrets` | Move env-var secrets to macOS Keychain |
 | `upgrade` | Re-run routing migrations manually (v0.1->v0.2 gemini->agy; v0.3 adds the `implement` verb) |
 

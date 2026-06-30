@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-30T00:00:00Z
+last_verified: 2026-06-30T12:00:00Z
 ---
 
 # Styx Architecture
@@ -70,7 +70,9 @@ Shared pieces:
   When every positional token resolves to a registered project, the dispatcher
   opens the REPL bound to those repos (first becomes the focus); otherwise the
   tokens are treated as a one-shot utterance (`styx "fix the flaky test"` is an
-  utterance, not an error).
+  utterance, not an error). `mcp` is also an app verb (needs the full
+  `app{router, tracker}` from `loadApp()`) and is dispatched in the second
+  switch alongside `auto`, `research`, etc.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
@@ -93,18 +95,25 @@ Shared pieces:
   session also opens a per-project audit log and `/audit` tails the last 20
   records. Session cleanup stores a best-effort distillation back to project
   memory and closes open stores/logs.
-- `mcp.go` — MCP tool handlers for the `route`, `budget_status`, and `record_usage`
-  tools. Defines `routeArgs` (Task, Verb, Signals, Project), `routeResult`
-  (Channel, Model, Effort, FallbackChain, Reasoning, Budget, Degraded),
-  `budgetStatusArgs` (Channel), `recordUsageArgs` (Channel, Messages, TokensIn,
-  TokensOut, Verb, Model, Success, Project, RunID), `recordResult` (Recorded,
-  Budget), and `budgetSnapshot` (Channel, SessionCount/Limit, WeeklyCount/Limit,
-  percentages, CooldownUntil, Stale flag); adds handler functions `handleRoute()`,
-  `handleBudgetStatus()`, `handleRecordUsage()`, and `budgetSnapshotFor()`
-  (package main). Handler logic is kept simple: route decision + snapshot for one
-  task, budget snapshot for one or all four channels, and record usage rows
-  (Messages>1 appends N rows with token totals on the first). Served via the
-  `internal/mcpserver` protocol layer by the upcoming `styx mcp` command.
+- `mcp.go` — MCP tool handlers, JSON schemas, tool assembly, and the `styx mcp`
+  command entry point. Defines `routeArgs` (Task, Verb, Signals, Project),
+  `routeResult` (Channel, Model, Effort, FallbackChain, Reasoning, Budget,
+  Degraded), `budgetStatusArgs` (Channel), `recordUsageArgs` (Channel, Messages,
+  TokensIn, TokensOut, Verb, Model, Success, Project, RunID), `recordResult`
+  (Recorded, Budget), and `budgetSnapshot` (Channel, SessionCount/Limit,
+  WeeklyCount/Limit, percentages, CooldownUntil, Stale flag); handler functions
+  `handleRoute()`, `handleBudgetStatus()`, `handleRecordUsage()`, and
+  `budgetSnapshotFor()` (package main). Handler logic is kept simple: route
+  decision + snapshot for one task, budget snapshot for one or all four channels,
+  and record usage rows (Messages>1 appends N rows with token totals on the
+  first). `routeSchema`, `budgetStatusSchema`, and `recordUsageSchema` are
+  `map[string]any` JSON Schema objects passed as `Tool.InputSchema`. `mcpTools(a
+  *app)` assembles the three handlers into `[]mcpserver.Tool`, unmarshaling raw
+  JSON arguments before each dispatch. `cmdMCP(a *app, args []string)` constructs
+  the server via `mcpserver.New("styx", mcpServerVersion, mcpTools(a))`, logs
+  readiness to stderr via `logStatus`, and runs `srv.Serve(ctx, os.Stdin,
+  os.Stdout)` — stdout carries the JSON-RPC protocol only, nothing else. `const
+  mcpServerVersion = "0.1.0"`.
 
 ### Multi-project session
 

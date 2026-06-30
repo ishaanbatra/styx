@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/router"
 )
 
@@ -95,5 +98,27 @@ func TestHandleRecordUsage_RequiresChannel(t *testing.T) {
 	_, tr := testRouterAndTracker(t)
 	if _, err := handleRecordUsage(context.Background(), tr, recordUsageArgs{}); err == nil {
 		t.Fatal("expected error for missing channel")
+	}
+}
+
+func TestMCPTools_EndToEndRoute(t *testing.T) {
+	r, tr := testRouterAndTracker(t)
+	a := &app{router: r, tracker: tr}
+	srv := mcpserver.New("styx", "test", mcpTools(a))
+	in := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"route","arguments":{"task":"add dark mode","verb":"build"}}}`,
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	if err := srv.Serve(context.Background(), strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, `"route"`) || !strings.Contains(s, `"budget_status"`) || !strings.Contains(s, `"record_usage"`) {
+		t.Fatalf("tools/list missing a tool: %s", s)
+	}
+	if !strings.Contains(s, "codex") {
+		t.Fatalf("route call did not return codex: %s", s)
 	}
 }
