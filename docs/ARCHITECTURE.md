@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-30
+last_verified: 2026-06-30T00:00:00Z
 ---
 
 # Styx Architecture
@@ -93,15 +93,18 @@ Shared pieces:
   session also opens a per-project audit log and `/audit` tails the last 20
   records. Session cleanup stores a best-effort distillation back to project
   memory and closes open stores/logs.
-- `mcp.go` — MCP tool handlers for the `route` and `budget_status` tools. Exports
-  `routeArgs` (Task, Verb, Signals, Project), `routeResult` (Channel, Model,
-  Effort, FallbackChain, Reasoning, Budget, Degraded), `budgetStatusArgs`
-  (Channel), `budgetSnapshot` (Channel, SessionCount/Limit, WeeklyCount/Limit,
-  percentages, CooldownUntil, Stale flag), and handler functions `handleRoute()`,
-  `handleBudgetStatus()`, and `budgetSnapshotFor()` (package main). Handler logic
-  is kept simple: route decision + snapshot for one task, budget snapshot for one
-  or all four channels. Served via the `internal/mcpserver` protocol layer by the
-  upcoming `styx mcp` command.
+- `mcp.go` — MCP tool handlers for the `route`, `budget_status`, and `record_usage`
+  tools. Defines `routeArgs` (Task, Verb, Signals, Project), `routeResult`
+  (Channel, Model, Effort, FallbackChain, Reasoning, Budget, Degraded),
+  `budgetStatusArgs` (Channel), `recordUsageArgs` (Channel, Messages, TokensIn,
+  TokensOut, Verb, Model, Success, Project, RunID), `recordResult` (Recorded,
+  Budget), and `budgetSnapshot` (Channel, SessionCount/Limit, WeeklyCount/Limit,
+  percentages, CooldownUntil, Stale flag); adds handler functions `handleRoute()`,
+  `handleBudgetStatus()`, `handleRecordUsage()`, and `budgetSnapshotFor()`
+  (package main). Handler logic is kept simple: route decision + snapshot for one
+  task, budget snapshot for one or all four channels, and record usage rows
+  (Messages>1 appends N rows with token totals on the first). Served via the
+  `internal/mcpserver` protocol layer by the upcoming `styx mcp` command.
 
 ### Multi-project session
 

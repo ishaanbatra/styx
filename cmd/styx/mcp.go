@@ -116,3 +116,55 @@ func handleBudgetStatus(ctx context.Context, t *budget.Tracker, a budgetStatusAr
 	}
 	return out, nil
 }
+
+type recordUsageArgs struct {
+	Channel   string `json:"channel"`
+	Messages  int    `json:"messages"`
+	TokensIn  int    `json:"tokens_in"`
+	TokensOut int    `json:"tokens_out"`
+	Verb      string `json:"verb"`
+	Model     string `json:"model"`
+	Success   *bool  `json:"success"`
+	Project   string `json:"project"`
+	RunID     string `json:"run_id"`
+}
+
+type recordResult struct {
+	Recorded bool           `json:"recorded"`
+	Budget   budgetSnapshot `json:"budget"`
+}
+
+// handleRecordUsage records usage a consumer performed against a channel. The
+// budget windows count rows (one row == one message), so Messages>1 emits that
+// many rows; token totals ride the first row. Defaults: Messages=1, Success=true.
+func handleRecordUsage(ctx context.Context, t *budget.Tracker, a recordUsageArgs) (recordResult, error) {
+	if a.Channel == "" {
+		return recordResult{}, fmt.Errorf("record_usage: channel is required")
+	}
+	success := true
+	if a.Success != nil {
+		success = *a.Success
+	}
+	n := a.Messages
+	if n <= 0 {
+		n = 1
+	}
+	for i := 0; i < n; i++ {
+		ev := budget.Event{
+			Channel: a.Channel,
+			Verb:    a.Verb,
+			Model:   a.Model,
+			Success: success,
+			Project: a.Project,
+			RunID:   a.RunID,
+		}
+		if i == 0 {
+			ev.TokensIn = a.TokensIn
+			ev.TokensOut = a.TokensOut
+		}
+		if err := t.Record(ctx, ev); err != nil {
+			return recordResult{}, fmt.Errorf("record_usage: %w", err)
+		}
+	}
+	return recordResult{Recorded: true, Budget: budgetSnapshotFor(ctx, t, a.Channel)}, nil
+}

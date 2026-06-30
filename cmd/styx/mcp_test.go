@@ -68,3 +68,32 @@ func TestHandleBudgetStatus_SingleChannel(t *testing.T) {
 		t.Fatalf("want [claude], got %+v", out)
 	}
 }
+
+func TestHandleRecordUsage_AppendsAndReflects(t *testing.T) {
+	_, tr := testRouterAndTracker(t)
+	ctx := context.Background()
+	res, err := handleRecordUsage(ctx, tr, recordUsageArgs{Channel: "claude", Messages: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Recorded {
+		t.Fatal("expected recorded=true")
+	}
+	st, err := tr.State(ctx, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SessionCount != 3 {
+		t.Fatalf("tracker session count = %d, want 3", st.SessionCount)
+	}
+	if res.Budget.SessionCount != 3 {
+		t.Fatalf("result budget session count = %d, want 3", res.Budget.SessionCount)
+	}
+}
+
+func TestHandleRecordUsage_RequiresChannel(t *testing.T) {
+	_, tr := testRouterAndTracker(t)
+	if _, err := handleRecordUsage(context.Background(), tr, recordUsageArgs{}); err == nil {
+		t.Fatal("expected error for missing channel")
+	}
+}
