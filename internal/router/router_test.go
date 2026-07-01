@@ -184,6 +184,101 @@ func TestExplain_DescribesPickedRule(t *testing.T) {
 	}
 }
 
+func TestRoute_ComplexFloorDegradesToCapableChannel(t *testing.T) {
+	// plan+complex: claude:opus primary over its 80% cap. IMPORTANT: styx budget
+	// is per-CHANNEL, not per-model — so a same-channel opus->sonnet drop can never
+	// escape the claude cap. Degradation must land on a DIFFERENT capable channel.
+	// The complex floor (sonnet) keeps codex but excludes the below-floor ollama
+	// fallback, so the decision degrades to codex — never ollama, never blocked.
+	r := newRouter(
+		[]config.Rule{
+			{Verb: "plan", Signals: []string{"complex"}, Use: "claude:opus",
+				Fallback: []string{"codex", "ollama:qwen2.5-coder:14b"}},
+		},
+		config.BudgetCaps{Claude: config.ChannelCap{CapPct: 80}}, // codex uncapped -> available
+		map[string]float64{"claude": 95},                         // only claude over cap
+	)
+	dec, err := r.Route(context.Background(), Request{Verb: "plan", Args: []string{"x"}, Signals: []string{"complex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Channel != "codex" {
+		t.Fatalf("chose %s:%s, want codex (below-floor ollama must be excluded)", dec.Channel, dec.Model)
+	}
+	if !dec.Degraded || dec.BlockedByBudget {
+		t.Fatalf("want degraded=true blocked=false, got degraded=%v blocked=%v", dec.Degraded, dec.BlockedByBudget)
+	}
+	if dec.Floor != "sonnet" {
+		t.Fatalf("floor = %q, want sonnet", dec.Floor)
+	}
+	wantAcc := []string{"claude:opus", "codex"} // ollama excluded from the floor-clearing set
+	if diff := cmp.Diff(wantAcc, dec.TierPlan.Acceptable); diff != "" {
+		t.Fatalf("acceptable mismatch (-want +got):\n%s", diff)
+	}
+	if dec.TierPlan.Chosen != "codex" {
+		t.Fatalf("tier_plan.chosen = %q, want codex", dec.TierPlan.Chosen)
+	}
+	if dec.TierPlan.EscalateTo != "claude:opus" {
+		t.Fatalf("escalate_to = %q, want claude:opus", dec.TierPlan.EscalateTo)
+	}
+}
+
+func TestRoute_ChainExhaustionBlocksLoud(t *testing.T) {
+	// Regression guard for the chain-exhaustion bug: opus primary AND its only
+	// floor-clearing fallback (codex) are BOTH over cap. Old code returned the
+	// over-cap primary with Degraded=true and never refused. New behavior:
+	// BlockedByBudget=true, chosen stays the floor-clearing primary as a concrete
+	// recommendation.
+	r := newRouter(
+		[]config.Rule{
+			{Verb: "plan", Signals: []string{"complex"}, Use: "claude:opus",
+				Fallback: []string{"codex", "ollama:qwen2.5-coder:14b"}},
+		},
+		config.BudgetCaps{Claude: config.ChannelCap{CapPct: 80}, Codex: config.ChannelCap{CapPct: 80}},
+		map[string]float64{"claude": 95, "codex": 90}, // both capable channels over cap
+	)
+	dec, err := r.Route(context.Background(), Request{Verb: "plan", Args: []string{"x"}, Signals: []string{"complex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dec.BlockedByBudget {
+		t.Fatalf("want BlockedByBudget=true (all floor-clearing channels over cap), got false")
+	}
+	if !dec.Degraded {
+		t.Fatalf("want Degraded=true when blocked")
+	}
+	if dec.Channel != "claude" || dec.Model != "opus" {
+		t.Fatalf("blocked chosen = %s:%s, want the floor-clearing primary claude:opus", dec.Channel, dec.Model)
+	}
+	// ollama must NOT be chosen: styx never returns a below-floor channel.
+	if dec.Channel == "ollama" {
+		t.Fatal("blocked path degraded to below-floor ollama — floor violated")
+	}
+}
+
+func TestRoute_NonFlooredUnchanged(t *testing.T) {
+	// A task with no complex/deep signal keeps v1 behavior: over-cap primary
+	// degrades to the first available fallback, including ollama; never blocked.
+	r := newRouter(
+		[]config.Rule{
+			{Verb: "plan", Use: "claude:sonnet",
+				Fallback: []string{"ollama:qwen2.5-coder:14b"}},
+		},
+		config.BudgetCaps{Claude: config.ChannelCap{CapPct: 80}},
+		map[string]float64{"claude": 95},
+	)
+	dec, err := r.Route(context.Background(), Request{Verb: "plan", Args: []string{"x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.Channel != "ollama" || dec.BlockedByBudget {
+		t.Fatalf("non-floored task: got %s:%s blocked=%v, want ollama not blocked", dec.Channel, dec.Model, dec.BlockedByBudget)
+	}
+	if dec.Floor != "local" {
+		t.Fatalf("floor = %q, want local (no floor)", dec.Floor)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
