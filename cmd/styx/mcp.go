@@ -222,6 +222,54 @@ func handleRecordUsage(ctx context.Context, t *budget.Tracker, a recordUsageArgs
 	return recordResult{Recorded: true, Budget: budgetSnapshotFor(ctx, t, a.Channel)}, nil
 }
 
+type channelHealthArgs struct {
+	Channel string `json:"channel"`
+}
+
+type channelHealthResult struct {
+	Channel            string         `json:"channel"`
+	CircuitOpen        bool           `json:"circuit_open"`
+	FailuresRecent     int            `json:"failures_recent"`
+	WindowS            int            `json:"window_s"`
+	ErrorKinds         map[string]int `json:"error_kinds"`
+	CooldownRemainingS float64        `json:"cooldown_remaining_s"`
+}
+
+var channelHealthSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"channel": map[string]any{
+			"type":        "string",
+			"description": "Channel to inspect (claude|codex|agy|ollama). Omit for all channels.",
+		},
+	},
+}
+
+// handleChannelHealth reports circuit/failure/cooldown state per channel from the
+// existing usage log — a consumer can avoid a flaky provider before dispatch.
+func handleChannelHealth(ctx context.Context, t *budget.Tracker, a channelHealthArgs) ([]channelHealthResult, error) {
+	channels := defaultChannelNames
+	if a.Channel != "" {
+		channels = []string{a.Channel}
+	}
+	out := make([]channelHealthResult, 0, len(channels))
+	for _, ch := range channels {
+		h, err := t.ChannelHealth(ctx, ch, budget.BreakerThreshold, budget.BreakerWindow)
+		if err != nil {
+			return nil, fmt.Errorf("channel_health %s: %w", ch, err)
+		}
+		out = append(out, channelHealthResult{
+			Channel:            h.Channel,
+			CircuitOpen:        h.CircuitOpen,
+			FailuresRecent:     h.FailuresRecent,
+			WindowS:            h.WindowSeconds,
+			ErrorKinds:         h.ErrorKinds,
+			CooldownRemainingS: h.CooldownRemainingSeconds,
+		})
+	}
+	return out, nil
+}
+
 const mcpServerVersion = "0.1.0"
 
 var routeSchema = map[string]any{
@@ -301,6 +349,20 @@ func mcpTools(a *app) []mcpserver.Tool {
 					}
 				}
 				return handleRecordUsage(ctx, a.tracker, in)
+			},
+		},
+		{
+			Name:        "channel_health",
+			Description: "Report each channel's circuit-breaker state, recent failure count, per-kind error buckets, and remaining cooldown — so a consumer can avoid a flaky provider before dispatch.",
+			InputSchema: channelHealthSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in channelHealthArgs
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &in); err != nil {
+						return nil, fmt.Errorf("channel_health: invalid arguments: %w", err)
+					}
+				}
+				return handleChannelHealth(ctx, a.tracker, in)
 			},
 		},
 	}

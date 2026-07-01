@@ -201,3 +201,58 @@ func TestHandleRoute_V2_BlockedByBudgetSetsRetryAfter(t *testing.T) {
 type overCapBudget struct{}
 
 func (overCapBudget) UsedPct(ctx context.Context, channel string) (float64, error) { return 100, nil }
+
+func TestHandleChannelHealth_AllAndSingle(t *testing.T) {
+	_, tr := testRouterAndTracker(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := tr.Record(ctx, budget.Event{Channel: "claude", Verb: "plan", Success: false, ErrorKind: "5xx"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	all, err := handleChannelHealth(ctx, tr, channelHealthArgs{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != len(defaultChannelNames) {
+		t.Fatalf("got %d channels, want %d", len(all), len(defaultChannelNames))
+	}
+	var claude *channelHealthResult
+	for i := range all {
+		if all[i].Channel == "claude" {
+			claude = &all[i]
+		}
+	}
+	if claude == nil || !claude.CircuitOpen || claude.FailuresRecent != 3 || claude.ErrorKinds["server"] != 3 {
+		t.Fatalf("claude health wrong: %+v", claude)
+	}
+
+	one, err := handleChannelHealth(ctx, tr, channelHealthArgs{Channel: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(one) != 1 || one[0].Channel != "codex" || one[0].CircuitOpen {
+		t.Fatalf("single-channel health wrong: %+v", one)
+	}
+}
+
+func TestMCPTools_EndToEndChannelHealth(t *testing.T) {
+	r, tr := testRouterAndTracker(t)
+	a := &app{router: r, tracker: tr}
+	srv := mcpserver.New("styx", "test", mcpTools(a))
+	in := strings.Join([]string{
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"channel_health","arguments":{}}}`,
+	}, "\n") + "\n"
+	var out bytes.Buffer
+	if err := srv.Serve(context.Background(), strings.NewReader(in), &out); err != nil {
+		t.Fatal(err)
+	}
+	// The tools/call payload is JSON-marshaled and then embedded as a "text"
+	// string field, so the outer encoder escapes its quotes (e.g. \"circuit_open\").
+	// Match the bare field name, consistent with TestMCPTools_EndToEndRoute's
+	// same workaround for tool-call (not tools/list) output.
+	if !strings.Contains(out.String(), "circuit_open") || !strings.Contains(out.String(), "error_kinds") {
+		t.Fatalf("channel_health output missing fields:\n%s", out.String())
+	}
+}
