@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/config"
@@ -134,3 +135,69 @@ func TestMCPTools_EndToEndRoute(t *testing.T) {
 		t.Fatalf("route call did not return codex: %s", s)
 	}
 }
+
+func TestHandleRoute_V2Fields_ComplexClassifiedAndFloor(t *testing.T) {
+	r, tr := testRouterAndTracker(t) // rule: {Verb:"build", Use:"codex:gpt-5"} per v1 fixture
+	ctx := context.Background()
+	// No signals passed: handler must classify. "refactor" yields the "complex" signal.
+	res, err := handleRoute(ctx, r, tr, routeArgs{Task: "refactor the auth architecture", Verb: "build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, s := range res.ClassifiedSignals {
+		if s == "complex" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("classified_signals = %v, want to include 'complex'", res.ClassifiedSignals)
+	}
+	if res.Floor != "sonnet" {
+		t.Fatalf("floor = %q, want sonnet for a complex task", res.Floor)
+	}
+	if res.TierPlan == nil || res.TierPlan.Chosen == "" {
+		t.Fatalf("tier_plan missing: %+v", res.TierPlan)
+	}
+}
+
+func TestHandleRoute_V2_BlockedByBudgetSetsRetryAfter(t *testing.T) {
+	tr, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tr.Close() })
+	// A plan+complex rule whose only floor-clearing targets (claude, codex) are
+	// both over cap; cooldown gives a concrete retry hint.
+	ctx := context.Background()
+	if err := tr.MarkCooldown(ctx, "claude", time.Now().Add(30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	r := router.FromConfig(config.Routing{
+		Budget: config.BudgetCaps{
+			Claude: config.ChannelCap{CapPct: 80},
+			Codex:  config.ChannelCap{CapPct: 80},
+		},
+		Rules: []config.Rule{
+			{Verb: "plan", Signals: []string{"complex"}, Use: "claude:opus", Fallback: []string{"codex"}},
+		},
+	}, overCapBudget{}) // both claude+codex reported over cap; see helper below
+	res, err := handleRoute(ctx, r, tr, routeArgs{Task: "redesign the whole thing", Verb: "plan", Signals: []string{"complex"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.BlockedByBudget {
+		t.Fatalf("blocked_by_budget = false, want true when all capable channels over cap")
+	}
+	if res.Channel == "ollama" {
+		t.Fatal("blocked route returned below-floor ollama")
+	}
+	if res.RetryAfterS <= 0 {
+		t.Fatalf("retry_after_s = %d, want > 0 (claude cooldown ~30m)", res.RetryAfterS)
+	}
+}
+
+// overCapBudget reports every channel as 100% used so overCap() fires.
+type overCapBudget struct{}
+
+func (overCapBudget) UsedPct(ctx context.Context, channel string) (float64, error) { return 100, nil }

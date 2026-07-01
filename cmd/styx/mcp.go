@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
@@ -41,6 +42,21 @@ type routeResult struct {
 	Reasoning     string         `json:"reasoning"`
 	Budget        budgetSnapshot `json:"budget"`
 	Degraded      bool           `json:"degraded"`
+
+	// v2 capability-floor fields (additive; v1 consumers ignore unknown keys).
+	ClassifiedSignals []string  `json:"classified_signals,omitempty"`
+	Floor             string    `json:"floor,omitempty"`
+	TierPlan          *tierPlan `json:"tier_plan,omitempty"`
+	BlockedByBudget   bool      `json:"blocked_by_budget"`
+	RetryAfterS       int       `json:"retry_after_s,omitempty"`
+}
+
+// tierPlan is the JSON view of router.TierPlan: the floor-clearing candidate
+// targets, the one chosen within budget, and the next higher-tier escalation.
+type tierPlan struct {
+	Acceptable []string `json:"acceptable"`
+	Chosen     string   `json:"chosen"`
+	EscalateTo string   `json:"escalate_to,omitempty"`
 }
 
 // budgetSnapshotFor reads the budget State for a channel. On error it returns a
@@ -88,7 +104,7 @@ func handleRoute(ctx context.Context, r *router.Router, t *budget.Tracker, a rou
 	for _, cm := range dec.Fallback {
 		chain = append(chain, cm.Channel+":"+cm.Model)
 	}
-	return routeResult{
+	res := routeResult{
 		Channel:       dec.Channel,
 		Model:         dec.Model,
 		Effort:        dec.Effort,
@@ -96,7 +112,41 @@ func handleRoute(ctx context.Context, r *router.Router, t *budget.Tracker, a rou
 		Reasoning:     r.Explain(ctx, req),
 		Budget:        budgetSnapshotFor(ctx, t, dec.Channel),
 		Degraded:      dec.Degraded,
-	}, nil
+	}
+	// sigs is the signal slice used for routing (Extracted here when the caller
+	// omitted them). Surface it and the floor plan.
+	res.ClassifiedSignals = sigs
+	res.Floor = dec.Floor
+	res.BlockedByBudget = dec.BlockedByBudget
+	res.TierPlan = &tierPlan{
+		Acceptable: dec.TierPlan.Acceptable,
+		Chosen:     dec.TierPlan.Chosen,
+		EscalateTo: dec.TierPlan.EscalateTo,
+	}
+	if dec.BlockedByBudget {
+		res.RetryAfterS = minRetryAfter(ctx, t, dec.TierPlan.Acceptable)
+	}
+	return res, nil
+}
+
+// minRetryAfter returns the smallest positive RetryAfter across the acceptable
+// targets' channels, or 0 when none has a known retry window.
+func minRetryAfter(ctx context.Context, t *budget.Tracker, acceptable []string) int {
+	best := 0
+	for _, cm := range acceptable {
+		ch := cm
+		if i := strings.IndexByte(cm, ':'); i >= 0 {
+			ch = cm[:i]
+		}
+		s, err := t.RetryAfter(ctx, ch)
+		if err != nil || s <= 0 {
+			continue
+		}
+		if best == 0 || s < best {
+			best = s
+		}
+	}
+	return best
 }
 
 type budgetStatusArgs struct {
