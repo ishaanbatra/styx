@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-06-30
+last_verified: 2026-07-01
 ---
 
 # Styx Architecture
@@ -383,7 +383,21 @@ percentages plus message counts in rolling 5h (`WindowSession`) and 168h
 (`WindowWeek`) windows against limits from routing.toml. `ModelCount(channel,
 model, window)` counts per-model rows for tier-aware degradation.
 `ShouldCircuitBreak(channel, threshold, window)` counts recent failures; app
-routing opens a channel circuit after 3 failures in 10 minutes.
+routing opens a channel circuit after 3 failures in 10 minutes — the shared
+`BreakerThreshold`/`BreakerWindow` consts (used by both `dispatch.go`'s
+`budgetSource.Broken` and the read snapshots below).
+
+Two pure read methods expose that same posture without adding state.
+`ChannelHealth(channel, threshold, window)` returns a `ChannelHealth` snapshot:
+`CircuitOpen`, `FailuresRecent`, per-kind `ErrorKinds` buckets (raw
+`error_kind`s folded into the friendly, zero-filled labels
+timeout/rate_limit/server/other via `healthKind`), and
+`CooldownRemainingSeconds` — the failure count and the kind buckets share one
+window cutoff. `RetryAfter(channel)` estimates seconds until a channel regains
+capacity: an active cooldown's remaining seconds first, else (via `windowRetry`)
+the time until the oldest in-window message ages out under a *hit* message cap,
+else 0 (unknown / no limit). Both are consumed by the MCP brain's
+`channel_health` / `retry_after` tools.
 
 `Event` carries two attribution fields added in v0.4: `Project` (the resolved
 stable project ID, "" if none) and `RunID` (a per-session/per-verb correlation

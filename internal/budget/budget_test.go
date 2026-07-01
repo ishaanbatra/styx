@@ -354,3 +354,85 @@ func TestConcurrentWritersNoLock(t *testing.T) {
 		t.Fatalf("concurrent Record errored (database locked?): %v", err)
 	}
 }
+
+func TestChannelHealth_BucketsAndCircuit(t *testing.T) {
+	tr := newTestTracker(t)
+	ctx := context.Background()
+	// 3 failures with distinct kinds + 1 success.
+	for _, kind := range []string{"timeout", "429", "5xx"} {
+		if err := tr.Record(ctx, Event{Channel: "claude", Verb: "plan", Success: false, ErrorKind: kind}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tr.Record(ctx, Event{Channel: "claude", Verb: "plan", Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := tr.ChannelHealth(ctx, "claude", BreakerThreshold, BreakerWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.FailuresRecent != 3 {
+		t.Fatalf("failures_recent = %d, want 3 (success excluded)", h.FailuresRecent)
+	}
+	if !h.CircuitOpen {
+		t.Fatalf("circuit_open = false, want true (3 >= threshold 3)")
+	}
+	if h.WindowSeconds != int(BreakerWindow/time.Second) {
+		t.Fatalf("window_s = %d, want %d", h.WindowSeconds, int(BreakerWindow/time.Second))
+	}
+	sum := 0
+	for _, n := range h.ErrorKinds {
+		sum += n
+	}
+	if sum != h.FailuresRecent {
+		t.Fatalf("error_kinds sum = %d, want %d", sum, h.FailuresRecent)
+	}
+	// Raw stored labels "timeout"/"429"/"5xx" surface as the spec's friendly,
+	// zero-filled buckets timeout/rate_limit/server/other.
+	if h.ErrorKinds["timeout"] != 1 || h.ErrorKinds["rate_limit"] != 1 || h.ErrorKinds["server"] != 1 || h.ErrorKinds["other"] != 0 {
+		t.Fatalf("error_kinds = %v, want timeout:1 rate_limit:1 server:1 other:0", h.ErrorKinds)
+	}
+}
+
+func TestChannelHealth_HealthyChannel(t *testing.T) {
+	tr := newTestTracker(t)
+	ctx := context.Background()
+	h, err := tr.ChannelHealth(ctx, "codex", BreakerThreshold, BreakerWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := 0
+	for _, n := range h.ErrorKinds {
+		sum += n
+	}
+	// Buckets are zero-filled (4 keys) but all zero for a fresh channel.
+	if h.CircuitOpen || h.FailuresRecent != 0 || sum != 0 || h.CooldownRemainingSeconds != 0 {
+		t.Fatalf("fresh channel not healthy: %+v", h)
+	}
+}
+
+func TestRetryAfter_Cooldown(t *testing.T) {
+	tr := newTestTracker(t)
+	ctx := context.Background()
+	if err := tr.MarkCooldown(ctx, "claude", time.Now().Add(15*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s, err := tr.RetryAfter(ctx, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s < 14*60 || s > 15*60 {
+		t.Fatalf("retry_after = %d s, want ~15m", s)
+	}
+}
+
+func TestRetryAfter_NoLimitsZero(t *testing.T) {
+	tr := newTestTracker(t)
+	s, err := tr.RetryAfter(context.Background(), "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s != 0 {
+		t.Fatalf("retry_after = %d, want 0 when no cooldown and no message cap hit", s)
+	}
+}
