@@ -167,6 +167,22 @@ func TestIsStale_OldByAge(t *testing.T) {
 	}
 }
 
+func TestStaleness_FreshAndAged(t *testing.T) {
+	proj := config.Project{ID: "p", Name: "p", Path: t.TempDir()} // no git -> commitsSince returns 0 baseline for GitHead ""
+	fresh := &Index{BuiltAt: time.Now().UTC(), GitHead: ""}
+	if stale, reason := Staleness(proj, fresh); stale {
+		t.Fatalf("fresh index reported stale: %q", reason)
+	}
+	aged := &Index{BuiltAt: time.Now().UTC().Add(-8 * 24 * time.Hour), GitHead: ""}
+	stale, reason := Staleness(proj, aged)
+	if !stale {
+		t.Fatal("8-day-old index not reported stale")
+	}
+	if reason == "" {
+		t.Fatal("stale index returned empty reason")
+	}
+}
+
 func TestBuild_EmitsProgress(t *testing.T) {
 	cfgDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgDir)
