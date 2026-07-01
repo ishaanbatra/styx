@@ -301,6 +301,8 @@ func dispatch(verb string, args []string) error {
 		return cmdReview(a, args)
 	case "intel":
 		return cmdIntel(a, args)
+	case "mcp":
+		return cmdMCP(a, args)
 	case "auto":
 		return cmdAuto(a, args)
 	case "grunt", "think", "explain", "summarize", "critique":
