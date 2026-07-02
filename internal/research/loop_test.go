@@ -218,24 +218,46 @@ func TestChaseSources_NarratesPerURL(t *testing.T) {
 }
 
 func TestAgySummarizer_FetchFailureDoesNotInvokeAgy(t *testing.T) {
-	// http://127.0.0.1:1 is now rejected by the hostBlocked SSRF guard before
-	// curl ever runs (loopback host) — an even stronger guarantee than the
-	// original "curl fails fast" premise. Either marker is acceptable; what
-	// matters is agy.Send is never invoked.
+	// .invalid is an RFC 2606 reserved TLD: DNS resolution deterministically
+	// fails, so curl fails without any real network dependency — while
+	// hostBlocked still allows the URL (public-looking https host), so this
+	// exercises the genuine curl-failure branch, not the SSRF short-circuit.
+	const fixture = "https://curl-must-fail.invalid/page"
+	if hostBlocked(fixture) {
+		t.Fatalf("fixture %q must pass hostBlocked so the test reaches curl", fixture)
+	}
 	called := 0
 	stubAgy := &fakeChan{responses: []string{"agy would have hallucinated this"}}
 	wrappedAgy := &countingChannel{inner: stubAgy, count: &called}
 	summarize := AgySummarizer(wrappedAgy)
-	got, err := summarize(context.Background(), "http://127.0.0.1:1/styx-fetch-fail-test")
+	got, err := summarize(context.Background(), fixture)
 	if err != nil {
 		// Either error or graceful-degrade string is fine; just don't hallucinate.
 	}
 	if called != 0 {
 		t.Errorf("agy.Send must not be invoked when curl fails; got %d calls. Returned: %q", called, got)
 	}
-	lower := strings.ToLower(got)
-	if !strings.Contains(lower, "fetch failed") && !strings.Contains(lower, "skipped") && err == nil {
-		t.Errorf("expected 'fetch failed' or 'skipped' marker or non-nil err, got %q", got)
+	if !strings.Contains(strings.ToLower(got), "fetch failed") && err == nil {
+		t.Errorf("expected 'fetch failed' marker or non-nil err, got %q", got)
+	}
+}
+
+func TestAgySummarizer_BlockedHostSkipsWithoutFetch(t *testing.T) {
+	// Loopback host: the hostBlocked SSRF guard must short-circuit before
+	// curl runs, returning the "skipped" marker and never invoking agy.Send.
+	called := 0
+	stubAgy := &fakeChan{responses: []string{"agy would have hallucinated this"}}
+	wrappedAgy := &countingChannel{inner: stubAgy, count: &called}
+	summarize := AgySummarizer(wrappedAgy)
+	got, err := summarize(context.Background(), "http://127.0.0.1:1/styx-blocked-host-test")
+	if err != nil {
+		t.Fatalf("blocked host should degrade gracefully, got err: %v", err)
+	}
+	if called != 0 {
+		t.Errorf("agy.Send must not be invoked for a blocked host; got %d calls. Returned: %q", called, got)
+	}
+	if !strings.HasPrefix(got, "skipped ") || !strings.Contains(got, "private/non-http host") {
+		t.Errorf("expected 'skipped <url>: private/non-http host' marker, got %q", got)
 	}
 }
 
