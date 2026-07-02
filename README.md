@@ -36,7 +36,7 @@ that can't be resolved is a clear error, never a silent fallback.
 
 | Verb | What it does |
 |---|---|
-| `styx` | Launch the Claude Code conductor with the styx MCP toolbelt (repl for the classic v0.2 REPL) |
+| `styx` | Launch the Claude Code conductor with the styx MCP toolbelt — from any directory, git repo or not (repl for the classic v0.2 REPL) |
 | `styx <repo...>` | Launch the conductor bound to one or more named repos (first is focus) |
 | `styx launch [repo...]` | Same as the two rows above, explicit verb form |
 | `styx repl [repo...]` | Open the classic v0.2 REPL, kept until the conductor reaches parity |

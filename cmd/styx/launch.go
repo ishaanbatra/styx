@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,11 +66,29 @@ func cmdLaunch(a *app, repos ...string) error {
 // explicit first repo resolves by alias; with none given, fall back to the
 // global --project/--dir/cwd resolution so bare `styx` still targets the
 // current directory's repo rather than erroring on an empty spec.
+//
+// Unlike every other verb, bare `styx` outside any git repository does not
+// error: the conductor is useful in a plain directory (global tools, guidance,
+// dispatch to registered projects), so the cwd itself becomes the focus. Only
+// the implicit-cwd case is relaxed — an explicit repo argument or --project/
+// --dir flag that fails still surfaces its error.
 func resolveLaunchTarget(repos []string) (project.Project, error) {
 	if len(repos) > 0 {
 		return target.Resolve(target.Spec{Alias: repos[0]})
 	}
-	return resolveGlobalTarget("")
+	p, err := resolveGlobalTarget("")
+	if err == nil {
+		return p, nil
+	}
+	if errors.Is(err, project.ErrNotInGitRepo) && globalProjectAlias == "" && globalDirArg == "" {
+		cwd, werr := os.Getwd()
+		if werr != nil {
+			return project.Project{}, fmt.Errorf("getwd: %w", werr)
+		}
+		logStatus("not a git repo — launching in plain directory %s (project-scoped tools need a registered repo)", cwd)
+		return project.Project{Name: filepath.Base(cwd), Path: cwd}, nil
+	}
+	return project.Project{}, err
 }
 
 // recallRoutingPrefs opens the global memory store + embedder exactly as

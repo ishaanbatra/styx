@@ -82,7 +82,13 @@ Shared pieces:
 - `launch.go` — `cmdLaunch(a *app, repos ...string) error`, the conductor
   front door. Resolves the focus project exactly like `newREPLSession`'s seed
   resolution (first repo by alias, or `resolveGlobalTarget("")` for bare
-  `styx` so cwd still works), resolves any extra repos — passed to the
+  `styx` so cwd still works). Uniquely among verbs, bare `styx` outside any
+  git repository does not error: `resolveLaunchTarget` catches
+  `project.ErrNotInGitRepo` (implicit-cwd case only — explicit repo args and
+  `--project`/`--dir` stay strict) and launches in the plain directory,
+  synthesizing an unregistered `Project{Name: base(cwd), Path: cwd}` and
+  narrating via `logStatus`; project-scoped MCP tools then require a
+  registered repo per-call. Resolves any extra repos — passed to the
   launcher as `Opts.ExtraRepos` (rendered as `--add-dir` flags on the Claude
   Code session) and folded into the guidance as a note telling the brain to
   also pass them as the MCP `dispatch` tool's `extra_roots` so dispatched
@@ -649,7 +655,9 @@ Guidance, ExtraRepos}` is everything a host needs. `ClaudeHost.Launch`:
 
 **Conductor data flow.** `cmd/styx/launch.go`'s `cmdLaunch(a, repos...)` is
 the only caller: it resolves the focus project (`target.Resolve` on the
-first repo, or `resolveGlobalTarget("")` for bare `styx`), loads
+first repo, or `resolveGlobalTarget("")` for bare `styx`, falling back to
+the plain cwd when that fails with `ErrNotInGitRepo` and no explicit
+target was given), loads
 `internal/guidance.Load(project.Path)` for the base system-prompt content,
 appends a note about any extra repos and `recallRoutingPrefs(a)`'s learned
 routing-preference memories, resolves the running binary via

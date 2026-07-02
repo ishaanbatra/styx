@@ -63,6 +63,47 @@ func TestCmdLaunchNoReposDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestCmdLaunchNonGitCwdLaunchesInPlainDir proves bare `styx` outside any git
+// repository still launches the conductor, treating the cwd itself as the
+// focus directory (no project registration, no error). Explicit targets keep
+// their strict resolution; only the implicit-cwd fallback is relaxed.
+func TestCmdLaunchNonGitCwdLaunchesInPlainDir(t *testing.T) {
+	setupDispatchEnv(t)
+	argsFile := fakeClaudeOnPath(t)
+
+	dir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWd)
+
+	p, err := resolveLaunchTarget(nil)
+	if err != nil {
+		t.Fatalf("resolveLaunchTarget in non-git cwd: %v", err)
+	}
+	wantDir, _ := filepath.EvalSymlinks(dir)
+	gotDir, _ := filepath.EvalSymlinks(p.Path)
+	if gotDir != wantDir {
+		t.Fatalf("focus path = %q, want cwd %q", p.Path, dir)
+	}
+
+	a, err := loadApp()
+	if err != nil {
+		t.Fatalf("loadApp: %v", err)
+	}
+	defer a.tracker.Close()
+	if err := cmdLaunch(a); err != nil {
+		t.Fatalf("cmdLaunch in non-git cwd: %v", err)
+	}
+	if _, err := os.Stat(argsFile); err != nil {
+		t.Fatalf("expected fake claude to run, args file missing: %v", err)
+	}
+}
+
 // TestDispatchLaunchVerbRoutesToCmdLaunch proves `styx launch <repo>` reaches
 // cmdLaunch (which execs the "claude" host) rather than the classic REPL.
 func TestDispatchLaunchVerbRoutesToCmdLaunch(t *testing.T) {
