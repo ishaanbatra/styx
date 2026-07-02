@@ -121,10 +121,11 @@ Shared pieces:
   `Tool.InputSchema`. `mcpTools(a *app)` assembles all seven handlers into
   `[]mcpserver.Tool`, unmarshaling raw JSON arguments before each dispatch.
   `cmdMCP(a *app, args []string)` constructs the server via `mcpserver.New("styx",
-  mcpServerVersion, mcpTools(a))`, logs readiness to stderr via `logStatus`
-  (naming all seven tools), and runs `srv.Serve(ctx, os.Stdin, os.Stdout)` —
-  stdout carries the JSON-RPC protocol only, nothing else. `const
-  mcpServerVersion = "0.1.0"`. See the "MCP server" section below for the
+  mcpServerVersion, append(mcpTools(a), conductorTools(newConductorDeps(a))...))`,
+  logs readiness to stderr via `logStatus` (naming all nine tools), and runs
+  `srv.Serve(ctx, os.Stdin, os.Stdout)` — stdout carries the JSON-RPC protocol
+  only, nothing else. `const mcpServerVersion = "0.1.0"`. See the "MCP
+  server" and "Conductor MCP tools" sections below for the
   route-v2 field shapes and value-shape decisions consumers must know.
 
 ### Multi-project session
@@ -589,14 +590,17 @@ claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 
 Server-side confirmation for ship-risk MCP actions — commit/push/PR — before the MCP server executes them. The gate is isolated from styx business logic (stdlib only) so it holds for any MCP host. Supports three modes: `handshake` (default) relays a single-use token through the brain for user confirmation; `tty` prompts on `/dev/tty` directly, bypassing the brain; `off` allows all actions (scripting). Tokens expire after 10 minutes and are bound to their action — reuse is denied, and a token for one action does not unlock another. See conductor spec §6.
 
-## MCP server (internal/mcpserver + cmd/styx/mcp.go)
+## MCP server (internal/mcpserver + cmd/styx/mcp.go + cmd/styx/mcp_conductor.go)
 
 A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the
-routing brain as seven tools for MCP hosts like OpenClaw: `route`,
-`budget_status`, `record_usage`, `channel_health`, `get_intel`,
-`refresh_intel`, and `recall`. Pure stdlib, no provider SDK; stdout carries
-the protocol, status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
+routing brain and the conductor dispatch surface as nine tools for MCP hosts
+like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
+`channel_health`, `get_intel`, `refresh_intel`, `recall`, `dispatch`, and
+`thread_status`. Pure stdlib, no provider SDK; stdout carries the protocol,
+status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
+`cmd/styx/cmdMCP` builds the tool set as `append(mcpTools(a),
+conductorTools(newConductorDeps(a))...)`.
 
 **`route` v2 additive fields.** `routeResult` gained five fields that v1
 consumers safely ignore (all `omitempty` except `blocked_by_budget`):
@@ -641,6 +645,46 @@ argument through `resolveProjectStrict`, which has no cwd fallback (an MCP
 server's cwd is not the caller's project) and turns an empty/unknown project
 into a `channel.ClassifiedError` rather than a silent default — the shared
 cross-cutting contract for every project-scoped v2 tool.
+
+## Conductor MCP tools (cmd/styx/mcp_conductor.go)
+
+`dispatch` and `thread_status` give a frontier-brain MCP consumer (Claude
+Code, per the conductor spec) a dispatch surface onto the same
+`internal/agent` thread machinery the REPL uses, without going through the
+REPL loop.
+
+- `conductorDeps` (`a *app`, `gate *shipgate.Gate`, `emb memory.Embedder`,
+  and a mutex-guarded `managers map[string]*managed` cache keyed by project
+  ID) is built once per `styx mcp` invocation via `newConductorDeps(a)`. Task
+  5 appends `memory_save` + `pipeline_run` to the same `conductorTools(d)`
+  slice.
+- `conductorDeps.managerFor(alias)` lazily binds a project exactly the way
+  `replSession.bind` does (`cmd/styx/repl.go`): opens `<memDir>/<projectID>.db`
+  via `memory.Open`, loads `agent.LoadThreads(projectID)`, wires the
+  claude/codex/agy adapters (`agent.NewClaudeAdapter/NewCodexAdapter/
+  NewAgyAdapter`), the shared budget tracker, an ollama-backed `Summarize`
+  closure for distill-and-restart, and the `[budget.claude].timeout_minutes`
+  subprocess timeout (default 10m). Like `resolveProjectStrict`, resolution
+  goes through `target.Resolve(target.Spec{Alias: alias})` with **no cwd
+  fallback**; an empty or unregistered alias is a loud error, not a
+  server-side default project.
+- `dispatch(project?, thread?, cli, message, model?, risk, extra_roots?,
+  confirm_token?)` — `cli` is one of `claude|codex|agy|ollama`; `risk` is
+  `read|edit|ship`. Validation (unknown cli, empty message, invalid risk)
+  runs first and returns a plain error. For `risk: ship`, the
+  **`internal/shipgate` check runs before project resolution** — a ship-risk
+  call against an unbound project still gets gated, never silently resolved
+  first. `cli: ollama` is a one-shot call through `a.channels["ollama"]`
+  bypassing thread machinery entirely (no project needed). Otherwise the
+  call routes through `managerFor` + `agent.Manager.Dispatch`, returning
+  `{thread, cli, text, tokens_in, tokens_out}` (`thread` defaults to `cli`
+  when unset, matching `Manager.Dispatch`'s own thread-naming default) or,
+  when gated and denied, the raw `shipgate.Result` (`{allowed, token,
+  message}`) so the brain can relay the confirmation token to the user.
+- `thread_status(project?)` — resolves the project via the same
+  `managerFor` and returns `{threads: []string}` from
+  `agent.Manager.StatusLines()` (name, CLI, turn count, context-window
+  percent per thread).
 
 ## Progress (internal/progress)
 
