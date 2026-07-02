@@ -218,7 +218,10 @@ func TestChaseSources_NarratesPerURL(t *testing.T) {
 }
 
 func TestAgySummarizer_FetchFailureDoesNotInvokeAgy(t *testing.T) {
-	// Use an unroutable URL so curl fails fast.
+	// http://127.0.0.1:1 is now rejected by the hostBlocked SSRF guard before
+	// curl ever runs (loopback host) — an even stronger guarantee than the
+	// original "curl fails fast" premise. Either marker is acceptable; what
+	// matters is agy.Send is never invoked.
 	called := 0
 	stubAgy := &fakeChan{responses: []string{"agy would have hallucinated this"}}
 	wrappedAgy := &countingChannel{inner: stubAgy, count: &called}
@@ -230,8 +233,9 @@ func TestAgySummarizer_FetchFailureDoesNotInvokeAgy(t *testing.T) {
 	if called != 0 {
 		t.Errorf("agy.Send must not be invoked when curl fails; got %d calls. Returned: %q", called, got)
 	}
-	if !strings.Contains(strings.ToLower(got), "fetch failed") && err == nil {
-		t.Errorf("expected 'fetch failed' marker or non-nil err, got %q", got)
+	lower := strings.ToLower(got)
+	if !strings.Contains(lower, "fetch failed") && !strings.Contains(lower, "skipped") && err == nil {
+		t.Errorf("expected 'fetch failed' or 'skipped' marker or non-nil err, got %q", got)
 	}
 }
 

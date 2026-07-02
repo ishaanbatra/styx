@@ -597,8 +597,17 @@ strict JSON, embedded JSON, or keyword sections, and falls back to treating
 garbage as one IMPORTANT finding (never silently converges); parse fallback
 errors are surfaced through progress/status instead of being swallowed.
 `deep.go` extracts cited URLs, fetches (80KB cap), and appends a Sources
-Appendix. `brief` writes timestamped briefs/plans into the project's configured
-dirs and resolves the most recent brief.
+Appendix. Before fetching, `hostBlocked` rejects non-http(s) schemes and
+private/loopback/link-local hosts (SSRF guard on the citation chaser, e.g.
+`169.254.169.254` cloud metadata, `127.0.0.1`, RFC1918 ranges, `.local`); the
+`ChaseSources` loop reports a blocked URL as a distinct "skipped" outcome
+(never silently) alongside its existing succeeded/failed narration and
+tallies. The truncated page body is embedded in the summarize prompt via
+`buildSummarizePrompt`, fenced between `BEGIN UNTRUSTED CONTENT`/
+`END UNTRUSTED CONTENT` markers with an explicit instruction to treat it as
+data, not instructions (prompt-injection mitigation: fetched pages are
+attacker-controlled input). `brief` writes timestamped briefs/plans into the
+project's configured dirs and resolves the most recent brief.
 
 ## Execute (internal/execute)
 
