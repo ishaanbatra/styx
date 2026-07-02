@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/agent"
+	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -191,6 +192,17 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					resp, err := ch.Send(ctx, channel.Request{
 						Model: in.Model, Prompt: in.Message,
 					})
+					errKind := ""
+					if err != nil {
+						errKind = "other"
+					}
+					if rerr := d.a.tracker.Record(ctx, budget.Event{
+						Channel: "ollama", Verb: "one-shot", Model: in.Model,
+						TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
+						Success: err == nil, ErrorKind: errKind,
+					}); rerr != nil {
+						logStatus("budget record (ollama one-shot) failed: %v", rerr)
+					}
 					if err != nil {
 						return nil, fmt.Errorf("ollama dispatch: %w", err)
 					}

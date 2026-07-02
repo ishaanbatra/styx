@@ -177,6 +177,46 @@ func TestDispatchHappyPath(t *testing.T) {
 	}
 }
 
+// TestDispatchOllamaOneShotRecordsUsage is a regression test: the ollama
+// one-shot branch returned without touching the budget tracker, so local
+// dispatches never appeared in `styx budget` and the ledger under-reported
+// real conductor activity.
+func TestDispatchOllamaOneShotRecordsUsage(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+
+	d := &conductorDeps{
+		a: &app{
+			routing:  config.Routing{Tiers: map[string]string{}},
+			tracker:  bud,
+			channels: map[string]channel.Channel{"ollama": &recordingChannel{}},
+		},
+		gate:     shipgate.New(shipgate.ModeOff),
+		emb:      replEmbedder{},
+		managers: map[string]*managed{},
+	}
+
+	if _, err := callTool(t, d, "dispatch", map[string]any{
+		"cli": "ollama", "message": "write a haiku", "risk": "read",
+	}); err != nil {
+		t.Fatalf("dispatch ollama: %v", err)
+	}
+
+	st, err := bud.State(context.Background(), "ollama")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SessionCount != 1 {
+		t.Fatalf("ollama SessionCount = %d, want 1 (one-shot not recorded)", st.SessionCount)
+	}
+}
+
 func TestPipelineRunGatesAuto(t *testing.T) {
 	d := &conductorDeps{gate: shipgate.New(shipgate.ModeHandshake)}
 	res, err := callTool(t, d, "pipeline_run", map[string]any{"pipeline": "auto", "arg": "build the thing"})
