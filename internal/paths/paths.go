@@ -64,6 +64,15 @@ func RoutingPath() (string, error) {
 	return filepath.Join(d, "routing.toml"), nil
 }
 
+// GuidancePath returns the absolute path to guidance.md.
+func GuidancePath() (string, error) {
+	d, err := ConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "guidance.md"), nil
+}
+
 // ProjectsPath returns the absolute path to projects.toml.
 func ProjectsPath() (string, error) {
 	d, err := ConfigDir()

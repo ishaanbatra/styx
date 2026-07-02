@@ -257,6 +257,19 @@ behavior on chain exhaustion with a loud refusal signal a caller can check
 before dispatching. `Router.Explain` prints `floor: <tier>` (when not
 `local`) and a `blocked: ...` line when `BlockedByBudget`.
 
+## Guidance (internal/guidance)
+
+Data-driven routing guidance replacing the v0.2 brain's compiled-in preamble.
+A global guidance file is seeded at `~/.config/styx/guidance.md` on first call
+to `Load()` and is user-editable, never overwritten. `Load(projectPath string)`
+returns the global guidance with an optional per-repo override appended from
+`<repo>/styx/guidance.md` if it exists. The `Seed` constant contains the
+default shipped guidance: channel best purposes (codex as primary implementer
+for well-scoped work, claude for ambiguous/architectural/refactor work, agy for
+large-file explains, ollama for trivial one-shots), model tier guidance, working
+style conventions (plan before dispatch, reuse threads, consult memory, check
+budget), and ship policy (confirmation token handoff).
+
 ## Model Sync (internal/modelsync)
 
 `modelsync` owns model discovery state that keeps routing in the
