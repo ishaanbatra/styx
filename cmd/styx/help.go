@@ -14,7 +14,11 @@ GLOBAL FLAGS
   --verbose    Show extra detail (prompt sizes, model names) during long ops
 
 VERBS
-  styx                      Open the conversational REPL in this project
+  styx [repo...]            Launch the Claude Code conductor with the styx MCP
+                             toolbelt, bound to named repos if given (first = focus)
+  launch [repo...]          Same as above, explicit verb form
+  repl [repo...]            Open the classic v0.2 REPL, kept until the
+                             conductor reaches parity
   styx "<anything>"         One brain-routed turn, then exit
   research <query>          Gemini draft + Codex critique -> brief
   deep-research <query>     Open Gemini + ChatGPT in browser; synthesis template

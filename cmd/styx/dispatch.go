@@ -324,7 +324,7 @@ func dispatch(verb string, args []string) error {
 }
 
 // allReposResolve reports whether every token names a resolvable project; if so
-// it returns the tokens so the caller can open the REPL bound to them.
+// it returns the tokens so the caller can launch the conductor bound to them.
 func allReposResolve(tokens []string) ([]string, bool) {
 	if len(tokens) == 0 {
 		return nil, false

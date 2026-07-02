@@ -145,7 +145,7 @@ Shared pieces:
   `[]mcpserver.Tool`, unmarshaling raw JSON arguments before each dispatch.
   `cmdMCP(a *app, args []string)` constructs the server via `mcpserver.New("styx",
   mcpServerVersion, append(mcpTools(a), conductorTools(newConductorDeps(a))...))`,
-  logs readiness to stderr via `logStatus` (naming all nine tools), and runs
+  logs readiness to stderr via `logStatus` (naming all eleven tools), and runs
   `srv.Serve(ctx, os.Stdin, os.Stdout)` — stdout carries the JSON-RPC protocol
   only, nothing else. `const mcpServerVersion = "0.1.0"`. See the "MCP
   server" and "Conductor MCP tools" sections below for the
