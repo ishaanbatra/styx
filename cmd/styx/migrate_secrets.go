@@ -91,14 +91,19 @@ func rewriteRC(path string, remove []string) error {
 		if err := os.WriteFile(bak, orig, 0o600); err != nil {
 			return fmt.Errorf("write backup: %w", err)
 		}
+	} else if err != nil {
+		return fmt.Errorf("stat backup %s: %w", bak, err)
 	}
-	drop := make(map[string]bool, len(remove))
+	// drop is a multiset: remove only as many occurrences of each line as the
+	// user confirmed, so a declined duplicate of the same line survives.
+	drop := make(map[string]int, len(remove))
 	for _, l := range remove {
-		drop[strings.TrimSpace(l)] = true
+		drop[strings.TrimSpace(l)]++
 	}
 	var out []string
 	for _, line := range strings.Split(string(orig), "\n") {
-		if drop[strings.TrimSpace(line)] {
+		if key := strings.TrimSpace(line); drop[key] > 0 {
+			drop[key]--
 			continue
 		}
 		out = append(out, line)

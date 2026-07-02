@@ -38,3 +38,27 @@ func TestMigrateRewriteDeletesAndTightens(t *testing.T) {
 		t.Fatalf("backup perms = %o, want 0600", bfi.Mode().Perm())
 	}
 }
+
+func TestMigrateRewriteRemovesOnlyConfirmedCount(t *testing.T) {
+	dir := t.TempDir()
+	rc := filepath.Join(dir, ".zshrc")
+	orig := "export FOO_API_KEY=sekret\nalias ll='ls -l'\nexport FOO_API_KEY=sekret\n"
+	if err := os.WriteFile(rc, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// remove contains the duplicated line ONCE: exactly one occurrence must go —
+	// the user declined removal of the other.
+	if err := rewriteRC(rc, []string{"export FOO_API_KEY=sekret"}); err != nil {
+		t.Fatalf("rewriteRC: %v", err)
+	}
+	got, err := os.ReadFile(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(got), "export FOO_API_KEY=sekret"); n != 1 {
+		t.Fatalf("want exactly 1 surviving occurrence, got %d:\n%s", n, got)
+	}
+	if !strings.Contains(string(got), "alias ll") {
+		t.Fatalf("unrelated line lost:\n%s", got)
+	}
+}
