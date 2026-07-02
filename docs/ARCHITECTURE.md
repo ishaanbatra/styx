@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-07-01
+last_verified: 2026-07-02
 ---
 
 # Styx Architecture
@@ -568,6 +568,10 @@ through that channel with `Write: true` and captures output; when nil it uses
 the built-in claude path (`--dangerously-skip-permissions -p`), which streams
 claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 `--no-pr`/`--no-push`.
+
+## Shipgate (internal/shipgate)
+
+Server-side confirmation for ship-risk MCP actions — commit/push/PR — before the MCP server executes them. The gate is isolated from styx business logic (stdlib only) so it holds for any MCP host. Supports three modes: `handshake` (default) relays a single-use token through the brain for user confirmation; `tty` prompts on `/dev/tty` directly, bypassing the brain; `off` allows all actions (scripting). Tokens expire after 10 minutes and are bound to their action — reuse is denied, and a token for one action does not unlock another. See conductor spec §6.
 
 ## MCP server (internal/mcpserver + cmd/styx/mcp.go)
 
