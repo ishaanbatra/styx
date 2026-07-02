@@ -22,7 +22,8 @@ Styx is a Go CLI that routes dev work between four AI channels — claude
 
 ```
 argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir)
-              │ bare `styx` opens the REPL; otherwise ensureFirstRun():
+              │ bare `styx` launches the conductor (`styx repl` for the
+              │ classic REPL); otherwise ensureFirstRun():
               │ seed ~/.config/styx/routing.toml, v0.1→v0.2 upgrade
               ▼
         cmd/styx/dispatch.go
@@ -47,12 +48,14 @@ fallback chain when a channel is over its message caps.
 
 One file per verb (`research.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
-`repl.go`, `runs.go`, …).
+`repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
 
 - `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose` plus
   `--project <alias>` / `--dir <path>`; `ensureFirstRun` seeds config; bare
-  `styx` constructs the app and opens the REPL; errors exit 1 with a `styx:`
+  `styx` constructs the app and calls `cmdLaunch(a)`, handing off to the
+  Claude Code conductor (see "Launcher" below) — `styx repl` is the only way
+  to reach the classic v0.2 REPL loop now; errors exit 1 with a `styx:`
   prefix.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first; the rest construct `app{routing, tracker, router, channels,
@@ -63,16 +66,33 @@ Shared pieces:
   progress decorator for orchestration verbs that narrate themselves, leaving
   timeout protection in place. `resolveGlobalTarget(arg)` combines a verb's
   positional target with global `--project` / `--dir` flags and routes every
-  project-scoped verb and the REPL through `internal/target.Resolve`; this
-  replaces the old `resolveTarget` / `resolveProjectArg` split and removes the
-  silent cwd fallback for failed explicit targets. `seedMessageLimits` applies
+  project-scoped verb through `internal/target.Resolve`; this replaces the old
+  `resolveTarget` / `resolveProjectArg` split and removes the silent cwd
+  fallback for failed explicit targets. `seedMessageLimits` applies
   routing.toml message caps (with built-in fallbacks) to the budget tracker.
-  When every positional token resolves to a registered project, the dispatcher
-  opens the REPL bound to those repos (first becomes the focus); otherwise the
-  tokens are treated as a one-shot utterance (`styx "fix the flaky test"` is an
-  utterance, not an error). `mcp` is also an app verb (needs the full
-  `app{router, tracker}` from `loadApp()`) and is dispatched in the second
-  switch alongside `auto`, `research`, etc.
+  The verb switch has explicit `repl` (→ `cmdREPL`, the classic v0.2 loop) and
+  `launch` (→ `cmdLaunch`) cases. When no verb matches and every positional
+  token resolves to a registered project (`allReposResolve`), the dispatcher
+  now launches the conductor bound to those repos (first becomes the focus,
+  via `cmdLaunch`) rather than opening the REPL; otherwise the tokens are
+  treated as a one-shot utterance (`styx "fix the flaky test"` is an
+  utterance, not an error) handled by `cmdBrainTurn`. `mcp` is also an app
+  verb (needs the full `app{router, tracker}` from `loadApp()`) and is
+  dispatched in the second switch alongside `auto`, `research`, etc.
+- `launch.go` — `cmdLaunch(a *app, repos ...string) error`, the conductor
+  front door. Resolves the focus project exactly like `newREPLSession`'s seed
+  resolution (first repo by alias, or `resolveGlobalTarget("")` for bare
+  `styx` so cwd still works), resolves any extra repos and folds them into the
+  guidance as a note (bind them for real via the MCP `dispatch` tool's
+  `extra_roots`, not this exec), loads `internal/guidance.Load(project.Path)`,
+  appends `recallRoutingPrefs(a)` output when non-empty, resolves the running
+  `styx` binary via `os.Executable()`, and calls
+  `(&launcher.ClaudeHost{}).Launch(ctx, launcher.Opts{...})`.
+  `recallRoutingPrefs(a *app) string` opens the global memory store + ollama
+  embedder exactly as `newREPLSession` does (`repl.go`), calls
+  `memory.Recall(ctx, emb, "routing preference", 5, glob)`, and joins hit text
+  with `"\n- "`. It is a pure enhancement: any failure (store open, recall) is
+  narrated via `logStatus` and yields `""` rather than blocking the launch.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
@@ -83,8 +103,9 @@ Shared pieces:
   Claude tier aliases with a cheap one-shot call, and verifies that Ollama has
   both the brain model (`qwen2.5-coder:7b` by default) and embedding model
   pulled. `--fix` pulls missing Ollama models.
-- `repl.go` — the conversational frontend and session core. `cmdREPL` runs the
-  persistent bare-`styx` loop with `/status`, `/budget`, `/threads`, `/why`,
+- `repl.go` — the conversational frontend and session core, now reached via
+  `styx repl` rather than bare `styx`. `cmdREPL` runs the persistent loop with
+  `/status`, `/budget`, `/threads`, `/why`,
   `/audit`, `/repos`, `/focus`, and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
   recalls project/global memory, asks the local brain for an action, then
   replies, dispatches to persistent agent threads, runs a wired pipeline,
@@ -589,6 +610,45 @@ claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 ## Shipgate (internal/shipgate)
 
 Server-side confirmation for ship-risk MCP actions — commit/push/PR — before the MCP server executes them. The gate is isolated from styx business logic (stdlib only) so it holds for any MCP host. Supports three modes: `handshake` (default) relays a single-use token through the brain for user confirmation; `tty` prompts on `/dev/tty` directly, bypassing the brain; `off` allows all actions (scripting). Tokens expire after 10 minutes and are bound to their action — reuse is denied, and a token for one action does not unlock another. See conductor spec §6.
+
+## Launcher (internal/launcher)
+
+The conductor front door: opens a frontier-brain host session (Claude Code
+first) with styx attached as an MCP toolbelt. `Host` (`Name() string`,
+`Launch(ctx, Opts) error`) is the seam for future hosts; `ClaudeHost{Bin
+string}` (empty `Bin` means `"claude"` on `PATH`) is the only host-specific
+code in the conductor — everything else downstream is portable MCP surface
+(`internal/mcpserver` + the conductor tools). `Opts{ProjectPath, StyxBin,
+Guidance, ExtraRepos}` is everything a host needs. `ClaudeHost.Launch`:
+1. resolves `paths.StateDir()` and `paths.EnsureDir`s it;
+2. writes `{"mcpServers": {"styx": {"command": StyxBin, "args": ["mcp"]}}}`
+   to `<stateDir>/conductor-mcp.json` via atomic tmp+rename;
+3. execs `claude --mcp-config <path> --append-system-prompt <Guidance>`
+   (plus `--add-dir <repo>` per `ExtraRepos`) via `exec.CommandContext` with
+   `cmd.Dir = ProjectPath` and stdio passed through directly (`cmd.Stdin`,
+   `cmd.Stdout`, `cmd.Stderr` = the process's own), so the user drives the
+   resulting Claude Code session interactively; the launch call returns only
+   when that session exits.
+
+**Conductor data flow.** `cmd/styx/launch.go`'s `cmdLaunch(a, repos...)` is
+the only caller: it resolves the focus project (`target.Resolve` on the
+first repo, or `resolveGlobalTarget("")` for bare `styx`), loads
+`internal/guidance.Load(project.Path)` for the base system-prompt content,
+appends a note about any extra repos and `recallRoutingPrefs(a)`'s learned
+routing-preference memories, resolves the running binary via
+`os.Executable()` (so the spawned Claude Code always shells back out to
+*this* styx, not a stale `PATH` copy), and calls `ClaudeHost.Launch`. Once
+Claude Code is running, it talks back to styx exclusively through the MCP
+server it just configured (`styx mcp`, started as a subprocess by Claude
+Code itself per the written config — see "MCP server" and "Conductor MCP
+tools" below): `route`/`budget_status`/`channel_health`/`get_intel`/
+`refresh_intel`/`recall` for the routing brain and memory, `dispatch`/
+`thread_status` for delegating to persistent claude/codex/agy/ollama
+threads, and `memory_save`/`pipeline_run` for writing memories and running
+the research/review/intel/auto pipelines (the last gated by
+`internal/shipgate`). No code path in the launcher itself talks to a
+provider API or the MCP protocol — it only shells out to the `claude` CLI
+and writes a config file for it to read.
 
 ## MCP server (internal/mcpserver + cmd/styx/mcp.go + cmd/styx/mcp_conductor.go)
 

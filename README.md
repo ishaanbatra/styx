@@ -36,13 +36,24 @@ that can't be resolved is a clear error, never a silent fallback.
 
 | Verb | What it does |
 |---|---|
-| `styx` | Open the conversational REPL in the current project |
+| `styx` | Launch the Claude Code conductor with the styx MCP toolbelt (repl for the classic v0.2 REPL) |
+| `styx <repo...>` | Launch the conductor bound to one or more named repos (first is focus) |
+| `styx launch [repo...]` | Same as the two rows above, explicit verb form |
+| `styx repl [repo...]` | Open the classic v0.2 REPL, kept until the conductor reaches parity |
 | `styx "<anything>"` | Run one brain-routed turn, then exit |
-| `styx <repo...>` | Open the REPL bound to one or more named repos (first is focus) |
 
-Within a multi-repo session, `/repos` lists all bound repos (focus-marked),
-`/focus <name>` switches to a different bound repo (binding it lazily if not yet
-open), and naming a repo mid-conversation binds it without restarting the session.
+`styx`/`styx launch` writes an MCP config binding a `styx` server (`styx mcp`)
+and execs `claude --mcp-config <file> --append-system-prompt <guidance>` in
+the project directory, handing control to Claude Code with styx's routing
+brain, budget, memory, and dispatch surface attached as tools. Guidance comes
+from `internal/guidance` plus any recalled routing preferences; extra repos
+beyond the focus are noted in that guidance for the brain to bind via the
+`dispatch` tool's `extra_roots`, not bound directly by the exec.
+
+Within a multi-repo classic-REPL session, `/repos` lists all bound repos
+(focus-marked), `/focus <name>` switches to a different bound repo (binding it
+lazily if not yet open), and naming a repo mid-conversation binds it without
+restarting the session.
 
 ### Deep research + planning
 

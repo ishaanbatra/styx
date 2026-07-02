@@ -42,7 +42,9 @@ func main() {
 	rest, quiet, verbose, projectAlias, dirArg := parseGlobalFlags(os.Args[1:])
 
 	if len(rest) == 0 {
-		// Bare `styx` opens the REPL in the current project.
+		// Bare `styx` launches the conductor (Claude Code + styx MCP
+		// toolbelt) in the current project. `styx repl` still opens the
+		// classic v0.2 REPL.
 		globalQuiet = quiet
 		globalVerbose = verbose
 		globalProjectAlias = projectAlias
@@ -57,7 +59,7 @@ func main() {
 			os.Exit(1)
 		}
 		defer a.tracker.Close()
-		if err := cmdREPL(a); err != nil {
+		if err := cmdLaunch(a); err != nil {
 			fmt.Fprintf(os.Stderr, "styx: %v\n", err)
 			os.Exit(1)
 		}

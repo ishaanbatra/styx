@@ -307,12 +307,17 @@ func dispatch(verb string, args []string) error {
 		return cmdAuto(a, args)
 	case "grunt", "think", "explain", "summarize", "critique":
 		return cmdOneShot(a, verb, args)
+	case "repl": // classic v0.2 REPL, kept until the conductor reaches parity
+		return cmdREPL(a, args...)
+	case "launch":
+		return cmdLaunch(a, args...)
 	}
-	// `styx <repo...>`: if every positional names a resolvable project, open the
-	// REPL bound to them (first = focus). Otherwise it's a one-shot utterance.
+	// `styx <repo...>`: if every positional names a resolvable project, launch
+	// the conductor bound to them (first = focus). Otherwise it's a one-shot
+	// utterance.
 	tokens := append([]string{verb}, args...)
 	if repos, ok := allReposResolve(tokens); ok {
-		return cmdREPL(a, repos...)
+		return cmdLaunch(a, repos...)
 	}
 	utterance := strings.TrimSpace(strings.Join(tokens, " "))
 	return cmdBrainTurn(a, utterance)
