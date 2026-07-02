@@ -196,6 +196,47 @@ func TestPipelineRunRejectsUnknown(t *testing.T) {
 	}
 }
 
+// TestPipelineRunIntelResolvesCwdProject proves the intel branch resolves the
+// server's cwd project (the Task 6 launcher starts `styx mcp` in the project
+// dir) the same way research/review/auto resolve theirs internally, instead of
+// failing at target.Resolve with an empty alias. Full intel execution is
+// impractical to fake here, so the test asserts the call gets PAST project
+// resolution and INTO cmdIntel by hitting its controlled "agy channel not
+// registered" boundary (the app's channels map is empty).
+func TestPipelineRunIntelResolvesCwdProject(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	projDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projDir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(projDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWd) })
+
+	d := &conductorDeps{
+		a:        &app{channels: map[string]channel.Channel{}},
+		gate:     shipgate.New(shipgate.ModeOff),
+		managers: map[string]*managed{},
+	}
+	_, err = callTool(t, d, "pipeline_run", map[string]any{"pipeline": "intel"})
+	if err == nil {
+		t.Fatal("want cmdIntel's agy-channel boundary error, got success")
+	}
+	if strings.Contains(err.Error(), "no target") || strings.Contains(err.Error(), "resolve project") {
+		t.Fatalf("intel must resolve the cwd project, failed at resolution: %v", err)
+	}
+	if !strings.Contains(err.Error(), "agy channel not registered") {
+		t.Fatalf("want cmdIntel's agy boundary, got: %v", err)
+	}
+}
+
 func TestMemorySaveValidatesKind(t *testing.T) {
 	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff)}
 	if _, err := callTool(t, d, "memory_save", map[string]any{"kind": "vibe", "text": "x"}); err == nil {

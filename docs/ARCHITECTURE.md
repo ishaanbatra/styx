@@ -699,11 +699,19 @@ REPL loop.
   as `dispatch` risk=ship, keyed `"pipeline:auto"` — denied gates return the
   raw `shipgate.Result` for the brain to relay. The calls mirror the REPL's
   `pipelines` map (`cmd/styx/repl.go` around line 625) exactly: `research`
-  → `cmdResearch(d.a, []string{arg})`, `review` → `cmdReview(d.a, nil)`,
-  `intel` → `cmdIntel(d.a, []string{managerFor("").mgr.Project.Name})`,
-  `auto` → `cmdAuto(d.a, []string{arg})`. On success returns `{pipeline,
-  done: true, note}` pointing at `styx/research/` and `styx/plans/` for
-  artifacts.
+  → `cmdResearch(d.a, []string{arg})` then, on success, `indexNewestBrief`
+  into the project's memory store (best-effort like the REPL's entry;
+  failures are narrated via `logStatus`, never fail the completed
+  research); `review` → `cmdReview(d.a, nil)`; `intel` → `cmdIntel(d.a,
+  []string{proj.Name})`; `auto` → `cmdAuto(d.a, []string{arg})`. Where the
+  REPL uses its focused project, `pipeline_run` uses the server's **cwd
+  project** via `resolveGlobalTarget("")` (the launcher starts `styx mcp`
+  in the project dir) — the same resolution research/review/auto perform
+  internally. The project-scoped tools (`dispatch`, `thread_status`,
+  `memory_save`) keep the strict no-cwd-fallback `managerFor(alias)`
+  contract; `managerForProject` binds an already-resolved project for the
+  research indexing step. On success returns `{pipeline, done: true, note}`
+  pointing at `styx/research/` and `styx/plans/` for artifacts.
 
 ## Progress (internal/progress)
 

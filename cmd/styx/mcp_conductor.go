@@ -21,6 +21,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/pipeline"
+	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/shipgate"
 	"github.com/ishaanbatra/styx/internal/target"
 )
@@ -63,6 +64,13 @@ func (d *conductorDeps) managerFor(alias string) (*managed, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve project: %w", err)
 	}
+	return d.managerForProject(p)
+}
+
+// managerForProject binds an already-resolved project (cached by project ID).
+// pipeline_run's research branch uses it with the server's cwd project, which
+// the pipelines themselves resolve via resolveGlobalTarget.
+func (d *conductorDeps) managerForProject(p project.Project) (*managed, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if m, ok := d.managers[p.ID]; ok {
@@ -309,16 +317,32 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					if err := cmdResearch(d.a, []string{in.Arg}); err != nil {
 						return nil, fmt.Errorf("pipeline research: %w", err)
 					}
+					// Mirror the REPL's research entry: index the newest brief
+					// into project memory for recall. Best-effort like
+					// indexNewestBrief itself — failures are narrated on
+					// stderr, never fail the already-completed research.
+					if proj, err := resolveGlobalTarget(""); err != nil {
+						logStatus("pipeline research: brief not indexed: %v", err)
+					} else if m, err := d.managerForProject(proj); err != nil {
+						logStatus("pipeline research: brief not indexed: %v", err)
+					} else {
+						indexNewestBrief(ctx, m.mem, d.emb, filepath.Join(proj.Path, proj.ResearchDir))
+					}
 				case "review":
 					if err := cmdReview(d.a, nil); err != nil {
 						return nil, fmt.Errorf("pipeline review: %w", err)
 					}
 				case "intel":
-					m, err := d.managerFor("")
+					// Mirror the REPL's intel entry (cmdIntel with the focused
+					// project's name): the MCP server's "current" project is
+					// its cwd project — the launcher starts `styx mcp` in the
+					// project dir — resolved via resolveGlobalTarget exactly
+					// like research/review/auto resolve theirs internally.
+					proj, err := resolveGlobalTarget("")
 					if err != nil {
-						return nil, err
+						return nil, fmt.Errorf("pipeline intel: %w", err)
 					}
-					if err := cmdIntel(d.a, []string{m.mgr.Project.Name}); err != nil {
+					if err := cmdIntel(d.a, []string{proj.Name}); err != nil {
 						return nil, fmt.Errorf("pipeline intel: %w", err)
 					}
 				case "auto":
