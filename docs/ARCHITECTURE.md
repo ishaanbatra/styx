@@ -294,14 +294,23 @@ before dispatching. `Router.Explain` prints `floor: <tier>` (when not
 
 Data-driven routing guidance replacing the v0.2 brain's compiled-in preamble.
 A global guidance file is seeded at `~/.config/styx/guidance.md` on first call
-to `Load()` and is user-editable, never overwritten. `Load(projectPath string)`
-returns the global guidance with an optional per-repo override appended from
-`<repo>/styx/guidance.md` if it exists. The `Seed` constant contains the
-default shipped guidance: channel best purposes (codex as primary implementer
-for well-scoped work, claude for ambiguous/architectural/refactor work, agy for
-large-file explains, ollama for trivial one-shots), model tier guidance, working
-style conventions (plan before dispatch, reuse threads, consult memory, check
-budget), and ship policy (confirmation token handoff).
+to `Load()` and is user-editable. User edits are never overwritten, but a file
+whose content exactly matches a previous seed version (the retained `seedV1`
+constant) is recognized as unmodified and transparently upgraded to the
+current `Seed` on load. `Load(projectPath string)` returns the global guidance
+with an optional per-repo override appended from `<repo>/styx/guidance.md` if
+it exists. The `Seed` constant contains the default shipped guidance: a
+dispatch-by-default rule (substantive work — implementation, research, review,
+large summarization — goes through `dispatch`/`pipeline_run` rather than the
+host's built-in Agent/Task subagents, which burn the interactive session's
+Claude quota invisibly to styx's budget ledger; built-ins are reserved for
+work too small to brief), a research-task mapping (`pipeline_run research`
+for brief-producing research, `dispatch cli=claude` for repo-focused
+investigation, agy when very large), channel best purposes (codex as primary
+implementer for well-scoped work, claude for ambiguous/architectural/refactor
+work, agy for large-file explains, ollama for trivial one-shots), model tier
+guidance, working style conventions (plan before dispatch, reuse threads,
+consult memory, check budget), and ship policy (confirmation token handoff).
 
 ## Model Sync (internal/modelsync)
 

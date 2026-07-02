@@ -32,6 +32,42 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("seed defaults substantive work to dispatch", func(t *testing.T) {
+		// Regression: a styx-launched session used zero styx tools for a
+		// research prompt because the seed read as an optional routing table.
+		// The seed must set dispatch as the default over the host's built-in
+		// subagents, state the quota/ledger economics, and map research tasks.
+		for _, want := range []string{
+			"BY DEFAULT",
+			"Agent/Task subagents",
+			"budget ledger",
+			"pipeline_run research",
+		} {
+			if !strings.Contains(Seed, want) {
+				t.Errorf("seed missing %q", want)
+			}
+		}
+	})
+
+	t.Run("unmodified legacy seed upgrades to current", func(t *testing.T) {
+		Load(t.TempDir()) // ensure seeded
+		p, _ := guidanceFile()
+		if err := os.WriteFile(p, []byte(seedV1), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Load(t.TempDir())
+		if err != nil {
+			t.Fatalf("Load over legacy seed: %v", err)
+		}
+		if got != Seed {
+			t.Fatalf("legacy unmodified seed must upgrade to current Seed, got:\n%s", got)
+		}
+		b, _ := os.ReadFile(p)
+		if string(b) != Seed {
+			t.Fatalf("guidance file on disk must be rewritten to current Seed")
+		}
+	})
+
 	t.Run("per-repo override appended", func(t *testing.T) {
 		repo := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(repo, "styx"), 0o755); err != nil {
