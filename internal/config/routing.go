@@ -11,11 +11,12 @@ import (
 
 // Routing is the parsed routing.toml.
 type Routing struct {
-	Budget BudgetCaps        `toml:"budget"`
-	Rules  []Rule            `toml:"rule"`
-	Models ModelsConfig      `toml:"models"`
-	Brain  BrainConfig       `toml:"brain"`
-	Tiers  map[string]string `toml:"tiers"`
+	Budget    BudgetCaps        `toml:"budget"`
+	Rules     []Rule            `toml:"rule"`
+	Models    ModelsConfig      `toml:"models"`
+	Brain     BrainConfig       `toml:"brain"`
+	Conductor Conductor         `toml:"conductor"`
+	Tiers     map[string]string `toml:"tiers"`
 }
 
 // BudgetCaps holds the per-channel cap percentages.
@@ -41,6 +42,11 @@ type BrainConfig struct {
 	ConfidenceThreshold float64 `toml:"confidence_threshold"`  // below this, escalate routing to claude haiku
 	ContextThresholdPct float64 `toml:"context_threshold_pct"` // distill-and-restart threads above this
 	FableWeeklyCap      int     `toml:"fable_weekly_cap"`      // weekly fable messages before degrading to opus
+}
+
+// Conductor configures the frontier-brain launcher + MCP toolbelt.
+type Conductor struct {
+	ShipGate string `toml:"ship_gate"` // handshake | tty | off
 }
 
 // ModelsConfig controls model auto-discovery / staleness refresh.
@@ -86,6 +92,14 @@ func applyBrainDefaults(r *Routing) {
 	}
 }
 
+// applyConductorDefaults fills zero-valued conductor settings so configs written
+// before this section existed keep working.
+func applyConductorDefaults(r *Routing) {
+	if r.Conductor.ShipGate == "" {
+		r.Conductor.ShipGate = "handshake"
+	}
+}
+
 // Rule is a single routing rule. First match wins.
 //
 // Either Use (single channel) OR Parallel+SynthesizeWith (multi-channel review pattern) must be set.
@@ -120,5 +134,6 @@ func LoadRoutingFile(path string) (Routing, error) {
 	}
 	applyModelsDefaults(&r)
 	applyBrainDefaults(&r)
+	applyConductorDefaults(&r)
 	return r, nil
 }

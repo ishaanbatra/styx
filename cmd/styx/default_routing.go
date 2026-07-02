@@ -129,4 +129,10 @@ fable  = "opus"
 opus   = "opus"
 sonnet = "sonnet"
 haiku  = "haiku"
+
+# ── Conductor (frontier-brain launcher + MCP toolbelt) ──
+[conductor]
+# ship confirmation for dispatch(risk=ship) / pipeline_run auto:
+# handshake (token relay, default) | tty (prompt on /dev/tty) | off
+ship_gate = "handshake"
 `

@@ -23,9 +23,10 @@ func TestLoadRoutingFile(t *testing.T) {
 			{Verb: "plan", Use: "claude:sonnet-4-6", Fallback: []string{"codex:gpt-5", "ollama:qwen2.5-coder:14b"}},
 			{Verb: "review", Parallel: []string{"claude:sonnet-4-6", "codex:gpt-5"}, SynthesizeWith: "claude:sonnet-4-6"},
 		},
-		Models: defaultModelsForTest(),
-		Brain:  defaultBrainForTest(),
-		Tiers:  defaultTiersForTest(),
+		Models:    defaultModelsForTest(),
+		Brain:     defaultBrainForTest(),
+		Conductor: defaultConductorForTest(),
+		Tiers:     defaultTiersForTest(),
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
@@ -54,9 +55,10 @@ func TestLoadRoutingFile_MessageLimits(t *testing.T) {
 		Rules: []Rule{
 			{Verb: "plan", Use: "claude:sonnet-4-6"},
 		},
-		Models: defaultModelsForTest(),
-		Brain:  defaultBrainForTest(),
-		Tiers:  defaultTiersForTest(),
+		Models:    defaultModelsForTest(),
+		Brain:     defaultBrainForTest(),
+		Conductor: defaultConductorForTest(),
+		Tiers:     defaultTiersForTest(),
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
@@ -189,6 +191,12 @@ func defaultBrainForTest() BrainConfig {
 	}
 }
 
+func defaultConductorForTest() Conductor {
+	return Conductor{
+		ShipGate: "handshake",
+	}
+}
+
 func defaultModelsForTest() ModelsConfig {
 	return ModelsConfig{RefreshIntervalHours: 24}
 }
@@ -199,5 +207,20 @@ func defaultTiersForTest() map[string]string {
 		"opus":   "opus",
 		"sonnet": "sonnet",
 		"haiku":  "haiku",
+	}
+}
+
+func TestConductorDefaults(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(p, []byte("[budget]\nclaude.cap_pct = 80\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r, err := LoadRoutingFile(p)
+	if err != nil {
+		t.Fatalf("LoadRoutingFile: %v", err)
+	}
+	if r.Conductor.ShipGate != "handshake" {
+		t.Fatalf("ShipGate default = %q, want handshake", r.Conductor.ShipGate)
 	}
 }

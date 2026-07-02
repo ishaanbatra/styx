@@ -204,7 +204,7 @@ counts in `Response` are `len/4` estimates.
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
 `routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules,
-Models, Brain, Tiers}`. Rules match on `verb` + required `signals`; **first match
+Models, Brain, Conductor, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
 No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
@@ -233,8 +233,11 @@ the router walks the fallback chain and marks the Decision `Degraded`.
 Per-channel caps also carry optional `timeout_minutes` for non-interactive
 subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
 wiring. `Brain` configures the planned local ollama routing brain and memory
-embedding model; `Tiers` maps brain tier names to claude CLI model aliases, with
-`fable` currently mapped to `opus` while the fable tier is suspended.
+embedding model; `Conductor` configures the frontier-brain launcher and MCP
+toolbelt (e.g. `ship_gate`: handshake | tty | off, default handshake, controlling
+ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`);
+`Tiers` maps brain tier names to claude CLI model aliases, with `fable` currently
+mapped to `opus` while the fable tier is suspended.
 
 **Capability floor (v2).** `internal/signals/floor.go` defines `Tier`
 (`TierLocal < TierHaiku < TierSonnet < TierOpus`), `TierOf(channel, model)`
