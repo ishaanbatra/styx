@@ -34,7 +34,7 @@ func cmdMigrateSecrets() error {
 	}
 	fmt.Printf("Migrated %d secret(s) to the macOS Keychain (service=styx).\n", moved)
 	if moved > 0 {
-		fmt.Println("Open a new shell so the commented-out exports take effect.")
+		fmt.Println("Note: the old values may survive in shell history and Time Machine; consider rotating the migrated keys.")
 	}
 	return nil
 }
@@ -45,7 +45,7 @@ func migrateOne(path string) (int, error) {
 		return 0, err
 	}
 	defer in.Close()
-	var out strings.Builder
+	var toRemove []string
 	moved := 0
 	scanner := bufio.NewScanner(in)
 	scanner.Buffer(make([]byte, 1<<20), 1<<20)
@@ -53,8 +53,6 @@ func migrateOne(path string) (int, error) {
 		line := scanner.Text()
 		m := secretShapedRE.FindStringSubmatch(line)
 		if m == nil {
-			out.WriteString(line)
-			out.WriteByte('\n')
 			continue
 		}
 		name := strings.ToLower(m[1])
@@ -67,11 +65,8 @@ func migrateOne(path string) (int, error) {
 			if err := config.SetSecret(name, value); err != nil {
 				return moved, err
 			}
-			out.WriteString("# moved to Keychain by styx migrate-secrets\n# " + line + "\n")
+			toRemove = append(toRemove, line)
 			moved++
-		} else {
-			out.WriteString(line)
-			out.WriteByte('\n')
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -80,5 +75,37 @@ func migrateOne(path string) (int, error) {
 	if moved == 0 {
 		return 0, nil
 	}
-	return moved, os.WriteFile(path, []byte(out.String()), 0o644)
+	return moved, rewriteRC(path, toRemove)
+}
+
+// rewriteRC removes the given exact lines from the rc file, writing a
+// one-time 0600 backup first and tightening the rc to 0600. The secret must
+// not survive in the live file — a commented copy is still a plaintext leak.
+func rewriteRC(path string, remove []string) error {
+	orig, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	bak := path + ".styx-bak"
+	if _, err := os.Stat(bak); os.IsNotExist(err) {
+		if err := os.WriteFile(bak, orig, 0o600); err != nil {
+			return fmt.Errorf("write backup: %w", err)
+		}
+	}
+	drop := make(map[string]bool, len(remove))
+	for _, l := range remove {
+		drop[strings.TrimSpace(l)] = true
+	}
+	var out []string
+	for _, line := range strings.Split(string(orig), "\n") {
+		if drop[strings.TrimSpace(line)] {
+			continue
+		}
+		out = append(out, line)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strings.Join(out, "\n")), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return os.Rename(tmp, path)
 }

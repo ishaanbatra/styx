@@ -793,8 +793,14 @@ lines prefixed `[styx]` on stderr.
 
 ## Secrets (internal/config/secrets.go)
 
-macOS Keychain under service `styx`; `migrate-secrets` moves plaintext env
-vars out of shell rc files.
+macOS Keychain under service `styx`; `migrate-secrets` verb moves plaintext env
+vars out of shell rc files. For each secret-shaped export (matching
+`_API_KEY|_TOKEN|_SECRET`), the verb prompts the user to confirm, stores the value
+in Keychain, **deletes the line entirely** from the rc file (no commented copy),
+writes a one-time `<rc>.styx-bak` backup (0600) if not already present, and sets
+the rc file to 0600 perms (atomic tmp+rename). After successful migration, prints
+a note that old values may survive in shell history and Time Machine — users
+should rotate the migrated keys.
 
 ## On-disk layout
 
