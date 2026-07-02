@@ -22,6 +22,40 @@ const WindowSession = 5 * time.Hour
 // WindowWeek is the rolling window for weekly message counts (168h = 7 days).
 const WindowWeek = 168 * time.Hour
 
+// BreakerThreshold and BreakerWindow are the production circuit-breaker settings
+// (mirrors cmd/styx/dispatch.go's budgetSource.Broken). Exposed so channel_health
+// reports the same open/closed state the router routes on.
+const (
+	BreakerThreshold = 3
+	BreakerWindow    = 10 * time.Minute
+)
+
+// ChannelHealth is a read-only snapshot of a channel's recent reliability, built
+// from the existing usage + cooldown tables (no new state).
+type ChannelHealth struct {
+	Channel                  string
+	CircuitOpen              bool
+	FailuresRecent           int
+	WindowSeconds            int
+	ErrorKinds               map[string]int
+	CooldownRemainingSeconds float64
+}
+
+// healthKind maps a raw stored error_kind ("timeout"/"429"/"5xx"/"") to the
+// channel_health bucket label the tool contract exposes.
+func healthKind(raw string) string {
+	switch raw {
+	case "timeout":
+		return "timeout"
+	case "429":
+		return "rate_limit"
+	case "5xx":
+		return "server"
+	default:
+		return "other"
+	}
+}
+
 // msgLimit holds per-channel message caps for the two rolling windows.
 type msgLimit struct {
 	session int
@@ -335,4 +369,115 @@ func (t *Tracker) ShouldCircuitBreak(ctx context.Context, channel string, thresh
 		return false, fmt.Errorf("count failures for %s: %w", channel, err)
 	}
 	return n >= threshold, nil
+}
+
+// ChannelHealth reports whether channel's circuit is open, how many failures it
+// had in the window, per-kind failure buckets, and remaining cooldown. Pure read
+// over usage + cooldown; adds no state. Buckets are zero-filled with the friendly
+// labels timeout/rate_limit/server/other so a consumer can index them directly.
+func (t *Tracker) ChannelHealth(ctx context.Context, channel string, threshold int, window time.Duration) (ChannelHealth, error) {
+	cutoff := time.Now().Add(-window).Unix()
+	h := ChannelHealth{
+		Channel:       channel,
+		WindowSeconds: int(window / time.Second),
+		ErrorKinds:    map[string]int{"timeout": 0, "rate_limit": 0, "server": 0, "other": 0},
+	}
+
+	var fails int
+	if err := t.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM usage WHERE channel = ? AND ts >= ? AND success = 0`,
+		channel, cutoff).Scan(&fails); err != nil {
+		return ChannelHealth{}, fmt.Errorf("channel health failures %s: %w", channel, err)
+	}
+	h.FailuresRecent = fails
+	h.CircuitOpen = fails >= threshold
+
+	rows, err := t.db.QueryContext(ctx,
+		`SELECT COALESCE(NULLIF(error_kind, ''), 'other') AS k, COUNT(*)
+		 FROM usage WHERE channel = ? AND ts >= ? AND success = 0 GROUP BY k`,
+		channel, cutoff)
+	if err != nil {
+		return ChannelHealth{}, fmt.Errorf("channel health kinds %s: %w", channel, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		var n int
+		if err := rows.Scan(&k, &n); err != nil {
+			return ChannelHealth{}, fmt.Errorf("scan channel health kind %s: %w", channel, err)
+		}
+		h.ErrorKinds[healthKind(k)] += n
+	}
+	if err := rows.Err(); err != nil {
+		return ChannelHealth{}, fmt.Errorf("iterate channel health kinds %s: %w", channel, err)
+	}
+
+	cd, err := t.cooldownUntil(ctx, channel)
+	if err != nil {
+		return ChannelHealth{}, fmt.Errorf("channel health cooldown %s: %w", channel, err)
+	}
+	if !cd.IsZero() {
+		if rem := time.Until(cd).Seconds(); rem > 0 {
+			h.CooldownRemainingSeconds = rem
+		}
+	}
+	return h, nil
+}
+
+// RetryAfter returns the seconds until channel next regains capacity: the
+// remaining cooldown if one is active, else the time until the oldest in-window
+// message ages out under a hit message cap, else 0 (unknown / no limit). Best
+// effort — a pure token-budget block has no short-window estimate and returns 0.
+func (t *Tracker) RetryAfter(ctx context.Context, channel string) (int, error) {
+	cd, err := t.cooldownUntil(ctx, channel)
+	if err != nil {
+		return 0, fmt.Errorf("retry-after cooldown %s: %w", channel, err)
+	}
+	if !cd.IsZero() {
+		if s := int(time.Until(cd).Seconds()); s > 0 {
+			return s, nil
+		}
+	}
+
+	t.mu.RLock()
+	lim, ok := t.msgLimits[channel]
+	t.mu.RUnlock()
+	if !ok {
+		return 0, nil
+	}
+	if s, err := t.windowRetry(ctx, channel, WindowSession, lim.session); err != nil {
+		return 0, err
+	} else if s > 0 {
+		return s, nil
+	}
+	if s, err := t.windowRetry(ctx, channel, WindowWeek, lim.weekly); err != nil {
+		return 0, err
+	} else if s > 0 {
+		return s, nil
+	}
+	return 0, nil
+}
+
+// windowRetry returns the seconds until the oldest usage row in the window ages
+// out, but only when the in-window message count has reached limit; else 0.
+func (t *Tracker) windowRetry(ctx context.Context, channel string, window time.Duration, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-window).Unix()
+	var count int
+	var oldest sql.NullInt64
+	if err := t.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), MIN(ts) FROM usage WHERE channel = ? AND ts >= ?`,
+		channel, cutoff).Scan(&count, &oldest); err != nil {
+		return 0, fmt.Errorf("retry-after window %s: %w", channel, err)
+	}
+	if count < limit || !oldest.Valid {
+		return 0, nil
+	}
+	expiry := time.Unix(oldest.Int64, 0).Add(window)
+	if s := int(time.Until(expiry).Seconds()); s > 0 {
+		return s, nil
+	}
+	return 0, nil
 }

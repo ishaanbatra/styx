@@ -3,15 +3,24 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
+	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/intel"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
+	"github.com/ishaanbatra/styx/internal/memory"
+	"github.com/ishaanbatra/styx/internal/paths"
+	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
+	"github.com/ishaanbatra/styx/internal/target"
 )
 
 type routeArgs struct {
@@ -41,6 +50,21 @@ type routeResult struct {
 	Reasoning     string         `json:"reasoning"`
 	Budget        budgetSnapshot `json:"budget"`
 	Degraded      bool           `json:"degraded"`
+
+	// v2 capability-floor fields (additive; v1 consumers ignore unknown keys).
+	ClassifiedSignals []string  `json:"classified_signals,omitempty"`
+	Floor             string    `json:"floor,omitempty"`
+	TierPlan          *tierPlan `json:"tier_plan,omitempty"`
+	BlockedByBudget   bool      `json:"blocked_by_budget"`
+	RetryAfterS       int       `json:"retry_after_s,omitempty"`
+}
+
+// tierPlan is the JSON view of router.TierPlan: the floor-clearing candidate
+// targets, the one chosen within budget, and the next higher-tier escalation.
+type tierPlan struct {
+	Acceptable []string `json:"acceptable"`
+	Chosen     string   `json:"chosen"`
+	EscalateTo string   `json:"escalate_to,omitempty"`
 }
 
 // budgetSnapshotFor reads the budget State for a channel. On error it returns a
@@ -88,7 +112,7 @@ func handleRoute(ctx context.Context, r *router.Router, t *budget.Tracker, a rou
 	for _, cm := range dec.Fallback {
 		chain = append(chain, cm.Channel+":"+cm.Model)
 	}
-	return routeResult{
+	res := routeResult{
 		Channel:       dec.Channel,
 		Model:         dec.Model,
 		Effort:        dec.Effort,
@@ -96,7 +120,41 @@ func handleRoute(ctx context.Context, r *router.Router, t *budget.Tracker, a rou
 		Reasoning:     r.Explain(ctx, req),
 		Budget:        budgetSnapshotFor(ctx, t, dec.Channel),
 		Degraded:      dec.Degraded,
-	}, nil
+	}
+	// sigs is the signal slice used for routing (Extracted here when the caller
+	// omitted them). Surface it and the floor plan.
+	res.ClassifiedSignals = sigs
+	res.Floor = dec.Floor
+	res.BlockedByBudget = dec.BlockedByBudget
+	res.TierPlan = &tierPlan{
+		Acceptable: dec.TierPlan.Acceptable,
+		Chosen:     dec.TierPlan.Chosen,
+		EscalateTo: dec.TierPlan.EscalateTo,
+	}
+	if dec.BlockedByBudget {
+		res.RetryAfterS = minRetryAfter(ctx, t, dec.TierPlan.Acceptable)
+	}
+	return res, nil
+}
+
+// minRetryAfter returns the smallest positive RetryAfter across the acceptable
+// targets' channels, or 0 when none has a known retry window.
+func minRetryAfter(ctx context.Context, t *budget.Tracker, acceptable []string) int {
+	best := 0
+	for _, cm := range acceptable {
+		ch := cm
+		if i := strings.IndexByte(cm, ':'); i >= 0 {
+			ch = cm[:i]
+		}
+		s, err := t.RetryAfter(ctx, ch)
+		if err != nil || s <= 0 {
+			continue
+		}
+		if best == 0 || s < best {
+			best = s
+		}
+	}
+	return best
 }
 
 type budgetStatusArgs struct {
@@ -170,6 +228,229 @@ func handleRecordUsage(ctx context.Context, t *budget.Tracker, a recordUsageArgs
 		}
 	}
 	return recordResult{Recorded: true, Budget: budgetSnapshotFor(ctx, t, a.Channel)}, nil
+}
+
+type channelHealthArgs struct {
+	Channel string `json:"channel"`
+}
+
+type channelHealthResult struct {
+	Channel            string         `json:"channel"`
+	CircuitOpen        bool           `json:"circuit_open"`
+	FailuresRecent     int            `json:"failures_recent"`
+	WindowS            int            `json:"window_s"`
+	ErrorKinds         map[string]int `json:"error_kinds"`
+	CooldownRemainingS float64        `json:"cooldown_remaining_s"`
+}
+
+var channelHealthSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"channel": map[string]any{
+			"type":        "string",
+			"description": "Channel to inspect (claude|codex|agy|ollama). Omit for all channels.",
+		},
+	},
+}
+
+// handleChannelHealth reports circuit/failure/cooldown state per channel from the
+// existing usage log — a consumer can avoid a flaky provider before dispatch.
+func handleChannelHealth(ctx context.Context, t *budget.Tracker, a channelHealthArgs) ([]channelHealthResult, error) {
+	channels := defaultChannelNames
+	if a.Channel != "" {
+		channels = []string{a.Channel}
+	}
+	out := make([]channelHealthResult, 0, len(channels))
+	for _, ch := range channels {
+		h, err := t.ChannelHealth(ctx, ch, budget.BreakerThreshold, budget.BreakerWindow)
+		if err != nil {
+			return nil, fmt.Errorf("channel_health %s: %w", ch, err)
+		}
+		out = append(out, channelHealthResult{
+			Channel:            h.Channel,
+			CircuitOpen:        h.CircuitOpen,
+			FailuresRecent:     h.FailuresRecent,
+			WindowS:            h.WindowSeconds,
+			ErrorKinds:         h.ErrorKinds,
+			CooldownRemainingS: h.CooldownRemainingSeconds,
+		})
+	}
+	return out, nil
+}
+
+// resolveProjectStrict resolves an MCP project argument via the shared target
+// resolver (alias or path) WITHOUT any cwd fallback — an MCP server's cwd is not
+// the caller's project. Empty or unknown project is a classified error, never a
+// silent default.
+func resolveProjectStrict(name string) (config.Project, error) {
+	if strings.TrimSpace(name) == "" {
+		return config.Project{}, &channel.ClassifiedError{
+			Kind: channel.ErrKindOther,
+			Err:  errors.New("project is required"),
+		}
+	}
+	proj, err := target.Resolve(target.Spec{Alias: name})
+	if err != nil {
+		return config.Project{}, &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: err}
+	}
+	return proj, nil
+}
+
+type getIntelArgs struct {
+	Project string `json:"project"`
+	Section string `json:"section"`
+}
+
+type refreshIntelArgs struct {
+	Project string `json:"project"`
+}
+
+// intelResult carries either the whole index (section == "") or exactly one
+// section slice. Stale/StalenessReason always report freshness; a read never
+// rebuilds.
+type intelResult struct {
+	Project         string       `json:"project"`
+	Stale           bool         `json:"stale"`
+	StalenessReason string       `json:"staleness_reason,omitempty"`
+	Section         string       `json:"section,omitempty"`
+	Index           *intel.Index `json:"index,omitempty"`
+
+	Conventions   *intel.Conventions `json:"conventions,omitempty"`
+	KeySymbols    []intel.KeySymbol  `json:"key_symbols,omitempty"`
+	Modules       []intel.Module     `json:"modules,omitempty"`
+	FileTree      []string           `json:"file_tree,omitempty"`
+	RecentCommits []intel.Commit     `json:"recent_commits,omitempty"`
+	OpenTodos     []intel.Todo       `json:"open_todos,omitempty"`
+}
+
+var getIntelSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"project": map[string]any{"type": "string", "description": "Registered project alias or path (required)."},
+		"section": map[string]any{
+			"type":        "string",
+			"description": "Optional slice: conventions | key_symbols | modules | file_tree | recent_commits | open_todos. Omit for the whole index.",
+		},
+	},
+	"required": []any{"project"},
+}
+
+var refreshIntelSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"project": map[string]any{"type": "string", "description": "Registered project alias or path (required)."},
+	},
+	"required": []any{"project"},
+}
+
+// handleGetIntel loads the persisted index (never rebuilds on read), reports
+// staleness, and returns the whole index or one section.
+func handleGetIntel(ctx context.Context, proj config.Project, section string) (intelResult, error) {
+	idx, err := intel.Load(proj)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return intelResult{Project: proj.Name, Stale: true, StalenessReason: "no index built yet"}, nil
+		}
+		return intelResult{}, fmt.Errorf("get_intel load %s: %w", proj.Name, err)
+	}
+	stale, reason := intel.Staleness(proj, idx)
+	res := intelResult{Project: proj.Name, Stale: stale, StalenessReason: reason, Section: section}
+	switch section {
+	case "":
+		res.Index = idx
+	case "conventions":
+		c := idx.Conventions
+		res.Conventions = &c
+	case "key_symbols":
+		res.KeySymbols = idx.KeySymbols
+	case "modules":
+		res.Modules = idx.Modules
+	case "file_tree":
+		res.FileTree = idx.FileTree
+	case "recent_commits":
+		res.RecentCommits = idx.RecentCommits
+	case "open_todos":
+		res.OpenTodos = idx.OpenTodos
+	default:
+		return intelResult{}, fmt.Errorf("get_intel: unknown section %q", section)
+	}
+	return res, nil
+}
+
+// handleRefreshIntel rebuilds the index via agy, rewrites .claude/context.md, and
+// returns the fresh result. This is the deliberate write/refresh path.
+func handleRefreshIntel(ctx context.Context, proj config.Project, agy intel.AgyClient, prog *progress.Tracker) (intelResult, error) {
+	idx, err := intel.Build(ctx, proj, agy, prog)
+	if err != nil {
+		return intelResult{}, fmt.Errorf("refresh_intel build %s: %w", proj.Name, err)
+	}
+	if _, err := intel.WriteContextMD(proj.Path, intel.ToMarkdown(idx)); err != nil {
+		return intelResult{}, fmt.Errorf("refresh_intel write context %s: %w", proj.Name, err)
+	}
+	stale, reason := intel.Staleness(proj, idx)
+	return intelResult{Project: proj.Name, Stale: stale, StalenessReason: reason, Index: idx}, nil
+}
+
+const defaultRecallK = 5
+
+type recallArgs struct {
+	Project string `json:"project"`
+	Query   string `json:"query"`
+	K       int    `json:"k"`
+}
+
+type recallHit struct {
+	Text       string  `json:"text"`
+	Kind       string  `json:"kind"`
+	Source     string  `json:"source,omitempty"`
+	Score      float64 `json:"score"`
+	Confidence float64 `json:"confidence"`
+}
+
+type recallResult struct {
+	Project string      `json:"project"`
+	Hits    []recallHit `json:"hits"`
+}
+
+var recallSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"project": map[string]any{"type": "string", "description": "Registered project alias or path (required)."},
+		"query":   map[string]any{"type": "string", "description": "What to recall (required)."},
+		"k":       map[string]any{"type": "integer", "description": "Max results (default 5)."},
+	},
+	"required": []any{"project", "query"},
+}
+
+// handleRecall returns decayed top-k project + global memory. It degrades LOUD:
+// any Recall failure (notably ollama embeddings down) becomes a classified error,
+// never an empty result presented as success.
+func handleRecall(ctx context.Context, proj config.Project, emb memory.Embedder, projStore, globalStore *memory.Store, a recallArgs) (recallResult, error) {
+	if strings.TrimSpace(a.Query) == "" {
+		return recallResult{}, &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: errors.New("recall: query is required")}
+	}
+	k := a.K
+	if k <= 0 {
+		k = defaultRecallK
+	}
+	hits, err := memory.Recall(ctx, emb, a.Query, k, projStore, globalStore)
+	if err != nil {
+		return recallResult{}, &channel.ClassifiedError{
+			Kind: channel.ErrKindOther,
+			Err:  fmt.Errorf("recall unavailable (ollama embeddings): %w", err),
+		}
+	}
+	out := recallResult{Project: proj.Name, Hits: make([]recallHit, 0, len(hits))}
+	for _, h := range hits {
+		out.Hits = append(out.Hits, recallHit{
+			Text:       h.Item.Text,
+			Kind:       string(h.Item.Kind),
+			Source:     h.Item.Source,
+			Score:      h.Score,
+			Confidence: h.Item.Confidence,
+		})
+	}
+	return out, nil
 }
 
 const mcpServerVersion = "0.1.0"
@@ -253,6 +534,90 @@ func mcpTools(a *app) []mcpserver.Tool {
 				return handleRecordUsage(ctx, a.tracker, in)
 			},
 		},
+		{
+			Name:        "channel_health",
+			Description: "Report each channel's circuit-breaker state, recent failure count, per-kind error buckets, and remaining cooldown — so a consumer can avoid a flaky provider before dispatch.",
+			InputSchema: channelHealthSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in channelHealthArgs
+				if len(raw) > 0 {
+					if err := json.Unmarshal(raw, &in); err != nil {
+						return nil, fmt.Errorf("channel_health: invalid arguments: %w", err)
+					}
+				}
+				return handleChannelHealth(ctx, a.tracker, in)
+			},
+		},
+		{
+			Name:        "get_intel",
+			Description: "Return the per-project codebase intelligence index styx maintains (file tree, module summaries, conventions, key symbols, recent commits, open TODOs). Pass section to return one slice. Reports staleness; never rebuilds on read.",
+			InputSchema: getIntelSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in getIntelArgs
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("get_intel: invalid arguments: %w", err)
+				}
+				proj, err := resolveProjectStrict(in.Project)
+				if err != nil {
+					return nil, err
+				}
+				return handleGetIntel(ctx, proj, in.Section)
+			},
+		},
+		{
+			Name:        "refresh_intel",
+			Description: "Rebuild the per-project intelligence index (walk + convention sniff + agy module/key-symbol summaries) and return the fresh result. The deliberate write path.",
+			InputSchema: refreshIntelSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in refreshIntelArgs
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("refresh_intel: invalid arguments: %w", err)
+				}
+				proj, err := resolveProjectStrict(in.Project)
+				if err != nil {
+					return nil, err
+				}
+				ag, ok := a.channels["agy"]
+				if !ok {
+					return nil, &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: errors.New("refresh_intel: agy channel unavailable")}
+				}
+				return handleRefreshIntel(ctx, proj, &agyAdapter{ch: rawChannel(ag)}, a.progress)
+			},
+		},
+		{
+			Name:        "recall",
+			Description: "Recall the top-k project-scoped long-term memories (decisions, facts, preferences) via semantic similarity with recency/confidence decay. Requires local Ollama embeddings; returns a loud error if unavailable.",
+			InputSchema: recallSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in recallArgs
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("recall: invalid arguments: %w", err)
+				}
+				proj, err := resolveProjectStrict(in.Project)
+				if err != nil {
+					return nil, err
+				}
+				memDir, err := paths.MemoryDir()
+				if err != nil {
+					return nil, fmt.Errorf("recall: memory dir: %w", err)
+				}
+				if err := paths.EnsureDir(memDir); err != nil {
+					return nil, fmt.Errorf("recall: ensure memory dir: %w", err)
+				}
+				projStore, err := memory.Open(filepath.Join(memDir, proj.ID+".db"))
+				if err != nil {
+					return nil, fmt.Errorf("recall: open project memory: %w", err)
+				}
+				defer projStore.Close()
+				globalStore, err := memory.Open(filepath.Join(memDir, "global.db"))
+				if err != nil {
+					return nil, fmt.Errorf("recall: open global memory: %w", err)
+				}
+				defer globalStore.Close()
+				emb := memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel)
+				return handleRecall(ctx, proj, emb, projStore, globalStore, in)
+			},
+		},
 	}
 }
 
@@ -261,6 +626,6 @@ func mcpTools(a *app) []mcpserver.Tool {
 // host closes stdin (EOF).
 func cmdMCP(a *app, args []string) error {
 	srv := mcpserver.New("styx", mcpServerVersion, mcpTools(a))
-	logStatus("mcp server ready on stdio (route, budget_status, record_usage)")
+	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall)")
 	return srv.Serve(context.Background(), os.Stdin, os.Stdout)
 }

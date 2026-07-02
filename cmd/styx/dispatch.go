@@ -251,7 +251,7 @@ func (b *budgetSource) UsedPct(ctx context.Context, ch string) (float64, error) 
 }
 
 func (b *budgetSource) Broken(ctx context.Context, ch string) bool {
-	broken, err := b.t.ShouldCircuitBreak(ctx, ch, 3, 10*time.Minute)
+	broken, err := b.t.ShouldCircuitBreak(ctx, ch, budget.BreakerThreshold, budget.BreakerWindow)
 	return err == nil && broken
 }
 

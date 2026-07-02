@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/signals"
 )
 
 // BudgetSource abstracts the per-channel usage backend (sqlite in prod,
@@ -43,6 +44,15 @@ type ChannelModel struct {
 	Model   string
 }
 
+// TierPlan is the capability-floor view of a routing decision: the floor-clearing
+// candidate targets (chain order), the one chosen within budget, and the next
+// higher-tier target to escalate to.
+type TierPlan struct {
+	Acceptable []string // channel:model targets that clear the floor
+	Chosen     string   // channel:model actually chosen
+	EscalateTo string   // next higher-tier acceptable target, or ""
+}
+
 // Decision describes the chosen channel + fallback chain.
 type Decision struct {
 	Channel  string
@@ -59,6 +69,16 @@ type Decision struct {
 
 	// Degraded is true when budget or reliability checks caused fallback selection.
 	Degraded bool
+
+	// Capability-floor fields (v2). Floor is the minimum tier the request's
+	// signals require (e.g. "sonnet"); TierPlan is the floor-restricted candidate
+	// view; BlockedByBudget is true when every floor-clearing target is over
+	// budget or circuit-open — the loud-refusal signal. When blocked, Channel/Model
+	// still name the floor-clearing primary as a concrete recommendation (never a
+	// below-floor lie, never null).
+	Floor           string
+	TierPlan        TierPlan
+	BlockedByBudget bool
 }
 
 // FromConfig builds a Router using the standard config + sqlite budget tracker.
@@ -112,26 +132,97 @@ func (r *Router) Route(ctx context.Context, req Request) (Decision, error) {
 		fallback = append(fallback, cm)
 	}
 
-	// Availability-aware degradation: if primary is over cap or circuit-open,
-	// walk into fallback.
-	chosen := primary
+	// Assemble the ordered candidate chain and derive the capability floor.
+	targets := append([]ChannelModel{primary}, fallback...)
+	floor := signals.Floor(req.Signals)
+
+	// floorClearing = candidates that meet the floor, in chain order.
+	var floorClearing []ChannelModel
+	for _, t := range targets {
+		if signals.TierOf(t.Channel, t.Model) >= floor {
+			floorClearing = append(floorClearing, t)
+		}
+	}
+	routeSet := floorClearing
+	floorUnmet := len(floorClearing) == 0
+	if floorUnmet {
+		// Misconfigured rule: no chain target meets the floor. Route best-effort
+		// over the full chain but flag it loudly — never silently pretend it fits.
+		routeSet = targets
+	}
+
+	chosen := routeSet[0]
 	degraded := false
+	blocked := false
 	reason := fmt.Sprintf("matched rule #%d -> %s:%s", idx, chosen.Channel, chosen.Model)
 	if r.unavailable(ctx, chosen.Channel) {
 		degraded = true
-		for _, f := range fallback {
+		found := false
+		for _, f := range routeSet[1:] {
 			if !r.unavailable(ctx, f.Channel) {
-				reason = fmt.Sprintf("rule #%d primary (%s:%s) unavailable (over cap or circuit open); degraded to %s:%s",
-					idx, primary.Channel, primary.Model, f.Channel, f.Model)
 				chosen = f
+				found = true
+				reason = fmt.Sprintf("rule #%d primary (%s:%s) unavailable; degraded to %s:%s (>= floor %s)",
+					idx, primary.Channel, primary.Model, f.Channel, f.Model, floor)
 				break
 			}
 		}
+		if !found {
+			// Every floor-clearing target is over budget / circuit-open. Refuse
+			// LOUD: keep the floor-clearing primary as a concrete recommendation
+			// but set BlockedByBudget so a consumer never runs it thinking it's fine.
+			blocked = true
+			chosen = routeSet[0]
+			reason = fmt.Sprintf("rule #%d: all targets >= floor %s are over budget or circuit-open; blocked (recommend %s:%s once budget frees)",
+				idx, floor, chosen.Channel, chosen.Model)
+		}
 	}
+	if floorUnmet {
+		degraded = true
+		reason = fmt.Sprintf("rule #%d: no chain target meets required floor %s; best-effort %s:%s may be under-capable",
+			idx, floor, chosen.Channel, chosen.Model)
+	}
+
 	return Decision{
-		Channel: chosen.Channel, Model: chosen.Model, Effort: rule.Effort,
-		Fallback: fallback, RuleIdx: idx, Reason: reason, Degraded: degraded,
+		Channel:         chosen.Channel,
+		Model:           chosen.Model,
+		Effort:          rule.Effort,
+		Fallback:        fallback,
+		RuleIdx:         idx,
+		Reason:          reason,
+		Degraded:        degraded,
+		Floor:           floor.String(),
+		TierPlan:        buildTierPlan(floorClearing, chosen),
+		BlockedByBudget: blocked,
 	}, nil
+}
+
+// cmStr renders a ChannelModel as "channel:model" (or bare channel when Model is empty).
+func cmStr(c ChannelModel) string {
+	if c.Model == "" {
+		return c.Channel
+	}
+	return c.Channel + ":" + c.Model
+}
+
+// buildTierPlan reports the floor-clearing candidates, the chosen target, and the
+// lowest-tier candidate strictly above the chosen tier (the escalation target).
+func buildTierPlan(acceptable []ChannelModel, chosen ChannelModel) TierPlan {
+	tp := TierPlan{Chosen: cmStr(chosen)}
+	chosenTier := signals.TierOf(chosen.Channel, chosen.Model)
+	var escalate *ChannelModel
+	for i := range acceptable {
+		tp.Acceptable = append(tp.Acceptable, cmStr(acceptable[i]))
+		t := signals.TierOf(acceptable[i].Channel, acceptable[i].Model)
+		if t > chosenTier && (escalate == nil || t < signals.TierOf(escalate.Channel, escalate.Model)) {
+			c := acceptable[i]
+			escalate = &c
+		}
+	}
+	if escalate != nil {
+		tp.EscalateTo = cmStr(*escalate)
+	}
+	return tp
 }
 
 // Explain returns a human-readable trace of routing for `req`.
@@ -156,6 +247,12 @@ func (r *Router) Explain(ctx context.Context, req Request) string {
 	}
 	if d.Parallel {
 		fmt.Fprintf(&b, "parallel targets: %v synthesize_with: %s:%s\n", d.ParallelTargets, d.SynthesizeWith.Channel, d.SynthesizeWith.Model)
+	}
+	if d.Floor != "" && d.Floor != "local" {
+		fmt.Fprintf(&b, "floor: %s\n", d.Floor)
+	}
+	if d.BlockedByBudget {
+		fmt.Fprintf(&b, "blocked: all targets >= floor %s over budget or circuit-open\n", d.Floor)
 	}
 	return b.String()
 }

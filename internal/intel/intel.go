@@ -192,14 +192,22 @@ func IsStale(proj config.Project) (bool, string, error) {
 		}
 		return true, "load failed: " + err.Error(), nil
 	}
+	stale, reason := Staleness(proj, idx)
+	return stale, reason, nil
+}
+
+// Staleness reports whether an already-loaded index is stale and why, using the
+// same age-then-commits rule as IsStale but without re-reading from disk. Age
+// rule: BuiltAt older than MaxAgeBeforeStale. Commit rule: more than
+// MaxCommitsBeforeStale commits since GitHead. Returns (false, "") when fresh.
+func Staleness(proj config.Project, idx *Index) (bool, string) {
 	if time.Since(idx.BuiltAt) > MaxAgeBeforeStale {
-		return true, fmt.Sprintf("index is %d days old", int(time.Since(idx.BuiltAt).Hours()/24)), nil
+		return true, fmt.Sprintf("index is %d days old", int(time.Since(idx.BuiltAt).Hours()/24))
 	}
-	n := commitsSince(proj.Path, idx.GitHead)
-	if n > MaxCommitsBeforeStale {
-		return true, fmt.Sprintf("%d commits since build (max %d)", n, MaxCommitsBeforeStale), nil
+	if n := commitsSince(proj.Path, idx.GitHead); n > MaxCommitsBeforeStale {
+		return true, fmt.Sprintf("%d commits since build (max %d)", n, MaxCommitsBeforeStale)
 	}
-	return false, "", nil
+	return false, ""
 }
 
 func gitHead(repo string) string {

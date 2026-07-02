@@ -14,6 +14,15 @@ var complexKeywords = []string{
 	"architecture", "refactor", "migrate", "redesign", "rewrite",
 }
 
+// Signal name constants. Keeping the emitted strings here (rather than inline
+// literals) lets the capability-floor map in floor.go reference the same values.
+const (
+	SigTrivial     = "trivial"
+	SigDeep        = "deep"
+	SigComplex     = "complex"
+	SigInteractive = "interactive"
+)
+
 // Extract turns (verb, args, project) into a deduplicated, sorted set of signals.
 func Extract(verb string, args []string, proj config.Project) []string {
 	set := map[string]struct{}{}
@@ -26,20 +35,20 @@ func Extract(verb string, args []string, proj config.Project) []string {
 
 	switch verb {
 	case "build":
-		add("interactive")
+		add(SigInteractive)
 	case "grunt":
 		if len(joined) > 0 && len(joined) < trivialMaxChars {
-			add("trivial")
+			add(SigTrivial)
 		}
 	case "think":
 		if strings.HasPrefix(joined, "deep:") || strings.Contains(joined, "deep think") {
-			add("deep")
+			add(SigDeep)
 		}
 	}
 
 	for _, kw := range complexKeywords {
 		if strings.Contains(joined, kw) {
-			add("complex")
+			add(SigComplex)
 			break
 		}
 	}
