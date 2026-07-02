@@ -98,22 +98,34 @@ Shared pieces:
 - `mcp.go` — MCP tool handlers, JSON schemas, tool assembly, and the `styx mcp`
   command entry point. Defines `routeArgs` (Task, Verb, Signals, Project),
   `routeResult` (Channel, Model, Effort, FallbackChain, Reasoning, Budget,
-  Degraded), `budgetStatusArgs` (Channel), `recordUsageArgs` (Channel, Messages,
-  TokensIn, TokensOut, Verb, Model, Success, Project, RunID), `recordResult`
-  (Recorded, Budget), and `budgetSnapshot` (Channel, SessionCount/Limit,
-  WeeklyCount/Limit, percentages, CooldownUntil, Stale flag); handler functions
-  `handleRoute()`, `handleBudgetStatus()`, `handleRecordUsage()`, and
-  `budgetSnapshotFor()` (package main). Handler logic is kept simple: route
-  decision + snapshot for one task, budget snapshot for one or all four channels,
-  and record usage rows (Messages>1 appends N rows with token totals on the
-  first). `routeSchema`, `budgetStatusSchema`, and `recordUsageSchema` are
-  `map[string]any` JSON Schema objects passed as `Tool.InputSchema`. `mcpTools(a
-  *app)` assembles the three handlers into `[]mcpserver.Tool`, unmarshaling raw
-  JSON arguments before each dispatch. `cmdMCP(a *app, args []string)` constructs
-  the server via `mcpserver.New("styx", mcpServerVersion, mcpTools(a))`, logs
-  readiness to stderr via `logStatus`, and runs `srv.Serve(ctx, os.Stdin,
-  os.Stdout)` — stdout carries the JSON-RPC protocol only, nothing else. `const
-  mcpServerVersion = "0.1.0"`.
+  Degraded, plus v2 additive `ClassifiedSignals`, `Floor`, `TierPlan`,
+  `BlockedByBudget`, `RetryAfterS`), `budgetStatusArgs` (Channel),
+  `recordUsageArgs` (Channel, Messages, TokensIn, TokensOut, Verb, Model,
+  Success, Project, RunID), `recordResult` (Recorded, Budget), `budgetSnapshot`
+  (Channel, SessionCount/Limit, WeeklyCount/Limit, percentages, CooldownUntil,
+  Stale flag), `channelHealthArgs`/`channelHealthResult`, `getIntelArgs`/
+  `refreshIntelArgs`/`intelResult`, and `recallArgs`/`recallResult`; handler
+  functions `handleRoute()`, `handleBudgetStatus()`, `handleRecordUsage()`,
+  `handleChannelHealth()`, `handleGetIntel()`, `handleRefreshIntel()`,
+  `handleRecall()`, and `budgetSnapshotFor()` (package main). Handler logic is
+  kept simple: route decision + snapshot for one task, budget snapshot for one
+  or all four channels, record usage rows (Messages>1 appends N rows with
+  token totals on the first), channel health/failure/cooldown per channel,
+  intel read/rebuild per project, and decayed top-k memory recall. Project-
+  scoped tools (`get_intel`, `refresh_intel`, `recall`) resolve their
+  `project` argument via `resolveProjectStrict`, which never falls back to the
+  server's own cwd and returns a `channel.ClassifiedError` for an empty or
+  unknown project. `routeSchema`, `budgetStatusSchema`, `recordUsageSchema`,
+  `channelHealthSchema`, `getIntelSchema`, `refreshIntelSchema`, and
+  `recallSchema` are `map[string]any` JSON Schema objects passed as
+  `Tool.InputSchema`. `mcpTools(a *app)` assembles all seven handlers into
+  `[]mcpserver.Tool`, unmarshaling raw JSON arguments before each dispatch.
+  `cmdMCP(a *app, args []string)` constructs the server via `mcpserver.New("styx",
+  mcpServerVersion, mcpTools(a))`, logs readiness to stderr via `logStatus`
+  (naming all seven tools), and runs `srv.Serve(ctx, os.Stdin, os.Stdout)` —
+  stdout carries the JSON-RPC protocol only, nothing else. `const
+  mcpServerVersion = "0.1.0"`. See the "MCP server" section below for the
+  route-v2 field shapes and value-shape decisions consumers must know.
 
 ### Multi-project session
 
@@ -223,6 +235,27 @@ subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
 wiring. `Brain` configures the planned local ollama routing brain and memory
 embedding model; `Tiers` maps brain tier names to claude CLI model aliases, with
 `fable` currently mapped to `opus` while the fable tier is suspended.
+
+**Capability floor (v2).** `internal/signals/floor.go` defines `Tier`
+(`TierLocal < TierHaiku < TierSonnet < TierOpus`), `TierOf(channel, model)`
+(hand-curated channel/model → tier map, biased toward inclusion — an unknown
+cloud channel is treated as sonnet-class so it's never wrongly excluded), and
+`Floor(sigs []string)`, which looks up each signal in a `signalFloor` map kept
+beside the signal definitions (currently `complex` and `deep` → `TierSonnet`)
+and returns the highest tier any signal requires (`TierLocal` = no floor).
+`Router.Route` computes `floor := signals.Floor(req.Signals)` and restricts
+fallback-chain degradation to floor-clearing candidates only — a request with
+a `complex`/`deep` signal will never degrade down to an ollama/local target,
+even under budget pressure. `Decision` carries three additive v2 fields:
+`Floor` (the tier keyword string), `TierPlan{Acceptable, Chosen, EscalateTo}`
+(the floor-clearing candidates, the one actually chosen within budget, and the
+next higher tier to escalate to if all floor-clearing targets are exhausted),
+and `BlockedByBudget` — set true, with `Decision` still populated with its
+best-effort chosen channel, when every floor-clearing target is over budget or
+circuit-open. This replaces the old silent-return-first-degraded-target
+behavior on chain exhaustion with a loud refusal signal a caller can check
+before dispatching. `Router.Explain` prints `floor: <tier>` (when not
+`local`) and a `blocked: ...` line when `BlockedByBudget`.
 
 ## Model Sync (internal/modelsync)
 
@@ -456,7 +489,10 @@ Builds a per-project codebase index (`~/.config/styx/state/intel/<id>/
 index.json`, schema-versioned): file tree, module map + purposes, conventions,
 key symbols, recent commits, TODOs, external deps. Module summaries and key
 symbols come from agy calls with per-call timeouts. Staleness: >5 commits or
->7 days triggers auto-refresh in plan/build flows. `render.go` renders the
+>7 days triggers auto-refresh in plan/build flows. `Staleness(proj, idx)`
+reports staleness for an already-loaded index without re-reading from disk
+(same age-then-commits rule); `IsStale(proj)` wraps it for callers that only
+have a project, loading the index first. `render.go` renders the
 index to markdown and writes `<project>/.claude/context.md` (or
 `context.styx.md` + `@import` when a user-authored context.md exists) so
 Claude Code auto-loads project context.
@@ -535,7 +571,56 @@ claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 
 ## MCP server (internal/mcpserver + cmd/styx/mcp.go)
 
-A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the routing brain as three tools — `route`, `budget_status`, `record_usage` — for MCP hosts like OpenClaw. Pure stdlib, no provider SDK; stdout carries the protocol, status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto `internal/router` and `internal/budget`.
+A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the
+routing brain as seven tools for MCP hosts like OpenClaw: `route`,
+`budget_status`, `record_usage`, `channel_health`, `get_intel`,
+`refresh_intel`, and `recall`. Pure stdlib, no provider SDK; stdout carries
+the protocol, status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
+`internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
+
+**`route` v2 additive fields.** `routeResult` gained five fields that v1
+consumers safely ignore (all `omitempty` except `blocked_by_budget`):
+`classified_signals` (the signal slice actually used for routing — either the
+caller's `signals` or, when omitted, whatever `signals.Extract` derived from
+the task, so a consumer can see what drove the decision), `floor`, `tier_plan`
+(`{acceptable, chosen, escalate_to}`), `blocked_by_budget`, and
+`retry_after_s` (populated only when `blocked_by_budget` is true — the
+smallest positive `RetryAfter` across the acceptable targets' channels, via
+`minRetryAfter`, or 0 if unknown). Two value-shape decisions consumers must
+respect:
+- **`floor` is a bare capability-tier keyword** (`local` | `haiku` | `sonnet`
+  | `opus`), never a `channel:model` string — it names a minimum rank on
+  `signals.Tier`, not a specific target. `tier_plan.acceptable`/`chosen`/
+  `escalate_to`, by contrast, ARE `channel:model` strings (or bare channel
+  tokens) naming actual routing targets.
+- **`channel_health.error_kinds` uses friendly, zero-filled keys** —
+  `timeout`/`rate_limit`/`server`/`other` — mapped from the raw stored
+  `429`/`5xx`/etc. labels via `budget.healthKind`; a consumer can always index
+  all four keys without a presence check.
+
+**Four new tools.**
+- `channel_health` — per-channel (or all four) circuit-breaker state,
+  recent failure count, the zero-filled error-kind buckets above, and
+  remaining cooldown seconds, read straight off the existing usage log (no
+  new state). Backed by `budget.Tracker.ChannelHealth`.
+- `get_intel(project, section?)` — returns the persisted per-project intel
+  index (or one named section: `conventions`, `key_symbols`, `modules`,
+  `file_tree`, `recent_commits`, `open_todos`) plus `stale`/
+  `staleness_reason`. A read never rebuilds; a missing index reports
+  `stale: true` with reason `"no index built yet"` rather than erroring.
+- `refresh_intel(project)` — the deliberate write path: rebuilds the index
+  via `intel.Build` (agy module/key-symbol summaries) and rewrites
+  `.claude/context.md`.
+- `recall(project, query, k?)` — returns decayed top-k project + global
+  memory hits (`memory.Recall`, confidence × recency decay). Degrades loud:
+  an unavailable local-Ollama embedder becomes a `channel.ClassifiedError`,
+  never an empty result presented as success.
+
+`get_intel`, `refresh_intel`, and `recall` all resolve their `project`
+argument through `resolveProjectStrict`, which has no cwd fallback (an MCP
+server's cwd is not the caller's project) and turns an empty/unknown project
+into a `channel.ClassifiedError` rather than a silent default — the shared
+cross-cutting contract for every project-scoped v2 tool.
 
 ## Progress (internal/progress)
 

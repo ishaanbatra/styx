@@ -626,6 +626,6 @@ func mcpTools(a *app) []mcpserver.Tool {
 // host closes stdin (EOF).
 func cmdMCP(a *app, args []string) error {
 	srv := mcpserver.New("styx", mcpServerVersion, mcpTools(a))
-	logStatus("mcp server ready on stdio (route, budget_status, record_usage)")
+	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall)")
 	return srv.Serve(context.Background(), os.Stdin, os.Stdout)
 }
