@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/intel"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
+	"github.com/ishaanbatra/styx/internal/memory"
+	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
@@ -388,6 +391,68 @@ func handleRefreshIntel(ctx context.Context, proj config.Project, agy intel.AgyC
 	return intelResult{Project: proj.Name, Stale: stale, StalenessReason: reason, Index: idx}, nil
 }
 
+const defaultRecallK = 5
+
+type recallArgs struct {
+	Project string `json:"project"`
+	Query   string `json:"query"`
+	K       int    `json:"k"`
+}
+
+type recallHit struct {
+	Text       string  `json:"text"`
+	Kind       string  `json:"kind"`
+	Source     string  `json:"source,omitempty"`
+	Score      float64 `json:"score"`
+	Confidence float64 `json:"confidence"`
+}
+
+type recallResult struct {
+	Project string      `json:"project"`
+	Hits    []recallHit `json:"hits"`
+}
+
+var recallSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"project": map[string]any{"type": "string", "description": "Registered project alias or path (required)."},
+		"query":   map[string]any{"type": "string", "description": "What to recall (required)."},
+		"k":       map[string]any{"type": "integer", "description": "Max results (default 5)."},
+	},
+	"required": []any{"project", "query"},
+}
+
+// handleRecall returns decayed top-k project + global memory. It degrades LOUD:
+// any Recall failure (notably ollama embeddings down) becomes a classified error,
+// never an empty result presented as success.
+func handleRecall(ctx context.Context, proj config.Project, emb memory.Embedder, projStore, globalStore *memory.Store, a recallArgs) (recallResult, error) {
+	if strings.TrimSpace(a.Query) == "" {
+		return recallResult{}, &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: errors.New("recall: query is required")}
+	}
+	k := a.K
+	if k <= 0 {
+		k = defaultRecallK
+	}
+	hits, err := memory.Recall(ctx, emb, a.Query, k, projStore, globalStore)
+	if err != nil {
+		return recallResult{}, &channel.ClassifiedError{
+			Kind: channel.ErrKindOther,
+			Err:  fmt.Errorf("recall unavailable (ollama embeddings): %w", err),
+		}
+	}
+	out := recallResult{Project: proj.Name, Hits: make([]recallHit, 0, len(hits))}
+	for _, h := range hits {
+		out.Hits = append(out.Hits, recallHit{
+			Text:       h.Item.Text,
+			Kind:       string(h.Item.Kind),
+			Source:     h.Item.Source,
+			Score:      h.Score,
+			Confidence: h.Item.Confidence,
+		})
+	}
+	return out, nil
+}
+
 const mcpServerVersion = "0.1.0"
 
 var routeSchema = map[string]any{
@@ -517,6 +582,40 @@ func mcpTools(a *app) []mcpserver.Tool {
 					return nil, &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: errors.New("refresh_intel: agy channel unavailable")}
 				}
 				return handleRefreshIntel(ctx, proj, &agyAdapter{ch: rawChannel(ag)}, a.progress)
+			},
+		},
+		{
+			Name:        "recall",
+			Description: "Recall the top-k project-scoped long-term memories (decisions, facts, preferences) via semantic similarity with recency/confidence decay. Requires local Ollama embeddings; returns a loud error if unavailable.",
+			InputSchema: recallSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in recallArgs
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("recall: invalid arguments: %w", err)
+				}
+				proj, err := resolveProjectStrict(in.Project)
+				if err != nil {
+					return nil, err
+				}
+				memDir, err := paths.MemoryDir()
+				if err != nil {
+					return nil, fmt.Errorf("recall: memory dir: %w", err)
+				}
+				if err := paths.EnsureDir(memDir); err != nil {
+					return nil, fmt.Errorf("recall: ensure memory dir: %w", err)
+				}
+				projStore, err := memory.Open(filepath.Join(memDir, proj.ID+".db"))
+				if err != nil {
+					return nil, fmt.Errorf("recall: open project memory: %w", err)
+				}
+				defer projStore.Close()
+				globalStore, err := memory.Open(filepath.Join(memDir, "global.db"))
+				if err != nil {
+					return nil, fmt.Errorf("recall: open global memory: %w", err)
+				}
+				defer globalStore.Close()
+				emb := memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel)
+				return handleRecall(ctx, proj, emb, projStore, globalStore, in)
 			},
 		},
 	}

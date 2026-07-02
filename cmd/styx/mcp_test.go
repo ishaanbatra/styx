@@ -14,6 +14,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/intel"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
+	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/router"
 )
 
@@ -323,5 +324,71 @@ func TestHandleGetIntel_NotBuiltIsStaleNotError(t *testing.T) {
 	}
 	if !res.Stale || res.StalenessReason == "" {
 		t.Fatalf("missing index: want stale with reason, got %+v", res)
+	}
+}
+
+// fakeEmb returns a fixed vector, or an error to simulate ollama-down.
+type fakeEmb struct {
+	vec []float32
+	err error
+}
+
+func (f fakeEmb) Embed(ctx context.Context, text string) ([]float32, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.vec, nil
+}
+
+func TestHandleRecall_HitAndOllamaDownLoud(t *testing.T) {
+	ctx := context.Background()
+	proj := config.Project{ID: "demo", Name: "demo"}
+	ps, err := memory.Open(filepath.Join(t.TempDir(), "demo.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ps.Close()
+	gs, err := memory.Open(filepath.Join(t.TempDir(), "global.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gs.Close()
+	if _, err := ps.Add(ctx, memory.Item{Kind: memory.KindDecision, Text: "use codex as implementer", Confidence: 1, Embedding: []float32{1, 0, 0}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// normal hit: query vector aligned with the stored item.
+	ok := fakeEmb{vec: []float32{1, 0, 0}}
+	res, err := handleRecall(ctx, proj, ok, ps, gs, recallArgs{Project: "demo", Query: "who implements", K: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 1 || res.Hits[0].Text != "use codex as implementer" {
+		t.Fatalf("recall hit wrong: %+v", res.Hits)
+	}
+
+	// ollama down: loud classified error, never empty-as-success.
+	down := fakeEmb{err: errors.New(`embed call: Post "http://localhost:11434/api/embed": dial tcp: connect: connection refused`)}
+	_, err = handleRecall(ctx, proj, down, ps, gs, recallArgs{Project: "demo", Query: "who implements"})
+	if err == nil {
+		t.Fatal("ollama-down returned nil error (empty-as-success)")
+	}
+	if !strings.Contains(err.Error(), "recall unavailable") {
+		t.Fatalf("recall error not loud: %v", err)
+	}
+	var ce *channel.ClassifiedError
+	if !errors.As(err, &ce) {
+		t.Fatalf("recall error not classified: %v", err)
+	}
+}
+
+func TestHandleRecall_QueryRequired(t *testing.T) {
+	ps, _ := memory.Open(filepath.Join(t.TempDir(), "p.db"))
+	defer ps.Close()
+	gs, _ := memory.Open(filepath.Join(t.TempDir(), "g.db"))
+	defer gs.Close()
+	_, err := handleRecall(context.Background(), config.Project{Name: "p"}, fakeEmb{vec: []float32{1}}, ps, gs, recallArgs{Project: "p", Query: ""})
+	if err == nil {
+		t.Fatal("empty query accepted")
 	}
 }
