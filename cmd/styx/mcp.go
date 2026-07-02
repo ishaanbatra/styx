@@ -3,16 +3,21 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
+	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/intel"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
+	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
+	"github.com/ishaanbatra/styx/internal/target"
 )
 
 type routeArgs struct {
@@ -270,6 +275,119 @@ func handleChannelHealth(ctx context.Context, t *budget.Tracker, a channelHealth
 	return out, nil
 }
 
+// resolveProjectStrict resolves an MCP project argument via the shared target
+// resolver (alias or path) WITHOUT any cwd fallback — an MCP server's cwd is not
+// the caller's project. Empty or unknown project is a classified error, never a
+// silent default.
+func resolveProjectStrict(name string) (config.Project, error) {
+	if strings.TrimSpace(name) == "" {
+		return config.Project{}, &channel.ClassifiedError{
+			Kind: channel.ErrKindOther,
+			Err:  errors.New("project is required"),
+		}
+	}
+	proj, err := target.Resolve(target.Spec{Alias: name})
+	if err != nil {
+		return config.Project{}, &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: err}
+	}
+	return proj, nil
+}
+
+type getIntelArgs struct {
+	Project string `json:"project"`
+	Section string `json:"section"`
+}
+
+type refreshIntelArgs struct {
+	Project string `json:"project"`
+}
+
+// intelResult carries either the whole index (section == "") or exactly one
+// section slice. Stale/StalenessReason always report freshness; a read never
+// rebuilds.
+type intelResult struct {
+	Project         string       `json:"project"`
+	Stale           bool         `json:"stale"`
+	StalenessReason string       `json:"staleness_reason,omitempty"`
+	Section         string       `json:"section,omitempty"`
+	Index           *intel.Index `json:"index,omitempty"`
+
+	Conventions   *intel.Conventions `json:"conventions,omitempty"`
+	KeySymbols    []intel.KeySymbol  `json:"key_symbols,omitempty"`
+	Modules       []intel.Module     `json:"modules,omitempty"`
+	FileTree      []string           `json:"file_tree,omitempty"`
+	RecentCommits []intel.Commit     `json:"recent_commits,omitempty"`
+	OpenTodos     []intel.Todo       `json:"open_todos,omitempty"`
+}
+
+var getIntelSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"project": map[string]any{"type": "string", "description": "Registered project alias or path (required)."},
+		"section": map[string]any{
+			"type":        "string",
+			"description": "Optional slice: conventions | key_symbols | modules | file_tree | recent_commits | open_todos. Omit for the whole index.",
+		},
+	},
+	"required": []any{"project"},
+}
+
+var refreshIntelSchema = map[string]any{
+	"type": "object",
+	"properties": map[string]any{
+		"project": map[string]any{"type": "string", "description": "Registered project alias or path (required)."},
+	},
+	"required": []any{"project"},
+}
+
+// handleGetIntel loads the persisted index (never rebuilds on read), reports
+// staleness, and returns the whole index or one section.
+func handleGetIntel(ctx context.Context, proj config.Project, section string) (intelResult, error) {
+	idx, err := intel.Load(proj)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return intelResult{Project: proj.Name, Stale: true, StalenessReason: "no index built yet"}, nil
+		}
+		return intelResult{}, fmt.Errorf("get_intel load %s: %w", proj.Name, err)
+	}
+	stale, reason := intel.Staleness(proj, idx)
+	res := intelResult{Project: proj.Name, Stale: stale, StalenessReason: reason, Section: section}
+	switch section {
+	case "":
+		res.Index = idx
+	case "conventions":
+		c := idx.Conventions
+		res.Conventions = &c
+	case "key_symbols":
+		res.KeySymbols = idx.KeySymbols
+	case "modules":
+		res.Modules = idx.Modules
+	case "file_tree":
+		res.FileTree = idx.FileTree
+	case "recent_commits":
+		res.RecentCommits = idx.RecentCommits
+	case "open_todos":
+		res.OpenTodos = idx.OpenTodos
+	default:
+		return intelResult{}, fmt.Errorf("get_intel: unknown section %q", section)
+	}
+	return res, nil
+}
+
+// handleRefreshIntel rebuilds the index via agy, rewrites .claude/context.md, and
+// returns the fresh result. This is the deliberate write/refresh path.
+func handleRefreshIntel(ctx context.Context, proj config.Project, agy intel.AgyClient, prog *progress.Tracker) (intelResult, error) {
+	idx, err := intel.Build(ctx, proj, agy, prog)
+	if err != nil {
+		return intelResult{}, fmt.Errorf("refresh_intel build %s: %w", proj.Name, err)
+	}
+	if _, err := intel.WriteContextMD(proj.Path, intel.ToMarkdown(idx)); err != nil {
+		return intelResult{}, fmt.Errorf("refresh_intel write context %s: %w", proj.Name, err)
+	}
+	stale, reason := intel.Staleness(proj, idx)
+	return intelResult{Project: proj.Name, Stale: stale, StalenessReason: reason, Index: idx}, nil
+}
+
 const mcpServerVersion = "0.1.0"
 
 var routeSchema = map[string]any{
@@ -363,6 +481,42 @@ func mcpTools(a *app) []mcpserver.Tool {
 					}
 				}
 				return handleChannelHealth(ctx, a.tracker, in)
+			},
+		},
+		{
+			Name:        "get_intel",
+			Description: "Return the per-project codebase intelligence index styx maintains (file tree, module summaries, conventions, key symbols, recent commits, open TODOs). Pass section to return one slice. Reports staleness; never rebuilds on read.",
+			InputSchema: getIntelSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in getIntelArgs
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("get_intel: invalid arguments: %w", err)
+				}
+				proj, err := resolveProjectStrict(in.Project)
+				if err != nil {
+					return nil, err
+				}
+				return handleGetIntel(ctx, proj, in.Section)
+			},
+		},
+		{
+			Name:        "refresh_intel",
+			Description: "Rebuild the per-project intelligence index (walk + convention sniff + agy module/key-symbol summaries) and return the fresh result. The deliberate write path.",
+			InputSchema: refreshIntelSchema,
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in refreshIntelArgs
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("refresh_intel: invalid arguments: %w", err)
+				}
+				proj, err := resolveProjectStrict(in.Project)
+				if err != nil {
+					return nil, err
+				}
+				ag, ok := a.channels["agy"]
+				if !ok {
+					return nil, &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: errors.New("refresh_intel: agy channel unavailable")}
+				}
+				return handleRefreshIntel(ctx, proj, &agyAdapter{ch: rawChannel(ag)}, a.progress)
 			},
 		},
 	}

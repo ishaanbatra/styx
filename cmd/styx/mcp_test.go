@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
+	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/intel"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/router"
 )
@@ -254,5 +257,71 @@ func TestMCPTools_EndToEndChannelHealth(t *testing.T) {
 	// same workaround for tool-call (not tools/list) output.
 	if !strings.Contains(out.String(), "circuit_open") || !strings.Contains(out.String(), "error_kinds") {
 		t.Fatalf("channel_health output missing fields:\n%s", out.String())
+	}
+}
+
+func TestResolveProjectStrict_Errors(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	if _, err := resolveProjectStrict(""); err == nil {
+		t.Fatal("empty project accepted; want required-error")
+	}
+	_, err := resolveProjectStrict("definitely-not-a-registered-project")
+	if err == nil || !strings.Contains(err.Error(), "unknown project") {
+		t.Fatalf("unknown project err = %v, want 'unknown project'", err)
+	}
+	var ce *channel.ClassifiedError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err not classified: %v", err)
+	}
+}
+
+func TestHandleGetIntel_WholeSectionAndStale(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	proj := config.Project{ID: "demo", Name: "demo", Path: t.TempDir(), Language: "go"}
+	idx := &intel.Index{
+		Project: "demo", Path: proj.Path, Language: "go",
+		BuiltAt:       time.Now().UTC(),
+		SchemaVersion: 1,
+		Conventions:   intel.Conventions{TestFramework: "go test"},
+		KeySymbols:    []intel.KeySymbol{{Name: "Router", File: "router.go", Why: "central"}},
+	}
+	if err := intel.Save(proj, idx); err != nil {
+		t.Fatal(err)
+	}
+	// whole index
+	whole, err := handleGetIntel(context.Background(), proj, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if whole.Index == nil || whole.Index.Conventions.TestFramework != "go test" {
+		t.Fatalf("whole index missing conventions: %+v", whole.Index)
+	}
+	if whole.Stale {
+		t.Fatalf("just-built index reported stale: %q", whole.StalenessReason)
+	}
+	// section filter
+	sec, err := handleGetIntel(context.Background(), proj, "key_symbols")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sec.Index != nil || len(sec.KeySymbols) != 1 || sec.KeySymbols[0].Name != "Router" {
+		t.Fatalf("key_symbols section wrong: %+v", sec)
+	}
+	// unknown section
+	if _, err := handleGetIntel(context.Background(), proj, "bogus"); err == nil {
+		t.Fatal("unknown section accepted")
+	}
+}
+
+func TestHandleGetIntel_NotBuiltIsStaleNotError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	proj := config.Project{ID: "never", Name: "never", Path: t.TempDir()}
+	res, err := handleGetIntel(context.Background(), proj, "")
+	if err != nil {
+		t.Fatalf("missing index should not error: %v", err)
+	}
+	if !res.Stale || res.StalenessReason == "" {
+		t.Fatalf("missing index: want stale with reason, got %+v", res)
 	}
 }
