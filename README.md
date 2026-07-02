@@ -47,8 +47,10 @@ and execs `claude --mcp-config <file> --append-system-prompt <guidance>` in
 the project directory, handing control to Claude Code with styx's routing
 brain, budget, memory, and dispatch surface attached as tools. Guidance comes
 from `internal/guidance` plus any recalled routing preferences; extra repos
-beyond the focus are noted in that guidance for the brain to bind via the
-`dispatch` tool's `extra_roots`, not bound directly by the exec.
+beyond the focus are added to the Claude Code session directly (`--add-dir`
+per repo) and noted in that guidance so the brain also passes them as the
+`dispatch` tool's `extra_roots`, giving dispatched agent threads the same
+access.
 
 Within a multi-repo classic-REPL session, `/repos` lists all bound repos
 (focus-marked), `/focus <name>` switches to a different bound repo (binding it

@@ -17,8 +17,10 @@ import (
 
 // cmdLaunch is the conductor front door: `styx` / `styx <repos...>`. The
 // first repo (if any) resolves the focus project exactly like the classic
-// REPL's newREPLSession; extra repos are noted in the guidance handed to the
-// brain (bind them via the MCP dispatch tool's extra_roots, not this exec).
+// REPL's newREPLSession; extra repos are both added to the Claude Code
+// session directly (the launcher passes --add-dir per repo) and noted in
+// the guidance so the brain also passes them as the MCP dispatch tool's
+// extra_roots, giving dispatched agent threads the same access.
 func cmdLaunch(a *app, repos ...string) error {
 	p, err := resolveLaunchTarget(repos)
 	if err != nil {
@@ -40,7 +42,7 @@ func cmdLaunch(a *app, repos ...string) error {
 	}
 	guide, err := guidance.Load(p.Path)
 	if err != nil {
-		return err
+		return fmt.Errorf("load guidance: %w", err)
 	}
 	if extraNote.Len() > 0 {
 		guide += "\n\n## Bound repos beyond " + p.Name + "\n" + extraNote.String()

@@ -82,9 +82,11 @@ Shared pieces:
 - `launch.go` — `cmdLaunch(a *app, repos ...string) error`, the conductor
   front door. Resolves the focus project exactly like `newREPLSession`'s seed
   resolution (first repo by alias, or `resolveGlobalTarget("")` for bare
-  `styx` so cwd still works), resolves any extra repos and folds them into the
-  guidance as a note (bind them for real via the MCP `dispatch` tool's
-  `extra_roots`, not this exec), loads `internal/guidance.Load(project.Path)`,
+  `styx` so cwd still works), resolves any extra repos — passed to the
+  launcher as `Opts.ExtraRepos` (rendered as `--add-dir` flags on the Claude
+  Code session) and folded into the guidance as a note telling the brain to
+  also pass them as the MCP `dispatch` tool's `extra_roots` so dispatched
+  agent threads get the same access — loads `internal/guidance.Load(project.Path)`,
   appends `recallRoutingPrefs(a)` output when non-empty, resolves the running
   `styx` binary via `os.Executable()`, and calls
   `(&launcher.ClaudeHost{}).Launch(ctx, launcher.Opts{...})`.
