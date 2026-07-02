@@ -602,7 +602,13 @@ private/loopback/link-local hosts (SSRF guard on the citation chaser, e.g.
 `169.254.169.254` cloud metadata, `127.0.0.1`, RFC1918 ranges, `.local`); the
 `ChaseSources` loop reports a blocked URL as a distinct "skipped" outcome
 (never silently) alongside its existing succeeded/failed narration and
-tallies. The truncated page body is embedded in the summarize prompt via
+tallies. `hostBlocked` only vets the initial URL, so `curlFetch` (the
+extracted curl invocation used by `AgySummarizer`) runs curl with
+`--max-redirs 0`: a page that 302s to a private/loopback/link-local host
+(bypassing the guard) makes curl fail hard (exit 47) instead of silently
+returning the redirect target's body, so a redirect always surfaces as a
+fetch failure, never a silent success with wrong content. The truncated page
+body is embedded in the summarize prompt via
 `buildSummarizePrompt`, fenced between `BEGIN UNTRUSTED CONTENT`/
 `END UNTRUSTED CONTENT` markers with an explicit instruction to treat it as
 data, not instructions (prompt-injection mitigation: fetched pages are

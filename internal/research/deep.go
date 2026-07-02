@@ -113,6 +113,28 @@ func buildSummarizePrompt(pageURL, body string) string {
 		"END UNTRUSTED CONTENT"
 }
 
+// curlFetch runs curl against url and returns the raw response body.
+//
+// --max-redirs 0 refuses to follow any redirect: hostBlocked only vets the
+// initial URL, so a page that 302s to a private/loopback/link-local address
+// (e.g. http://169.254.169.254/... or http://localhost:11434/...) would
+// otherwise bypass the SSRF guard entirely. With -L still set, curl treats a
+// refused redirect as a hard failure (exit 47, "too many redirects") rather
+// than silently returning the redirect target's body, so a redirect always
+// surfaces as a fetch failure below, never a silent success with wrong
+// content.
+func curlFetch(ctx context.Context, url string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "curl", "-fsSL", "--max-redirs", "0", "--max-time", "20",
+		"-A", "styx/v0.2", url)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, err
+	}
+	return stdout.Bytes(), nil
+}
+
 // AgySummarizer returns a Summarizer that fetches the URL via curl, embeds
 // the (truncated) page body into the prompt, and asks agy to summarize.
 //
@@ -126,15 +148,10 @@ func AgySummarizer(agy Channel) Summarizer {
 		if hostBlocked(url) {
 			return skippedPrefix + url + ": private/non-http host", nil
 		}
-		cmd := exec.CommandContext(ctx, "curl", "-fsSL", "--max-time", "20",
-			"-A", "styx/v0.2", url)
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
+		body, err := curlFetch(ctx, url)
+		if err != nil {
 			return "fetch failed for " + url + ": " + err.Error(), nil
 		}
-		body := stdout.Bytes()
 		if len(body) == 0 {
 			return "fetch failed for " + url + ": empty response body", nil
 		}

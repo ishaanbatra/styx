@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -258,6 +260,34 @@ func TestAgySummarizer_BlockedHostSkipsWithoutFetch(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, "skipped ") || !strings.Contains(got, "private/non-http host") {
 		t.Errorf("expected 'skipped <url>: private/non-http host' marker, got %q", got)
+	}
+}
+
+func TestCurlFetch_RefusesRedirects(t *testing.T) {
+	// hostBlocked only vets the initial URL, so a page that 302s to a
+	// private/loopback/link-local host (e.g. the AWS metadata service or a
+	// local ollama) must not be silently followed. Both servers here are
+	// loopback, so we call curlFetch directly rather than going through
+	// AgySummarizer/hostBlocked (which would short-circuit the loopback
+	// entry URL before curl ever ran).
+	targetHit := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit = true
+		w.Write([]byte("should never be fetched"))
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	body, err := curlFetch(context.Background(), redirector.URL)
+	if err == nil {
+		t.Fatalf("expected curlFetch to fail when the server responds with a redirect, got body %q", body)
+	}
+	if targetHit {
+		t.Errorf("curl followed the redirect to the target server; a redirect must never be followed since hostBlocked only vets the initial URL")
 	}
 }
 
