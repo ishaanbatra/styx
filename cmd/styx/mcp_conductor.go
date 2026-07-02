@@ -176,7 +176,11 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}
 				}
 				if in.CLI == "ollama" { // one-shot, no thread machinery
-					resp, err := d.a.channels["ollama"].Send(ctx, channel.Request{
+					ch, ok := d.a.channels["ollama"]
+					if !ok {
+						return nil, fmt.Errorf("dispatch ollama: ollama channel unavailable")
+					}
+					resp, err := ch.Send(ctx, channel.Request{
 						Model: in.Model, Prompt: in.Message,
 					})
 					if err != nil {
