@@ -70,8 +70,9 @@ Shared pieces:
   `resolveTarget` / `resolveProjectArg` split and removes the silent cwd
   fallback for failed explicit targets. `seedMessageLimits` applies
   routing.toml message caps (with built-in fallbacks) to the budget tracker.
-  The verb switch has explicit `repl` (→ `cmdREPL`, the classic v0.2 loop) and
-  `launch` (→ `cmdLaunch`) cases. When no verb matches and every positional
+  The verb switch has explicit `repl` (→ `cmdREPL`, the classic v0.2 loop),
+  `launch` (→ `cmdLaunch`), and `resume` (→ `cmdResume`, first positional arg
+  as the optional session ID) cases. When no verb matches and every positional
   token resolves to a registered project (`allReposResolve`), the dispatcher
   now launches the conductor bound to those repos (first becomes the focus,
   via `cmdLaunch`) rather than opening the REPL; otherwise the tokens are
@@ -80,7 +81,17 @@ Shared pieces:
   verb (needs the full `app{router, tracker}` from `loadApp()`) and is
   dispatched in the second switch alongside `auto`, `research`, etc.
 - `launch.go` — `cmdLaunch(a *app, repos ...string) error`, the conductor
-  front door. Resolves the focus project exactly like `newREPLSession`'s seed
+  front door, and `cmdResume(a *app, sessionID string) error`, which
+  relaunches the conductor resuming a Claude Code session: `--resume <id>`
+  with a session ID, `--continue` (the directory's most recent session)
+  without. Both are thin wrappers over the shared
+  `launchConductor(a, repos, extraArgs)` helper — resume exists because the
+  toolbelt flags are per-invocation, so a plain `claude --resume` would
+  restore the conversation but lose the styx MCP server and guidance. Resume
+  takes no repo arguments (sessions are per-directory, so it is cwd-anchored
+  like bare `styx`; extra repos are out of scope) and passes its flags via
+  `launcher.Opts.ExtraArgs`. `launchConductor` resolves the focus project
+  exactly like `newREPLSession`'s seed
   resolution (first repo by alias, or `resolveGlobalTarget("")` for bare
   `styx` so cwd still works). Uniquely among verbs, bare `styx` outside any
   git repository does not error: `resolveLaunchTarget` catches
@@ -651,19 +662,25 @@ first) with styx attached as an MCP toolbelt. `Host` (`Name() string`,
 string}` (empty `Bin` means `"claude"` on `PATH`) is the only host-specific
 code in the conductor — everything else downstream is portable MCP surface
 (`internal/mcpserver` + the conductor tools). `Opts{ProjectPath, StyxBin,
-Guidance, ExtraRepos}` is everything a host needs. `ClaudeHost.Launch`:
+Guidance, ExtraRepos, ExtraArgs}` is everything a host needs.
+`ClaudeHost.Launch`:
 1. resolves `paths.StateDir()` and `paths.EnsureDir`s it;
 2. writes `{"mcpServers": {"styx": {"command": StyxBin, "args": ["mcp"]}}}`
    to `<stateDir>/conductor-mcp.json` via atomic tmp+rename;
 3. execs `claude --mcp-config <path> --append-system-prompt <Guidance>`
-   (plus `--add-dir <repo>` per `ExtraRepos`) via `exec.CommandContext` with
+   (plus `--add-dir <repo>` per `ExtraRepos`, then any `ExtraArgs` verbatim —
+   `styx resume` uses this for `--resume <id>` / `--continue`) via
+   `exec.CommandContext` with
    `cmd.Dir = ProjectPath` and stdio passed through directly (`cmd.Stdin`,
    `cmd.Stdout`, `cmd.Stderr` = the process's own), so the user drives the
    resulting Claude Code session interactively; the launch call returns only
    when that session exits.
 
-**Conductor data flow.** `cmd/styx/launch.go`'s `cmdLaunch(a, repos...)` is
-the only caller: it resolves the focus project (`target.Resolve` on the
+**Conductor data flow.** `cmd/styx/launch.go`'s
+`launchConductor(a, repos, extraArgs)` is the only caller (reached via
+`cmdLaunch(a, repos...)` and `cmdResume(a, sessionID)`, the latter passing
+`--resume <id>` / `--continue` as `ExtraArgs`): it resolves the focus project
+(`target.Resolve` on the
 first repo, or `resolveGlobalTarget("")` for bare `styx`, falling back to
 the plain cwd when that fails with `ErrNotInGitRepo` and no explicit
 target was given), loads

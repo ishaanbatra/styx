@@ -23,6 +23,28 @@ import (
 // the guidance so the brain also passes them as the MCP dispatch tool's
 // extra_roots, giving dispatched agent threads the same access.
 func cmdLaunch(a *app, repos ...string) error {
+	return launchConductor(a, repos, nil)
+}
+
+// cmdResume relaunches the conductor resuming an existing Claude Code session:
+// with a session ID it passes --resume <id>, without one --continue (Claude
+// Code picks the directory's most recent session). Either way the full
+// toolbelt is rewired — a plain `claude --resume` would restore the
+// conversation but lose the styx MCP server and guidance, since those are
+// per-invocation flags. Focus resolution is cwd-anchored like bare `styx`
+// (sessions are per-directory); extra repos are out of scope.
+func cmdResume(a *app, sessionID string) error {
+	extraArgs := []string{"--continue"}
+	if sessionID != "" {
+		extraArgs = []string{"--resume", sessionID}
+	}
+	return launchConductor(a, nil, extraArgs)
+}
+
+// launchConductor is the shared guidance-assembly + host-launch path behind
+// cmdLaunch and cmdResume; extraArgs are passed through to the host CLI after
+// its standard flags.
+func launchConductor(a *app, repos []string, extraArgs []string) error {
 	p, err := resolveLaunchTarget(repos)
 	if err != nil {
 		return fmt.Errorf("resolve launch project: %w", err)
@@ -59,6 +81,7 @@ func cmdLaunch(a *app, repos ...string) error {
 	logStatus("launching " + host.Name() + " conductor in " + p.Name)
 	return host.Launch(context.Background(), launcher.Opts{
 		ProjectPath: p.Path, StyxBin: styxBin, Guidance: guide, ExtraRepos: extras,
+		ExtraArgs: extraArgs,
 	})
 }
 

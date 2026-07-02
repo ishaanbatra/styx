@@ -17,6 +17,9 @@ VERBS
   styx [repo...]            Launch the Claude Code conductor with the styx MCP
                              toolbelt, bound to named repos if given (first = focus)
   launch [repo...]          Same as above, explicit verb form
+  resume [sessionID]        Relaunch the conductor resuming a Claude Code
+                             session (most recent for the cwd if no ID),
+                             rewiring the styx toolbelt + guidance
   repl [repo...]            Open the classic v0.2 REPL, kept until the
                              conductor reaches parity
   styx "<anything>"         One brain-routed turn, then exit

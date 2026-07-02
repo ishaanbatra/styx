@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ishaanbatra/styx/internal/config"
@@ -130,6 +131,66 @@ func TestDispatchResolvableRepoTokenRoutesToCmdLaunch(t *testing.T) {
 	}
 	if _, err := os.Stat(argsFile); err != nil {
 		t.Fatalf("expected fake claude to run, args file missing: %v", err)
+	}
+}
+
+// readFakeClaudeArgs returns the argv the fake claude stub recorded, one arg
+// per line, failing the test if the stub never ran.
+func readFakeClaudeArgs(t *testing.T, argsFile string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("expected fake claude to run, args file missing: %v", err)
+	}
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+}
+
+// TestDispatchResumeWithSessionID proves `styx resume <id>` relaunches the
+// conductor with the full toolbelt (--mcp-config + --append-system-prompt)
+// and appends --resume <id> so Claude Code restores that session.
+func TestDispatchResumeWithSessionID(t *testing.T) {
+	setupDispatchEnv(t)
+	argsFile := fakeClaudeOnPath(t)
+
+	if err := dispatch("resume", []string{"abc123"}); err != nil {
+		t.Fatalf("dispatch(resume abc123): %v", err)
+	}
+	args := readFakeClaudeArgs(t, argsFile)
+	at := -1
+	for i, a := range args {
+		if a == "--resume" {
+			at = i
+		}
+	}
+	if at == -1 || at+1 >= len(args) || args[at+1] != "abc123" {
+		t.Fatalf("want --resume abc123 in argv, got %v", args)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--mcp-config") || !strings.Contains(joined, "--append-system-prompt") {
+		t.Fatalf("resume must keep the styx toolbelt flags, got %v", args)
+	}
+}
+
+// TestDispatchResumeNoSessionID proves bare `styx resume` passes --continue
+// (Claude Code resumes the most recent session for the directory) while still
+// wiring the styx MCP server and guidance.
+func TestDispatchResumeNoSessionID(t *testing.T) {
+	setupDispatchEnv(t)
+	argsFile := fakeClaudeOnPath(t)
+
+	if err := dispatch("resume", nil); err != nil {
+		t.Fatalf("dispatch(resume): %v", err)
+	}
+	args := readFakeClaudeArgs(t, argsFile)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--continue") {
+		t.Fatalf("want --continue in argv, got %v", args)
+	}
+	if strings.Contains(joined, "--resume") {
+		t.Fatalf("bare resume must not pass --resume, got %v", args)
+	}
+	if !strings.Contains(joined, "--mcp-config") || !strings.Contains(joined, "--append-system-prompt") {
+		t.Fatalf("resume must keep the styx toolbelt flags, got %v", args)
 	}
 }
 

@@ -39,6 +39,7 @@ that can't be resolved is a clear error, never a silent fallback.
 | `styx` | Launch the Claude Code conductor with the styx MCP toolbelt — from any directory, git repo or not (repl for the classic v0.2 REPL) |
 | `styx <repo...>` | Launch the conductor bound to one or more named repos (first is focus) |
 | `styx launch [repo...]` | Same as the two rows above, explicit verb form |
+| `styx resume [sessionID]` | Relaunch the conductor resuming a Claude Code session — most recent for the cwd without an ID (`--continue`), a specific one with (`--resume <id>`); the styx toolbelt and guidance are rewired either way |
 | `styx repl [repo...]` | Open the classic v0.2 REPL, kept until the conductor reaches parity |
 | `styx "<anything>"` | Run one brain-routed turn, then exit |
 

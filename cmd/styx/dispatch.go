@@ -311,6 +311,12 @@ func dispatch(verb string, args []string) error {
 		return cmdREPL(a, args...)
 	case "launch":
 		return cmdLaunch(a, args...)
+	case "resume":
+		sessionID := ""
+		if len(args) > 0 {
+			sessionID = args[0]
+		}
+		return cmdResume(a, sessionID)
 	}
 	// `styx <repo...>`: if every positional names a resolvable project, launch
 	// the conductor bound to them (first = focus). Otherwise it's a one-shot

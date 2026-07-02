@@ -102,6 +102,42 @@ func TestClaudeHostLaunch_ExtraRepos(t *testing.T) {
 	}
 }
 
+func TestClaudeHostLaunch_ExtraArgs(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	bin, argsFile := fakeClaude(t)
+	proj := t.TempDir()
+	h := &ClaudeHost{Bin: bin}
+	err := h.Launch(context.Background(), Opts{
+		ProjectPath: proj, StyxBin: "/usr/local/bin/styx", Guidance: "G",
+		ExtraArgs: []string{"--resume", "abc123"},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	raw, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("fake claude never ran: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	var at = -1
+	for i, a := range args {
+		if a == "--resume" {
+			at = i
+		}
+	}
+	if at == -1 || at+1 >= len(args) || args[at+1] != "abc123" {
+		t.Fatalf("extra args not appended: %v", args)
+	}
+	// Extra args must come after the standard flags so they can't shadow them.
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--mcp-config") || !strings.Contains(joined, "--append-system-prompt") {
+		t.Fatalf("standard flags missing alongside extra args: %v", args)
+	}
+	if at < 4 {
+		t.Fatalf("extra args must follow the standard flags, got position %d in %v", at, args)
+	}
+}
+
 func TestClaudeHostName(t *testing.T) {
 	h := &ClaudeHost{}
 	if h.Name() != "claude" {

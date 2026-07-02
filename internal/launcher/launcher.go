@@ -20,6 +20,7 @@ type Opts struct {
 	StyxBin     string
 	Guidance    string
 	ExtraRepos  []string // absolute paths of additional bound repos
+	ExtraArgs   []string // host CLI args appended after the standard flags (e.g. --resume <id>)
 }
 
 // Host launches one brain CLI wired to the styx MCP server.
@@ -69,6 +70,7 @@ func (h *ClaudeHost) Launch(ctx context.Context, o Opts) error {
 	for _, r := range o.ExtraRepos {
 		args = append(args, "--add-dir", r)
 	}
+	args = append(args, o.ExtraArgs...)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = o.ProjectPath
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
