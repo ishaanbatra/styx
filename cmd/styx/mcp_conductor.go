@@ -233,5 +233,102 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				return map[string]any{"threads": m.mgr.StatusLines()}, nil
 			},
 		},
+		{
+			Name:        "memory_save",
+			Description: "Persist a durable fact, decision, todo, or routing preference to styx memory.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
+				"project": map[string]any{"type": "string"},
+				"kind":    map[string]any{"type": "string", "enum": []string{"fact", "decision", "todo", "routing-preference"}},
+				"text":    map[string]any{"type": "string"},
+				"scope":   map[string]any{"type": "string"},
+			}, "required": []string{"kind", "text"}},
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in struct{ Project, Kind, Text, Scope string }
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("memory_save args: %w", err)
+				}
+				switch memory.Kind(in.Kind) {
+				case memory.KindFact, memory.KindDecision, memory.KindTodo, memory.KindRoutingPreference:
+				default:
+					return nil, fmt.Errorf("unknown kind %q", in.Kind)
+				}
+				if in.Text == "" {
+					return nil, fmt.Errorf("text is required")
+				}
+				m, err := d.managerFor(in.Project)
+				if err != nil {
+					return nil, err
+				}
+				vec, err := d.emb.Embed(ctx, in.Text)
+				if err != nil {
+					return nil, fmt.Errorf("embed (is ollama up?): %w", err)
+				}
+				scope := in.Scope
+				if scope == "" {
+					scope = "project"
+				}
+				id, err := m.mem.Add(ctx, memory.Item{
+					Kind: memory.Kind(in.Kind), Text: in.Text, Source: "conductor",
+					Project: m.mgr.Project.Name, Scope: scope, Confidence: 0.9, Embedding: vec,
+				})
+				if err != nil {
+					return nil, fmt.Errorf("save memory: %w", err)
+				}
+				return map[string]any{"saved": true, "id": id}, nil
+			},
+		},
+		{
+			Name:        "pipeline_run",
+			Description: "Run a styx pipeline: research | review | intel | auto. auto ships (branch→push→PR) and requires the confirm_token handshake.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
+				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto"}},
+				"arg":           map[string]any{"type": "string"},
+				"confirm_token": map[string]any{"type": "string"},
+			}, "required": []string{"pipeline"}},
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in struct{ Pipeline, Arg, ConfirmToken string }
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("pipeline_run args: %w", err)
+				}
+				switch in.Pipeline {
+				case "research", "review", "intel", "auto":
+				default:
+					return nil, fmt.Errorf("unknown pipeline %q", in.Pipeline)
+				}
+				if in.Pipeline == "auto" {
+					res, err := d.gate.Check("pipeline:auto", in.ConfirmToken)
+					if err != nil {
+						return nil, err
+					}
+					if !res.Allowed {
+						return res, nil // brain reads token+message from the result
+					}
+				}
+				switch in.Pipeline { // same calls as the REPL pipelines map (repl.go:625)
+				case "research":
+					if err := cmdResearch(d.a, []string{in.Arg}); err != nil {
+						return nil, fmt.Errorf("pipeline research: %w", err)
+					}
+				case "review":
+					if err := cmdReview(d.a, nil); err != nil {
+						return nil, fmt.Errorf("pipeline review: %w", err)
+					}
+				case "intel":
+					m, err := d.managerFor("")
+					if err != nil {
+						return nil, err
+					}
+					if err := cmdIntel(d.a, []string{m.mgr.Project.Name}); err != nil {
+						return nil, fmt.Errorf("pipeline intel: %w", err)
+					}
+				case "auto":
+					if err := cmdAuto(d.a, []string{in.Arg}); err != nil {
+						return nil, fmt.Errorf("pipeline auto: %w", err)
+					}
+				}
+				return map[string]any{"pipeline": in.Pipeline, "done": true,
+					"note": "artifacts under styx/research/ and styx/plans/; runs ls for pipeline state"}, nil
+			},
+		},
 	}
 }

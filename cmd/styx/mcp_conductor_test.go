@@ -176,3 +176,32 @@ func TestDispatchHappyPath(t *testing.T) {
 		t.Fatalf("threads = %v, want 1 line", statusRes["threads"])
 	}
 }
+
+func TestPipelineRunGatesAuto(t *testing.T) {
+	d := &conductorDeps{gate: shipgate.New(shipgate.ModeHandshake)}
+	res, err := callTool(t, d, "pipeline_run", map[string]any{"pipeline": "auto", "arg": "build the thing"})
+	if err != nil {
+		t.Fatalf("gated call must return result, not error: %v", err)
+	}
+	tok, _ := res["token"].(string)
+	if res["allowed"] == true || tok == "" {
+		t.Fatalf("auto must be ship-gated, got %v", res)
+	}
+}
+
+func TestPipelineRunRejectsUnknown(t *testing.T) {
+	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff)}
+	if _, err := callTool(t, d, "pipeline_run", map[string]any{"pipeline": "yolo"}); err == nil {
+		t.Fatal("unknown pipeline must error")
+	}
+}
+
+func TestMemorySaveValidatesKind(t *testing.T) {
+	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff)}
+	if _, err := callTool(t, d, "memory_save", map[string]any{"kind": "vibe", "text": "x"}); err == nil {
+		t.Fatal("unknown kind must error")
+	}
+	if _, err := callTool(t, d, "memory_save", map[string]any{"kind": "decision", "text": ""}); err == nil {
+		t.Fatal("empty text must error")
+	}
+}

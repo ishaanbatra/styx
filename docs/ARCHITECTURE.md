@@ -593,10 +593,11 @@ Server-side confirmation for ship-risk MCP actions — commit/push/PR — before
 ## MCP server (internal/mcpserver + cmd/styx/mcp.go + cmd/styx/mcp_conductor.go)
 
 A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the
-routing brain and the conductor dispatch surface as nine tools for MCP hosts
-like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
-`channel_health`, `get_intel`, `refresh_intel`, `recall`, `dispatch`, and
-`thread_status`. Pure stdlib, no provider SDK; stdout carries the protocol,
+routing brain and the conductor dispatch surface as eleven tools for MCP
+hosts like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
+`channel_health`, `get_intel`, `refresh_intel`, `recall`, `dispatch`,
+`thread_status`, `memory_save`, and `pipeline_run`. Pure stdlib, no provider
+SDK; stdout carries the protocol,
 status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
 `cmd/styx/cmdMCP` builds the tool set as `append(mcpTools(a),
@@ -655,9 +656,9 @@ REPL loop.
 
 - `conductorDeps` (`a *app`, `gate *shipgate.Gate`, `emb memory.Embedder`,
   and a mutex-guarded `managers map[string]*managed` cache keyed by project
-  ID) is built once per `styx mcp` invocation via `newConductorDeps(a)`. Task
-  5 appends `memory_save` + `pipeline_run` to the same `conductorTools(d)`
-  slice.
+  ID) is built once per `styx mcp` invocation via `newConductorDeps(a)`.
+  `conductorTools(d)` returns four tools: `dispatch`, `thread_status`,
+  `memory_save`, and `pipeline_run`.
 - `conductorDeps.managerFor(alias)` lazily binds a project exactly the way
   `replSession.bind` does (`cmd/styx/repl.go`): opens `<memDir>/<projectID>.db`
   via `memory.Open`, loads `agent.LoadThreads(projectID)`, wires the
@@ -685,6 +686,24 @@ REPL loop.
   `managerFor` and returns `{threads: []string}` from
   `agent.Manager.StatusLines()` (name, CLI, turn count, context-window
   percent per thread).
+- `memory_save(project?, kind, text, scope?)` — validates `kind` against
+  `memory.KindFact/KindDecision/KindTodo/KindRoutingPreference` (any other
+  value errors loudly) and requires non-empty `text`, then embeds via
+  `d.emb.Embed` and writes through `managerFor(project).mem.Add` with
+  `Source: "conductor"`, `Confidence: 0.9`, and `scope` defaulting to
+  `"project"`. Returns `{saved, id}`.
+- `pipeline_run(pipeline, arg?, confirm_token?)` — `pipeline` is one of
+  `research|review|intel|auto`; an unknown value is rejected **before** the
+  ship gate so it errors loudly regardless of gate mode. `auto` (which
+  ships: branch→push→PR) then runs the same `internal/shipgate` handshake
+  as `dispatch` risk=ship, keyed `"pipeline:auto"` — denied gates return the
+  raw `shipgate.Result` for the brain to relay. The calls mirror the REPL's
+  `pipelines` map (`cmd/styx/repl.go` around line 625) exactly: `research`
+  → `cmdResearch(d.a, []string{arg})`, `review` → `cmdReview(d.a, nil)`,
+  `intel` → `cmdIntel(d.a, []string{managerFor("").mgr.Project.Name})`,
+  `auto` → `cmdAuto(d.a, []string{arg})`. On success returns `{pipeline,
+  done: true, note}` pointing at `styx/research/` and `styx/plans/` for
+  artifacts.
 
 ## Progress (internal/progress)
 
