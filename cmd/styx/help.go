@@ -49,6 +49,7 @@ VERBS
   runs show <run-id>        Show JSON state of a specific run
   runs unlock               Force-release a stale pipeline lock (after a crash)
   help                      Show this menu
+  version                   Print the styx version
 
 REPL
   Slash commands: /status /budget /threads /why /audit /quit

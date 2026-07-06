@@ -260,6 +260,9 @@ func dispatch(verb string, args []string) error {
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
+	case "version", "--version", "-V":
+		fmt.Println("styx " + styxVersion)
+		return nil
 	case "migrate-secrets":
 		return cmdMigrateSecrets()
 	case "upgrade":

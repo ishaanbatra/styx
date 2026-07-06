@@ -219,3 +219,22 @@ func TestDispatchReplVerbRoutesToClassicREPL(t *testing.T) {
 		t.Fatalf("repl verb must not invoke the claude host binary")
 	}
 }
+
+// TestEnsureInteractiveTTY proves the conductor refuses to launch when stdin
+// isn't a terminal (exec'ing claude on a pipe dies with a confusing
+// "--print requires input" error) and passes cleanly when it is.
+func TestEnsureInteractiveTTY(t *testing.T) {
+	orig := stdinIsTTY
+	defer func() { stdinIsTTY = orig }()
+
+	stdinIsTTY = func() bool { return false }
+	err := ensureInteractiveTTY()
+	if err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+		t.Fatalf("non-TTY stdin must refuse conductor launch, got %v", err)
+	}
+
+	stdinIsTTY = func() bool { return true }
+	if err := ensureInteractiveTTY(); err != nil {
+		t.Fatalf("TTY stdin must pass, got %v", err)
+	}
+}

@@ -45,6 +45,9 @@ func cmdResume(a *app, sessionID string) error {
 // cmdLaunch and cmdResume; extraArgs are passed through to the host CLI after
 // its standard flags.
 func launchConductor(a *app, repos []string, extraArgs []string) error {
+	if err := ensureInteractiveTTY(); err != nil {
+		return err
+	}
 	p, err := resolveLaunchTarget(repos)
 	if err != nil {
 		return fmt.Errorf("resolve launch project: %w", err)
@@ -83,6 +86,25 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 		ProjectPath: p.Path, StyxBin: styxBin, Guidance: guide, ExtraRepos: extras,
 		ExtraArgs: extraArgs,
 	})
+}
+
+// stdinIsTTY reports whether stdin is a character device. Var for tests.
+var stdinIsTTY = func() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// ensureInteractiveTTY refuses a conductor launch when there is no terminal
+// to hand to Claude Code — exec'ing claude on a pipe dies with a confusing
+// "--print requires input" error instead of anything actionable.
+func ensureInteractiveTTY() error {
+	if stdinIsTTY() {
+		return nil
+	}
+	return fmt.Errorf("the conductor needs an interactive terminal (stdin is not a TTY); use a verb like `styx research` or `styx \"<task>\"` for scripted runs")
 }
 
 // resolveLaunchTarget mirrors newREPLSession's seed resolution (repl.go): an

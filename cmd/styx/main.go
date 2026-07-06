@@ -7,6 +7,9 @@ import (
 	"strings"
 )
 
+// styxVersion is printed by `styx version`. Bump on tagged releases.
+const styxVersion = "0.4.0-dev"
+
 // parseGlobalFlags strips global flags from argv (long form only), returning
 // the remaining tokens plus the parsed values.
 func parseGlobalFlags(argv []string) (rest []string, quiet, verbose bool, projectAlias, dirArg string) {

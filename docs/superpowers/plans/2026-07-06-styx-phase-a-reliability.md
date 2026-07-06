@@ -36,7 +36,7 @@ Today `styx version` / `styx --version` fall through to the conductor launch pat
 - Consumes: `logStatus` (existing), `launcher.ClaudeHost` (existing).
 - Produces: `const styxVersion string` in `main.go`; `func stdinIsTTY() bool` var-swappable in `launch.go` (Task 12's E2E asserts `styx version` output).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```go
 // cmd/styx/launch_test.go
@@ -64,12 +64,12 @@ func TestEnsureInteractiveTTY(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./cmd/styx/ -run TestEnsureInteractiveTTY -v`
 Expected: FAIL — `undefined: stdinIsTTY` / `undefined: ensureInteractiveTTY`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `cmd/styx/main.go`, top-level (near the package comment):
 
@@ -119,14 +119,14 @@ if err := ensureInteractiveTTY(); err != nil {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestEnsureInteractiveTTY -v` → PASS
 Run: `make build && ./bin/styx version` → prints `styx 0.4.0-dev`
 Run: `echo "" | ./bin/styx` → clear TTY error, exit 1 (not a claude stack trace)
 Run: `make test` → all green
 
-- [ ] **Step 5: Update docs + commit**
+- [x] **Step 5: Update docs + commit**
 
 - `README.md`: add `version` row to the verb table.
 - Help text: add `version` line.

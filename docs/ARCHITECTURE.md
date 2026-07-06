@@ -4,7 +4,7 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-07-02
+last_verified: 2026-07-06
 ---
 
 # Styx Architecture
@@ -56,9 +56,12 @@ Shared pieces:
   `styx` constructs the app and calls `cmdLaunch(a)`, handing off to the
   Claude Code conductor (see "Launcher" below) — `styx repl` is the only way
   to reach the classic v0.2 REPL loop now; errors exit 1 with a `styx:`
-  prefix.
+  prefix. Declares `const styxVersion = "0.4.0-dev"`, printed by the `version`
+  verb (bump on tagged releases).
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
-  run first; the rest construct `app{routing, tracker, router, channels,
+  run first (including `help`/`-h`/`--help` and `version`/`--version`/`-V`,
+  which prints `"styx " + styxVersion` and returns immediately — no app, no
+  conductor); the rest construct `app{routing, tracker, router, channels,
   progress}` via `loadApp()`. `loadApp()` runs a best-effort model refresh when
   `models.json` is stale and reloads routing if a de-pin migration ran, then
   shares the budget tracker with the router for both cap checks and
@@ -90,7 +93,12 @@ Shared pieces:
   restore the conversation but lose the styx MCP server and guidance. Resume
   takes no repo arguments (sessions are per-directory, so it is cwd-anchored
   like bare `styx`; extra repos are out of scope) and passes its flags via
-  `launcher.Opts.ExtraArgs`. `launchConductor` resolves the focus project
+  `launcher.Opts.ExtraArgs`. `launchConductor`'s first line is
+  `ensureInteractiveTTY()`: it refuses to launch (returning an actionable
+  error instead of letting Claude Code exec on a pipe and die with a cryptic
+  `--print` failure) whenever stdin isn't a character device, per the
+  var-swappable `stdinIsTTY func() bool` (tests stub it; production stats
+  `os.Stdin` and checks `os.ModeCharDevice`). It then resolves the focus project
   exactly like `newREPLSession`'s seed
   resolution (first repo by alias, or `resolveGlobalTarget("")` for bare
   `styx` so cwd still works). Uniquely among verbs, bare `styx` outside any
