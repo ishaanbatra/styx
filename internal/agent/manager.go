@@ -205,7 +205,7 @@ func (m *Manager) StatusLines() []string {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	var out []string
+	out := []string{}
 	for _, n := range names {
 		th := m.Threads.Threads[n]
 		win := 200000

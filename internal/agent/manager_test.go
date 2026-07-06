@@ -270,3 +270,14 @@ func TestSeedMessage(t *testing.T) {
 		}
 	})
 }
+
+func TestStatusLinesEmptyIsNotNil(t *testing.T) {
+	m := &Manager{Threads: &ThreadStore{Threads: map[string]*Thread{}}}
+	got := m.StatusLines()
+	if got == nil {
+		t.Fatal("StatusLines() with no threads must return [], not nil (JSON null breaks MCP consumers)")
+	}
+	if len(got) != 0 {
+		t.Fatalf("want empty slice, got %v", got)
+	}
+}

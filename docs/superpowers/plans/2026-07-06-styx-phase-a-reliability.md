@@ -149,7 +149,7 @@ git commit -m "feat(cli): styx version verb + refuse conductor launch without a 
 **Interfaces:**
 - Produces: `Manager.StatusLines() []string` guaranteed non-nil (Task 10 and the E2E rely on `{"threads": []}` JSON shape).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `internal/agent/manager_test.go`:
 
@@ -166,12 +166,12 @@ func TestStatusLinesEmptyIsNotNil(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/agent/ -run TestStatusLinesEmptyIsNotNil -v`
 Expected: FAIL — `StatusLines() with no threads must return [], not nil`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `StatusLines`, change `var out []string` to:
 
@@ -179,11 +179,11 @@ In `StatusLines`, change `var out []string` to:
 out := []string{}
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/agent/ -v` → PASS (all)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Conductor MCP tools" `thread_status` bullet: note the guaranteed-`[]` shape.
 

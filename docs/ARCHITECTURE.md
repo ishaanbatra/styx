@@ -808,7 +808,10 @@ REPL loop.
 - `thread_status(project?)` — resolves the project via the same
   `managerFor` and returns `{threads: []string}` from
   `agent.Manager.StatusLines()` (name, CLI, turn count, context-window
-  percent per thread).
+  percent per thread). `StatusLines()` guarantees a non-nil `[]string{}`
+  when a project has no threads, so the JSON shape is always
+  `{"threads": []}`, never `{"threads": null}` — MCP consumers can rely on
+  the key always being an array.
 - `memory_save(project?, kind, text, scope?)` — validates `kind` against
   `memory.KindFact/KindDecision/KindTodo/KindRoutingPreference` (any other
   value errors loudly) and requires non-empty `text`, then embeds via
