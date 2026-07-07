@@ -13,6 +13,8 @@
           "thread": {"type": "string", "enum": ["claude", "codex", "agy", "ollama"]},
           "model": {"type": "string"},
           "message": {"type": "string"},
+          "project": {"type": "string"},
+          "extra_roots": {"type": "array", "items": {"type": "string"}},
           "cli_options": {"type": "array", "items": {"type": "string"}},
           "rationale": {"type": "string"},
           "risk": {"type": "string", "enum": ["read", "edit", "ship", ""]}

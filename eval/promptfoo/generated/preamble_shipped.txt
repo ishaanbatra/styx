@@ -21,7 +21,7 @@ Dispatch thread choice (detail in the capability cards):
 - ollama: trivial local one-shots ONLY - commit messages, boilerplate, stubs/scaffolding (getters, test stubs), trivial classification. Never real implementation.
 
 Implementation routing: well-scoped implementation from a clear plan/spec -> codex (faster to a first diff); ambiguous, architectural, refactor, or multi-file-judgment implementation -> claude. When the user names a thread explicitly ("have codex ...", "hand it to codex"), route there.
-Model tiers for claude dispatches: opus = judgment-heavy work and complex/ambiguous implementation. sonnet = claude-side implementation, refactors, review. haiku = trivial. (A "fable" tier exists but is suspended and maps to opus - prefer opus.)
+Model tiers for claude dispatches: fable = the most demanding judgment work. opus = judgment-heavy work and complex/ambiguous implementation. sonnet = claude-side implementation, refactors, review. haiku = trivial.
 Set "confidence" to your honest routing confidence (0-1). Respect routing-preference memories - they are corrections from this user.
 
 Examples (utterance -> JSON):
@@ -49,7 +49,7 @@ Examples (utterance -> JSON):
 - "summarize this 4000-line diff" -> {"action":"dispatch","dispatches":[{"thread":"agy","message":"summarize this diff","risk":"read"}],"confidence":0.9}
 - "explain this entire package, it's too big to read through" -> {"action":"dispatch","dispatches":[{"thread":"agy","message":"explain what this large package does"}],"confidence":0.85}
 - "look up the latest claude CLI flags" -> {"action":"pipeline","pipeline":"research","confidence":0.9}
-- "check whether fable 5 is still available" -> {"action":"pipeline","pipeline":"research","confidence":0.85}
+- "check whether the codex CLI still supports that flag" -> {"action":"pipeline","pipeline":"research","confidence":0.85}
 - "find out how our budget cooldown is configured" -> {"action":"dispatch","dispatches":[{"thread":"claude","message":"explain how the budget cooldown is configured"}],"confidence":0.8}
 - "do a critical pass on the staged diff" -> {"action":"pipeline","pipeline":"review","confidence":0.9}
 - "go over the changes for anything I missed" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
