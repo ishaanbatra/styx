@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/pipeline"
 )
 
@@ -444,4 +445,31 @@ func (r *taskRegistry) adoptOrphans(files []taskFile) {
 		r.tasks[id] = t
 		r.order = append(r.order, id)
 	}
+}
+
+// withBackgroundStatus is the piggyback decoration point (spec §Piggyback):
+// whenever the registry holds live or unclaimed tasks, every conductor tool's
+// map-shaped result gains a compact "bg" status line, so any tool activity
+// resurfaces background work — the conductor cannot forget for long. Non-map
+// results (shipgate token relays) and errors pass through untouched; the
+// JSON-RPC transport is untouched.
+func withBackgroundStatus(tools []mcpserver.Tool, reg *taskRegistry) []mcpserver.Tool {
+	out := make([]mcpserver.Tool, len(tools))
+	for i, tl := range tools {
+		inner := tl.Handler
+		tl.Handler = func(ctx context.Context, raw json.RawMessage) (any, error) {
+			res, err := inner(ctx, raw)
+			if err != nil {
+				return res, err
+			}
+			if line := reg.StatusLine(); line != "" {
+				if m, ok := res.(map[string]any); ok {
+					m["bg"] = line
+				}
+			}
+			return res, nil
+		}
+		out[i] = tl
+	}
+	return out
 }

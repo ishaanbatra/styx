@@ -1118,6 +1118,25 @@ REPL loop.
     `taskQueued` → `"<id> queued <behind X|at cap> (<cli>, thread
     <thread>, <elapsed>)"`; terminal states → `"<id> <state>[ unclaimed]
     (<cli>, thread <thread>)"`.
+- **Piggyback (Task 9)** — `withBackgroundStatus(tools []mcpserver.Tool, reg
+  *taskRegistry) []mcpserver.Tool` (`cmd/styx/mcp_tasks.go`) is the single
+  decoration point that keeps background work from being forgotten: it wraps
+  every conductor tool's `Handler`, runs the inner handler unchanged, and on
+  success — only when `reg.StatusLine()` is non-empty (live or unclaimed
+  tasks exist) AND the result is a `map[string]any` — sets `m["bg"]` to that
+  status line before returning. Errors pass straight through untouched
+  (never decorated); non-map results (e.g. the raw `shipgate.Result` token
+  relay from a denied `risk: ship`/`pipeline_run` gate) also pass through
+  untouched, since there's no map to add a key to. An idle registry
+  (`StatusLine() == ""`) adds no `bg` field at all — the common case, where
+  nothing background is outstanding, is byte-for-byte what the tool would
+  have returned anyway. `cmdMCP` wires it as `append(mcpTools(a),
+  withBackgroundStatus(conductorTools(d), d.reg)...)` — only the conductor
+  tools get the decoration; the base `mcpTools(a)` (route, budget_status,
+  etc.) are not wrapped, since they have no registry context and aren't part
+  of the async-dispatch surface. The JSON-RPC transport itself is untouched:
+  this only augments the map-shaped result payload a handler already
+  returns, it never emits a notification or writes to stdout directly.
 
 ### Background task registry (cmd/styx/mcp_tasks.go)
 

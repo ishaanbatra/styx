@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ishaanbatra/styx/internal/mcpserver"
 )
 
 // blockingRun returns a run func that reports it started and blocks until
@@ -226,6 +229,54 @@ func TestTaskStateMirrorAndOrphanScan(t *testing.T) {
 	r2.Claim("o1")
 	if left := adoptOrphanedTaskFiles(dir, 7*24*time.Hour); len(left) != 0 {
 		t.Fatalf("claimed orphan must not resurface, got %+v", left)
+	}
+}
+
+func TestWithBackgroundStatusPiggyback(t *testing.T) {
+	reg := newTaskRegistry(context.Background(), 4)
+	tools := withBackgroundStatus([]mcpserver.Tool{
+		{Name: "mapper", Handler: func(context.Context, json.RawMessage) (any, error) {
+			return map[string]any{"ok": true}, nil
+		}},
+		{Name: "structer", Handler: func(context.Context, json.RawMessage) (any, error) {
+			return "plain string", nil
+		}},
+		{Name: "failer", Handler: func(context.Context, json.RawMessage) (any, error) {
+			return nil, errors.New("boom")
+		}},
+	}, reg)
+	call := func(name string) (any, error) {
+		for _, tl := range tools {
+			if tl.Name == name {
+				return tl.Handler(context.Background(), nil)
+			}
+		}
+		t.Fatalf("no tool %s", name)
+		return nil, nil
+	}
+
+	// Idle registry: no bg field.
+	res, _ := call("mapper")
+	if _, ok := res.(map[string]any)["bg"]; ok {
+		t.Fatal("no tasks => no bg field")
+	}
+
+	run1, started1, release1 := blockingRun(nil)
+	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "read"}, run1)
+	<-started1
+	defer close(release1)
+
+	res, _ = call("mapper")
+	bg, _ := res.(map[string]any)["bg"].(string)
+	if !strings.Contains(bg, id) || !strings.Contains(bg, "running") {
+		t.Fatalf("live task must piggyback on map results, got %q", bg)
+	}
+	// Non-map results and errors pass through untouched.
+	if res, _ := call("structer"); res != "plain string" {
+		t.Fatalf("non-map results must pass through, got %v", res)
+	}
+	if _, err := call("failer"); err == nil || err.Error() != "boom" {
+		t.Fatalf("errors must pass through, got %v", err)
 	}
 }
 
