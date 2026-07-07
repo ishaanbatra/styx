@@ -684,23 +684,42 @@ Claude Code auto-loads project context.
 Long-term memory is stored in SQLite databases under
 `~/.config/styx/state/memory/`: `<id>.db` for per-project memory and
 `global.db` for shared cross-project memory. Each store has a `memory` table of
-typed items (`decision`, `todo`, `distillation`, `brief`, `fact`, or
-`routing-preference`) with source metadata, provenance columns (`project`,
-`scope`, `confidence`, `last_used_at`), creation time, and a float32 embedding
-packed as a little-endian blob. Old memory DBs are migrated additively on open;
+typed items (`decision`, `todo`, `distillation`, `brief`, `fact`,
+`routing-preference`, `user-preference`, or `retrospective`) with source
+metadata, provenance columns (`project`, `scope`, `confidence`, `last_used_at`),
+creation time, a `consumed_at` timestamp, and a float32 embedding packed as a
+little-endian blob. `user-preference` captures how the user likes to work
+(fed by `styx learn`); `retrospective` holds raw session notes that are
+digest fuel only — never injected into recall or prompts, they exist purely
+for a later summarization pass to consume. Old memory DBs are migrated
+additively on open (including `consumed_at`, which defaults to `0` — zero
+value = unconsumed — so pre-existing rows on upgrade read as never-consumed);
 unset confidence defaults to `1`, while one-off routing preferences enter at
 lower confidence and may carry a scope hint such as `reviews`. The store API
-supports open, close, insert, and newest-first full scans. `Recall` embeds a
-query and ranks items across one or more stores by brute-force cosine
-similarity weighted by confidence and recency (`confidence * 0.5^(age/90d)`),
-so stale or low-confidence corrections fade at personal scale. In a
-multi-project REPL session, recall spans every bound repo's store plus the
-global store, giving cross-repo recall without an explicit scope hint. `Embedder`
-abstracts text to float32 vectors; the production `OllamaEmbedder` posts to
-`/api/embed` with a 30s HTTP client timeout and caller-provided context,
-carrying `keep_alive: "30m"` on every request so the embed model isn't evicted
-between calls. Every `Embed` call site embeds a single text per user action
-(recall query, `memory_save`, distillation, brief indexing, routing-preference
+supports open, close, insert, and newest-first full scans (`Add`, `All`), plus
+learning-loop methods: `TopByKind(kind, k)` ranks same-kind items by the
+recall decay curve with similarity fixed at 1 (`confidence * 0.5^(age/90d)`),
+so the top preferences are the newest, most confident ones and drift resolves
+itself; `UnconsumedByKind(kind)` returns items with a zero `ConsumedAt`,
+oldest first, for a digest to work through in order; `MarkConsumed(ids)`
+stamps `consumed_at` on a batch (empty slice is a no-op); `Delete(id)` and
+`UpdateEvidence(id, text)` both error loudly on an unknown id (Delete backs
+`styx learn --forget`'s honesty; UpdateEvidence is the digest's dedupe path —
+a re-learned memory gets fresher text and `created_at` instead of a duplicate
+row); `MostSimilar(kind, vec)` returns the same-kind item with the highest
+cosine similarity (zero `Item`, similarity `0` when the store holds no items
+of that kind) — the seam a caller uses to decide "update existing evidence"
+vs. "add a new memory" before writing. `Recall` embeds a query and ranks
+items across one or more stores by brute-force cosine similarity weighted by
+confidence and recency (`confidence * 0.5^(age/90d)`), so stale or
+low-confidence corrections fade at personal scale. In a multi-project REPL
+session, recall spans every bound repo's store plus the global store, giving
+cross-repo recall without an explicit scope hint. `Embedder` abstracts text to
+float32 vectors; the production `OllamaEmbedder` posts to `/api/embed` with a
+30s HTTP client timeout and caller-provided context, carrying
+`keep_alive: "30m"` on every request so the embed model isn't evicted between
+calls. Every `Embed` call site embeds a single text per user action (recall
+query, `memory_save`, distillation, brief indexing, routing-preference
 correction, session-end summary) — no call site batches, so `EmbedBatch` stays
 unimplemented pending bulk-embedding intel indexing.
 

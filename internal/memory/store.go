@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,6 +25,8 @@ const (
 	KindBrief             Kind = "brief"
 	KindFact              Kind = "fact"
 	KindRoutingPreference Kind = "routing-preference"
+	KindUserPreference    Kind = "user-preference" // how the user likes to work (styx learn)
+	KindRetrospective     Kind = "retrospective"   // raw session notes; digest fuel, never injected
 )
 
 // Item is one memory record.
@@ -38,6 +41,7 @@ type Item struct {
 	Embedding  []float32
 	CreatedAt  time.Time
 	LastUsedAt time.Time // bumped on recall; reserved for future eviction
+	ConsumedAt time.Time // retrospectives: when the digest consumed this (zero = unconsumed)
 }
 
 // Store is one SQLite memory database (per-project or global).
@@ -56,7 +60,8 @@ CREATE TABLE IF NOT EXISTS memory (
     confidence   REAL    NOT NULL DEFAULT 1,
     embedding    BLOB    NOT NULL,
     created_at   INTEGER NOT NULL,
-    last_used_at INTEGER NOT NULL DEFAULT 0
+    last_used_at INTEGER NOT NULL DEFAULT 0,
+    consumed_at  INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -87,6 +92,7 @@ func migrate(db *sql.DB) error {
 		"scope":        "TEXT NOT NULL DEFAULT ''",
 		"confidence":   "REAL NOT NULL DEFAULT 1",
 		"last_used_at": "INTEGER NOT NULL DEFAULT 0",
+		"consumed_at":  "INTEGER NOT NULL DEFAULT 0",
 	}
 	rows, err := db.Query(`PRAGMA table_info(memory)`)
 	if err != nil {
@@ -137,7 +143,7 @@ func (s *Store) Add(ctx context.Context, it Item) (int64, error) {
 // All returns every item in the store, newest first.
 func (s *Store) All(ctx context.Context) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, kind, text, source, project, scope, confidence, embedding, created_at, last_used_at FROM memory ORDER BY id DESC`)
+		`SELECT id, kind, text, source, project, scope, confidence, embedding, created_at, last_used_at, consumed_at FROM memory ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("query memory: %w", err)
 	}
@@ -147,8 +153,8 @@ func (s *Store) All(ctx context.Context) ([]Item, error) {
 		var it Item
 		var kind string
 		var blob []byte
-		var ts, lastUsed int64
-		if err := rows.Scan(&it.ID, &kind, &it.Text, &it.Source, &it.Project, &it.Scope, &it.Confidence, &blob, &ts, &lastUsed); err != nil {
+		var ts, lastUsed, consumed int64
+		if err := rows.Scan(&it.ID, &kind, &it.Text, &it.Source, &it.Project, &it.Scope, &it.Confidence, &blob, &ts, &lastUsed, &consumed); err != nil {
 			return nil, fmt.Errorf("scan memory item: %w", err)
 		}
 		it.Kind = Kind(kind)
@@ -156,6 +162,9 @@ func (s *Store) All(ctx context.Context) ([]Item, error) {
 		it.CreatedAt = time.Unix(ts, 0)
 		if lastUsed != 0 {
 			it.LastUsedAt = time.Unix(lastUsed, 0)
+		}
+		if consumed != 0 {
+			it.ConsumedAt = time.Unix(consumed, 0)
 		}
 		out = append(out, it)
 	}
@@ -178,4 +187,106 @@ func decodeVec(b []byte) []float32 {
 		v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
 	}
 	return v
+}
+
+// TopByKind returns up to k items of kind ranked by confidence × recency —
+// the launch-guidance ranking for learned preferences (the recall decay
+// curve with similarity fixed at 1). Newer, more confident memories outrank
+// older ones, so preference drift resolves itself.
+func (s *Store) TopByKind(ctx context.Context, kind Kind, k int) ([]Item, error) {
+	items, err := s.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []Item
+	for _, it := range items {
+		if it.Kind == kind {
+			out = append(out, it)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		si := decayedScore(1, out[i].Confidence, time.Since(out[i].CreatedAt))
+		sj := decayedScore(1, out[j].Confidence, time.Since(out[j].CreatedAt))
+		return si > sj
+	})
+	if len(out) > k {
+		out = out[:k]
+	}
+	return out, nil
+}
+
+// UnconsumedByKind returns items of kind not yet marked consumed, oldest
+// first (digest order).
+func (s *Store) UnconsumedByKind(ctx context.Context, kind Kind) ([]Item, error) {
+	items, err := s.All(ctx) // newest first
+	if err != nil {
+		return nil, err
+	}
+	var out []Item
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].Kind == kind && items[i].ConsumedAt.IsZero() {
+			out = append(out, items[i])
+		}
+	}
+	return out, nil
+}
+
+// MarkConsumed stamps consumed_at on the given items so future digests skip
+// them. An empty id list is a no-op.
+func (s *Store) MarkConsumed(ctx context.Context, ids []int64) error {
+	now := time.Now().Unix()
+	for _, id := range ids {
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE memory SET consumed_at = ? WHERE id = ?`, now, id); err != nil {
+			return fmt.Errorf("mark memory %d consumed: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// Delete removes one item — styx learn --forget. Unknown ids error loudly.
+func (s *Store) Delete(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM memory WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete memory %d: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("delete memory %d: no such memory (see styx learn --list)", id)
+	}
+	return nil
+}
+
+// UpdateEvidence rewrites an item's text and refreshes created_at — the
+// digest's dedupe path: a re-learned memory gets fresher evidence and
+// recency instead of a duplicate row.
+func (s *Store) UpdateEvidence(ctx context.Context, id int64, text string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE memory SET text = ?, created_at = ? WHERE id = ?`, text, time.Now().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("update memory %d: %w", id, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("update memory %d: no such memory", id)
+	}
+	return nil
+}
+
+// MostSimilar returns the same-kind item with the highest cosine similarity
+// to vec. Similarity 0 (zero Item) when the store holds no items of kind.
+func (s *Store) MostSimilar(ctx context.Context, kind Kind, vec []float32) (Item, float64, error) {
+	items, err := s.All(ctx)
+	if err != nil {
+		return Item{}, 0, err
+	}
+	var best Item
+	bestSim := 0.0
+	for _, it := range items {
+		if it.Kind != kind {
+			continue
+		}
+		if sim := cosine(vec, it.Embedding); sim > bestSim {
+			best, bestSim = it, sim
+		}
+	}
+	return best, bestSim, nil
 }
