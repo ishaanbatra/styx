@@ -127,3 +127,32 @@ func TestSeedV3UpgradesToCurrent(t *testing.T) {
 		}
 	}
 }
+
+func TestSeedV4UpgradesToCurrent(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	p, err := guidanceFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(seedV4), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != Seed {
+		t.Fatal("an unmodified v4 seed must upgrade to the current Seed")
+	}
+	// seedV4 predates the route-gate; the current Seed must explain that the
+	// gated tools are denied by design so a denial doesn't read as a bug.
+	if seedV4 == Seed {
+		t.Fatal("seedV4 must differ from the current Seed (it predates the Gated tools section)")
+	}
+	if !strings.Contains(Seed, "Gated tools") {
+		t.Fatal("current Seed must teach the Gated tools policy")
+	}
+}

@@ -79,6 +79,7 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 	logStatus("launching " + host.Name() + " conductor in " + p.Name)
 	return host.Launch(context.Background(), launcher.Opts{
 		ProjectPath: p.Path, StyxBin: styxBin, Guidance: guide, ExtraRepos: extras,
+		RouteGate: a.routing.Conductor.RouteGate,
 		ExtraArgs: extraArgs,
 	})
 }

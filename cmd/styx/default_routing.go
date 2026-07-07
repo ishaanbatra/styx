@@ -135,6 +135,11 @@ haiku  = "haiku"
 # ship confirmation for dispatch(risk=ship) / pipeline_run auto:
 # handshake (token relay, default) | tty (prompt on /dev/tty) | off
 ship_gate = "handshake"
+# host-hook enforcement of dispatch-over-inline routing in conductor sessions:
+# block (deny inline WebSearch/WebFetch/Task/external-curl + MCP web tools,
+# redirect to dispatch/pipeline_run; audit the fuzzy tail) | audit (record
+# inline use, never block) | off (no hooks). Default block.
+route_gate = "block"
 # max concurrent background dispatches; over-cap tasks queue (collect shows position)
 max_background_tasks = 4
 `
