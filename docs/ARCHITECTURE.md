@@ -723,6 +723,20 @@ query, `memory_save`, distillation, brief indexing, routing-preference
 correction, session-end summary) — no call site batches, so `EmbedBatch` stays
 unimplemented pending bulk-embedding intel indexing.
 
+## Learning (internal/learn)
+
+Deterministic scorecard aggregation layer over dispatch outcomes — no LLM
+involvement, read-only on routing.toml and code. `Scorecard` groups
+`budget.Outcome` rows (seeded by real dispatch history) into `Cell` structs
+(one per cli × signal pair), computing tallies (attempts, clean rate), medians
+(duration, tokens), and rating counts. A row with N signals contributes to N
+cells; a row with no signals lands in a `"(none)"` cell. Clean = no
+classified error *and* not rated bad. The scorecard is the mechanical evidence
+ground truth for digest citations (`scorecard:<cli>/<signal>`) and feeds both
+the learning digest (Task 5-6: ollama-backed summarization of scorecard +
+retrospectives into preference memories) and styx learn --scorecard human
+inspection.
+
 ## Audit (internal/audit)
 
 Per-session REPL audit trails are append-only JSONL files under
