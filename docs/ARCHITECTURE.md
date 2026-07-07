@@ -795,8 +795,12 @@ REPL loop.
   **`internal/shipgate` check runs before project resolution** — a ship-risk
   call against an unbound project still gets gated, never silently resolved
   first. `cli: ollama` is a one-shot call through `a.channels["ollama"]`
-  bypassing thread machinery entirely (no project needed); it records a
-  `{Channel: "ollama", Verb: "one-shot"}` event on the budget tracker for
+  bypassing thread machinery entirely (no project needed); an empty `model`
+  defaults to `a.routing.Brain.Model` (falling back to the hardcoded
+  `qwen2.5-coder:7b` if that's also empty), so omitting `model` no longer
+  hits `ollama 400: model is required`. It records a
+  `{Channel: "ollama", Verb: "one-shot"}` event — with the resolved model,
+  not the raw request field — on the budget tracker for
   success and failure alike (record errors are narrated via `logStatus`,
   never fail the dispatch), so local one-shots show up in `styx budget`
   like every other channel. Otherwise the

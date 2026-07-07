@@ -152,7 +152,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					"thread":        map[string]any{"type": "string", "description": "thread name; empty = cli name"},
 					"cli":           map[string]any{"type": "string", "enum": []string{"claude", "codex", "agy", "ollama"}},
 					"message":       map[string]any{"type": "string"},
-					"model":         map[string]any{"type": "string", "description": "tier (opus|sonnet|haiku) or raw model id; empty = channel default"},
+					"model":         map[string]any{"type": "string", "description": "tier (opus|sonnet|haiku) or raw model id; empty = channel default (ollama defaults to the routing brain model)"},
 					"risk":          map[string]any{"type": "string", "enum": []string{"read", "edit", "ship"}},
 					"extra_roots":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 					"confirm_token": map[string]any{"type": "string"},
@@ -189,15 +189,22 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					if !ok {
 						return nil, fmt.Errorf("dispatch ollama: ollama channel unavailable")
 					}
+					model := in.Model
+					if model == "" {
+						model = d.a.routing.Brain.Model // seeded default: qwen2.5-coder:7b
+					}
+					if model == "" {
+						model = "qwen2.5-coder:7b"
+					}
 					resp, err := ch.Send(ctx, channel.Request{
-						Model: in.Model, Prompt: in.Message,
+						Model: model, Prompt: in.Message,
 					})
 					errKind := ""
 					if err != nil {
 						errKind = "other"
 					}
 					if rerr := d.a.tracker.Record(ctx, budget.Event{
-						Channel: "ollama", Verb: "one-shot", Model: in.Model,
+						Channel: "ollama", Verb: "one-shot", Model: model,
 						TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
 						Success: err == nil, ErrorKind: errKind,
 					}); rerr != nil {

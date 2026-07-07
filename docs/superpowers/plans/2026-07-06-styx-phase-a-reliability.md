@@ -207,7 +207,7 @@ E2E evidence: omitting `model` today → `ollama 400: model is required`.
 - Consumes: `d.a.routing.Brain.Model` (defaulted to `"qwen2.5-coder:7b"` by `applyBrainDefaults` in `internal/config/routing.go`), `channel.Channel` interface.
 - Produces: dispatch(cli=ollama) usable with no `model` argument.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `cmd/styx/mcp_conductor_test.go` (note: `callTool` helper and imports for `budget`, `channel`, `config` already exist in this file):
 
@@ -256,12 +256,12 @@ func TestDispatchOllamaDefaultsModel(t *testing.T) {
 
 (If `config.BrainConfig` is named differently, check `internal/config/routing.go:40` — the struct holding `Model`/`EmbedModel`/`ContextThresholdPct` — and use its real name. If `budget.Open` has a different constructor name, mirror whatever `cmd/styx/mcp_test.go` uses to build a test tracker.)
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./cmd/styx/ -run TestDispatchOllamaDefaultsModel -v`
 Expected: FAIL — error `ollama dispatch: ollama 400 ...` is NOT returned (fake channel accepts), so failure mode is `model must default to routing Brain.Model, got ""`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In the dispatch handler's ollama branch (`cmd/styx/mcp_conductor.go` ~line 187), before `ch.Send`:
 
@@ -291,11 +291,11 @@ Update the schema description for `model` (~line 155):
 "model": map[string]any{"type": "string", "description": "tier (opus|sonnet|haiku) or raw model id; empty = channel default (ollama defaults to the routing brain model)"},
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestDispatch -v` → PASS (including existing gate/validation tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Conductor MCP tools" `dispatch` bullet: note the ollama model default.
 

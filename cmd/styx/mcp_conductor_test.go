@@ -277,6 +277,47 @@ func TestPipelineRunIntelResolvesCwdProject(t *testing.T) {
 	}
 }
 
+// captureChannel records the last Request and returns a canned response.
+type captureChannel struct{ last channel.Request }
+
+func (c *captureChannel) Name() string { return "ollama" }
+func (c *captureChannel) Send(_ context.Context, req channel.Request) (channel.Response, error) {
+	c.last = req
+	return channel.Response{Text: "pong", EstTokensIn: 3, EstTokensOut: 1}, nil
+}
+func (c *captureChannel) BudgetState(_ context.Context) (channel.Budget, error) {
+	return channel.Budget{}, nil
+}
+
+func TestDispatchOllamaDefaultsModel(t *testing.T) {
+	tr, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	cap := &captureChannel{}
+	d := &conductorDeps{
+		gate: shipgate.New(shipgate.ModeOff),
+		a: &app{
+			channels: map[string]channel.Channel{"ollama": cap},
+			tracker:  tr,
+			routing:  config.Routing{Brain: config.BrainConfig{Model: "qwen2.5-coder:7b"}},
+		},
+	}
+	res, err := callTool(t, d, "dispatch", map[string]any{
+		"cli": "ollama", "message": "say pong", "risk": "read",
+	})
+	if err != nil {
+		t.Fatalf("ollama dispatch without model must succeed: %v", err)
+	}
+	if cap.last.Model != "qwen2.5-coder:7b" {
+		t.Fatalf("model must default to routing Brain.Model, got %q", cap.last.Model)
+	}
+	if res["text"] != "pong" {
+		t.Fatalf("want text pong, got %v", res["text"])
+	}
+}
+
 func TestMemorySaveValidatesKind(t *testing.T) {
 	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff)}
 	if _, err := callTool(t, d, "memory_save", map[string]any{"kind": "vibe", "text": "x"}); err == nil {
