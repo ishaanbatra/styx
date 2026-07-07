@@ -169,8 +169,13 @@ Shared pieces:
   `recallSchema` are `map[string]any` JSON Schema objects passed as
   `Tool.InputSchema`. `mcpTools(a *app)` assembles all seven handlers into
   `[]mcpserver.Tool`, unmarshaling raw JSON arguments before each dispatch.
-  `cmdMCP(a *app, args []string)` constructs the server via `mcpserver.New("styx",
-  mcpServerVersion, append(mcpTools(a), conductorTools(newConductorDeps(a))...))`,
+  `cmdMCP(a *app, args []string)` derives a cancellable root context
+  (`ctx, cancel := context.WithCancel(...)`, `defer cancel()`), builds
+  `d := newConductorDeps(a, ctx)` (rooting the background-task registry on that
+  ctx — no daemons), and constructs the server via `mcpserver.New("styx",
+  mcpServerVersion, append(mcpTools(a), withBackgroundStatus(conductorTools(d), d.reg)...))`
+  — the conductor tools are wrapped so every map result carries the background
+  status line (see the Piggyback note under "Conductor MCP tools"). It
   logs readiness to stderr via `logStatus` (naming all thirteen tools), and runs
   `srv.Serve(ctx, os.Stdin, os.Stdout)` — stdout carries the JSON-RPC protocol
   only, nothing else. `const mcpServerVersion = "0.1.0"`. See the "MCP
