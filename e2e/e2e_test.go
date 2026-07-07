@@ -84,7 +84,7 @@ func (c *mcpClient) toolCall(name string, args any) (map[string]any, bool) {
 }
 
 // startServer builds the isolated environment and spawns `styx mcp`.
-func startServer(t *testing.T) (*mcpClient, string) {
+func startServer(t *testing.T, extraEnv ...string) (*mcpClient, string) {
 	t.Helper()
 	repoRoot, err := filepath.Abs("..")
 	if err != nil {
@@ -135,6 +135,7 @@ func startServer(t *testing.T) (*mcpClient, string) {
 		"PATH="+fakeBinDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKEAGENT_TEXT=e2e-ok",
 	)
+	srv.Env = append(srv.Env, extraEnv...)
 	stdin, err := srv.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -275,5 +276,64 @@ func TestLiveSmoke(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(fmt.Sprint(res["text"])), "pong") {
 		t.Logf("note: unexpected text %v (model behavior, not plumbing)", res["text"])
+	}
+}
+
+func TestBackgroundDispatchRoundtrip(t *testing.T) {
+	c, _ := startServer(t, "FAKEAGENT_SLEEP=2")
+
+	// Fire-and-return: immediate task handle.
+	disp, isErr := c.toolCall("dispatch", map[string]any{
+		"cli": "claude", "message": "slow job", "risk": "read", "background": true,
+	})
+	if isErr {
+		t.Fatalf("background dispatch errored: %v", disp)
+	}
+	taskID, _ := disp["task_id"].(string)
+	if taskID == "" || disp["status"] != "running" {
+		t.Fatalf("want immediate task handle, got %v", disp)
+	}
+
+	// Piggyback: any conductor tool result carries the bg line while the
+	// task is live.
+	ts, isErr := c.toolCall("thread_status", map[string]any{})
+	if isErr {
+		t.Fatalf("thread_status errored: %v", ts)
+	}
+	if bg, _ := ts["bg"].(string); !strings.Contains(bg, taskID) {
+		t.Fatalf("bg piggyback must name the live task, got %v", ts["bg"])
+	}
+
+	// Collect: poll until done (fakeagent sleeps 2s; 30s budget).
+	deadline := time.Now().Add(30 * time.Second)
+	var got map[string]any
+	for {
+		if time.Now().After(deadline) {
+			t.Fatalf("task %s never finished; last collect: %v", taskID, got)
+		}
+		var isErr bool
+		got, isErr = c.toolCall("collect", map[string]any{"task_id": taskID})
+		if isErr {
+			t.Fatalf("collect errored: %v", got)
+		}
+		if got["status"] == "done" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if got["text"] != "e2e-ok" {
+		t.Fatalf("collected result must carry the dispatch text, got %v", got)
+	}
+
+	// Claimed: collect({}) has nothing left; the bg line is gone.
+	all, isErr := c.toolCall("collect", map[string]any{})
+	if isErr {
+		t.Fatalf("collect all errored: %v", all)
+	}
+	if results, _ := all["results"].([]any); len(results) != 0 {
+		t.Fatalf("claimed task must not resurface, got %v", all["results"])
+	}
+	if bg, ok := all["bg"]; ok {
+		t.Fatalf("no live/unclaimed tasks => no bg line, got %v", bg)
 	}
 }

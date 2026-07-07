@@ -1333,13 +1333,22 @@ exactly as a conductor would — `initialize`, `tools/list`, `tools/call` for
 installed as both `claude` and `codex` on an isolated `PATH`, and `HOME`/
 `XDG_CONFIG_HOME` pointed at a fresh `t.TempDir()` so no real config or
 subscription quota is touched. The launch project is a throwaway git repo
-created per test run. This is hermetic by default: no Docker (a plain
-subprocess + fake-CLIs-on-PATH gives the same isolation for a single-binary
-CLI without the image/build overhead), no network beyond a possibly-absent
-local ollama, and no real AI-CLI calls. `TestLiveSmoke` is skipped unless
-`STYX_E2E_LIVE=1`, in which case it runs `styx doctor` and a live ollama
-one-shot dispatch through the real routing brain model — meant to be run
-manually and rarely, since it consumes real quota/local resources.
+created per test run. `startServer(t, extraEnv...)` is variadic so tests can
+layer extra env (e.g. `FAKEAGENT_SLEEP=2`) onto the subprocess without
+touching existing callers. `TestBackgroundDispatchRoundtrip` exercises the
+full background-dispatch stack over the same real JSON-RPC subprocess: a
+`dispatch` call with `background:true` returns an immediate `{task_id,
+status:"running"}` handle; a subsequent `thread_status` call's `bg` piggyback
+line names the live task; polling `collect({task_id})` observes the task
+transition to `status:"done"` with the fakeagent's text once its
+`FAKEAGENT_SLEEP` elapses; and a final `collect({})` shows nothing pending
+and no `bg` line once the result is claimed. This is hermetic by default: no
+Docker (a plain subprocess + fake-CLIs-on-PATH gives the same isolation for a
+single-binary CLI without the image/build overhead), no network beyond a
+possibly-absent local ollama, and no real AI-CLI calls. `TestLiveSmoke` is
+skipped unless `STYX_E2E_LIVE=1`, in which case it runs `styx doctor` and a
+live ollama one-shot dispatch through the real routing brain model — meant to
+be run manually and rarely, since it consumes real quota/local resources.
 
 ## Planned work
 
