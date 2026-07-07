@@ -69,7 +69,9 @@ func cmdDoctor(args []string) error {
 		}
 		version := probeOutput(card.Bin, "--version")
 		help := probeOutput(card.Bin, "--help")
-		missing := missingFlags(help, card)
+		missing := missingFlags(help, card, func(sub string) string {
+			return probeOutput(card.Bin, sub, "--help")
+		})
 		mode := "native resume"
 		if card.ResumeProbe == "" || !strings.Contains(help, card.ResumeProbe) {
 			mode = "styx-maintained continuity"
@@ -145,20 +147,30 @@ func reportDoctor(healthy bool) error {
 	return fmt.Errorf("doctor found issues (see above)")
 }
 
-// probeOutput runs `bin arg` with a short timeout and returns combined output
-// ("" on failure; absence of output is handled by the card checks).
-func probeOutput(bin, arg string) string {
+// probeOutput runs `bin args...` with a short timeout and returns combined
+// output ("" on failure; absence of output is handled by the card checks).
+func probeOutput(bin string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, bin, arg).CombinedOutput()
+	out, _ := exec.CommandContext(ctx, bin, args...).CombinedOutput()
 	return string(out)
 }
 
-// missingFlags returns card.ExpectedFlags absent from the CLI's help text.
-func missingFlags(help string, card brain.Card) []string {
+// missingFlags returns card.ExpectedFlags absent from the CLI's help surface.
+// A non-dashed entry (e.g. "exec") is a subcommand whose flags live only in
+// that subcommand's own --help; subHelp(sub) fetches it so those flags verify
+// against the union of the top-level and subcommand help. subHelp is only
+// invoked for cards that declare subcommand entries.
+func missingFlags(help string, card brain.Card, subHelp func(sub string) string) []string {
+	surface := help
+	for _, f := range card.ExpectedFlags {
+		if !strings.HasPrefix(f, "-") {
+			surface += "\n" + subHelp(f)
+		}
+	}
 	var missing []string
 	for _, f := range card.ExpectedFlags {
-		if !strings.Contains(help, f) {
+		if !strings.Contains(surface, f) {
 			missing = append(missing, f)
 		}
 	}

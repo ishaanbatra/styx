@@ -411,7 +411,12 @@ estimate plus 1024 headroom would exceed ollama's 4096-token default — the
 tokens for a minimal turn in `TestBrainPromptFitsDefaultContextOrSetsNumCtx`).
 Capability cards describe claude, codex, agy, and
 ollama on every brain turn; `styx doctor` uses the same cards as drift probes
-for expected CLI flags and resume support. `BuildPrompt` combines those cards
+for expected CLI flags and resume support. Drift probing checks each card's
+`ExpectedFlags` against the CLI's `--help`; a non-dashed entry (e.g. `exec`) is
+treated as a subcommand, so doctor also runs `<bin> <sub> --help` and searches
+the union — this is how `codex exec --json` verifies even though `--json` never
+appears in top-level `codex --help`. Cards without subcommand entries (claude,
+agy) trigger no extra help invocation. `BuildPrompt` combines those cards
 with the current user utterance, rolling summary, recent turns, live-thread
 status, and memory hits; it also injects a project registry — `Turn.BoundProjects`
 and `Turn.KnownProjects` (pre-rendered one-liners) are emitted as "Bound projects:" /

@@ -7,7 +7,7 @@ type Card struct {
 	CLI           string
 	Bin           string   // binary to probe; "" = no binary (ollama probed via HTTP)
 	Condensed     string   // what the brain sees
-	ExpectedFlags []string // doctor checks --help contains each of these
+	ExpectedFlags []string // doctor checks --help contains each of these; a non-dashed entry (e.g. "exec") is a subcommand and later flags are also matched against `bin sub --help`
 	ResumeProbe   string   // substring of --help proving session-resume support
 }
 

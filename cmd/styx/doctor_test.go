@@ -37,9 +37,53 @@ func TestMissingFlags(t *testing.T) {
 			want: []string{"--resume", "--output-format", "--model"},
 		},
 	}
+	noSub := func(sub string) string {
+		t.Fatalf("subHelp probed for %q; card has no subcommand entries", sub)
+		return ""
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := missingFlags(tt.help, card); !reflect.DeepEqual(got, tt.want) {
+			if got := missingFlags(tt.help, card, noSub); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("missingFlags = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A card may guard a subcommand's flags (e.g. `codex exec --json`), which never
+// appear in top-level --help. missingFlags must fold the subcommand's own --help
+// into the searched surface — while still catching genuine drift if the flag is
+// gone from both.
+func TestMissingFlags_Subcommand(t *testing.T) {
+	card := brain.Card{
+		CLI:           "codex",
+		ExpectedFlags: []string{"exec", "--model", "--json"},
+	}
+	topHelp := "Usage: codex [options]\n  exec   Run headless\n  --model <m>\n"
+	tests := []struct {
+		name    string
+		subHelp func(string) string
+		want    []string
+	}{
+		{
+			name: "flag lives in subcommand help",
+			subHelp: func(sub string) string {
+				if sub == "exec" {
+					return "Usage: codex exec\n  --json   emit JSON events\n"
+				}
+				return ""
+			},
+			want: nil,
+		},
+		{
+			name:    "flag absent from both helps is flagged",
+			subHelp: func(string) string { return "Usage: codex exec\n  --sandbox <s>\n" },
+			want:    []string{"--json"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := missingFlags(topHelp, card, tt.subHelp); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("missingFlags = %v, want %v", got, tt.want)
 			}
 		})
