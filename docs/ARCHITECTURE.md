@@ -327,22 +327,32 @@ before dispatching. `Router.Explain` prints `floor: <tier>` (when not
 Data-driven routing guidance replacing the v0.2 brain's compiled-in preamble.
 A global guidance file is seeded at `~/.config/styx/guidance.md` on first call
 to `Load()` and is user-editable. User edits are never overwritten, but a file
-whose content exactly matches a previous seed version (the retained `seedV1`
-constant) is recognized as unmodified and transparently upgraded to the
-current `Seed` on load. `Load(projectPath string)` returns the global guidance
-with an optional per-repo override appended from `<repo>/styx/guidance.md` if
-it exists. The `Seed` constant contains the default shipped guidance: a
-dispatch-by-default rule (substantive work — implementation, research, review,
-large summarization — goes through `dispatch`/`pipeline_run` rather than the
-host's built-in Agent/Task subagents, which burn the interactive session's
-Claude quota invisibly to styx's budget ledger; built-ins are reserved for
-work too small to brief), a research-task mapping (`pipeline_run research`
-for brief-producing research, `dispatch cli=claude` for repo-focused
-investigation, agy when very large), channel best purposes (codex as primary
-implementer for well-scoped work, claude for ambiguous/architectural/refactor
-work, agy for large-file explains, ollama for trivial one-shots), model tier
-guidance, working style conventions (plan before dispatch, reuse threads,
-consult memory, check budget), and ship policy (confirmation token handoff).
+whose content exactly matches a previous seed version (the retained `seedV1`,
+`seedV2`, and `seedV3` constants — `seedV3` is the pre-async-dispatch seed,
+shipped 2026-07-07, kept verbatim from the live `Seed` at the moment background
+dispatch/collect/rate_dispatch were added) is recognized as unmodified and
+transparently upgraded to the current `Seed` on load. `Load(projectPath
+string)` returns the global guidance with an optional per-repo override
+appended from `<repo>/styx/guidance.md` if it exists. The `Seed` constant
+contains the default shipped guidance: a dispatch-by-default rule (substantive
+work — implementation, research, review, large summarization — goes through
+`dispatch`/`pipeline_run` rather than the host's built-in Agent/Task
+subagents, which burn the interactive session's Claude quota invisibly to
+styx's budget ledger; built-ins are reserved for work too small to brief), a
+research-task mapping (`pipeline_run research` for brief-producing research,
+`dispatch cli=claude` for repo-focused investigation, agy when very large),
+channel best purposes (codex as primary implementer for well-scoped work,
+claude for ambiguous/architectural/refactor work, agy for large-file explains,
+ollama for trivial one-shots), model tier guidance, a background dispatch
+section (fire independent multi-minute work with `background: true` for an
+immediate `task_id` and keep working; call `collect` before synthesizing
+results or on user status requests; same-thread/same-project edit-risk tasks
+queue rather than parallelize; `risk=ship` never backgrounds; orphaned tasks
+are reported if the mcp session ends), a rating-outcomes section (call
+`rate_dispatch` with a thread/task id and one-line note on notably good or bad
+outcomes, feeding styx's learning loop), working style conventions (plan
+before dispatch, reuse threads, consult memory, check budget), and ship policy
+(confirmation token handoff).
 
 ## Model Sync (internal/modelsync)
 
