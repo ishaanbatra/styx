@@ -446,7 +446,7 @@ git commit -m "fix(mcp): empty project resolves to the launch-dir project; error
 **Interfaces:**
 - Produces: `func conductorGuidance(base string, focusName string, extraNote, prefs string) string` — pure assembly, testable without exec.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `cmd/styx/launch_test.go`:
 
@@ -468,12 +468,12 @@ func TestConductorGuidanceNamesFocusProject(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./cmd/styx/ -run TestConductorGuidance -v`
 Expected: FAIL — `undefined: conductorGuidance`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `cmd/styx/launch.go`, extract the assembly from `launchConductor`:
 
@@ -509,12 +509,12 @@ guide = conductorGuidance(guide, p.Name, extraNote.String(), recallRoutingPrefs(
 
 (Delete the now-redundant `if extraNote.Len() > 0` and `if prefs := …` blocks.)
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestConductorGuidance -v` → PASS
 Run: `make test` → green
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Launcher" / conductor-data-flow paragraph: guidance now includes the focus alias. Bump `last_verified`.
 

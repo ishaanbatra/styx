@@ -70,12 +70,7 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 	if err != nil {
 		return fmt.Errorf("load guidance: %w", err)
 	}
-	if extraNote.Len() > 0 {
-		guide += "\n\n## Bound repos beyond " + p.Name + "\n" + extraNote.String()
-	}
-	if prefs := recallRoutingPrefs(a); prefs != "" {
-		guide += "\n\n## Routing preferences (learned)\n" + prefs
-	}
+	guide = conductorGuidance(guide, p.Name, extraNote.String(), recallRoutingPrefs(a))
 	styxBin, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate styx binary: %w", err)
@@ -86,6 +81,24 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 		ProjectPath: p.Path, StyxBin: styxBin, Guidance: guide, ExtraRepos: extras,
 		ExtraArgs: extraArgs,
 	})
+}
+
+// conductorGuidance assembles the final --append-system-prompt content:
+// base guidance, the focus project's registry alias (so the brain knows what
+// to pass as `project` on dispatch/thread_status/memory_save), extra-repo
+// notes, and learned routing preferences.
+func conductorGuidance(base, focusName, extraNote, prefs string) string {
+	g := base
+	g += "\n\n## This session's project\n" +
+		"Registry alias: `" + focusName + "`. Pass it as `project` on dispatch/" +
+		"thread_status/memory_save (an empty project also resolves to this repo)."
+	if extraNote != "" {
+		g += "\n\n## Bound repos beyond " + focusName + "\n" + extraNote
+	}
+	if prefs != "" {
+		g += "\n\n## Routing preferences (learned)\n" + prefs
+	}
+	return g
 }
 
 // stdinIsTTY reports whether stdin is a character device. Var for tests.

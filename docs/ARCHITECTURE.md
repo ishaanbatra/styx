@@ -693,8 +693,13 @@ first repo, or `resolveGlobalTarget("")` for bare `styx`, falling back to
 the plain cwd when that fails with `ErrNotInGitRepo` and no explicit
 target was given), loads
 `internal/guidance.Load(project.Path)` for the base system-prompt content,
-appends a note about any extra repos and `recallRoutingPrefs(a)`'s learned
-routing-preference memories, resolves the running binary via
+then assembles the final guidance via the pure `conductorGuidance(base,
+focusName, extraNote, prefs string) string`: it appends a "This session's
+project" section naming the focus project's registry alias (so the brain
+knows what to pass as `project` on `dispatch`/`thread_status`/`memory_save`;
+an empty `project` also resolves to this repo — see Task 4 above), then a
+note about any extra repos and `recallRoutingPrefs(a)`'s learned
+routing-preference memories when present. It resolves the running binary via
 `os.Executable()` (so the spawned Claude Code always shells back out to
 *this* styx, not a stale `PATH` copy), and calls `ClaudeHost.Launch`. Once
 Claude Code is running, it talks back to styx exclusively through the MCP

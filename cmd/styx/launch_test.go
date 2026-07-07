@@ -238,3 +238,23 @@ func TestEnsureInteractiveTTY(t *testing.T) {
 		t.Fatalf("TTY stdin must pass, got %v", err)
 	}
 }
+
+// TestConductorGuidanceNamesFocusProject proves the assembled guidance names
+// the focus project's registry alias (so the conductor brain knows what to
+// pass as `project` on dispatch/thread_status/memory_save) and still folds in
+// the extra-repo note and learned routing preferences when present.
+func TestConductorGuidanceNamesFocusProject(t *testing.T) {
+	got := conductorGuidance("BASE", "styx", "", "")
+	if !strings.Contains(got, "`styx`") || !strings.Contains(got, "project") {
+		t.Fatalf("guidance must name the focus project alias, got:\n%s", got)
+	}
+	if !strings.HasPrefix(got, "BASE") {
+		t.Fatal("base guidance must come first")
+	}
+	withExtras := conductorGuidance("BASE", "styx", "- ai-ta: /x (extra)\n", "- prefer codex\n")
+	for _, want := range []string{"Bound repos beyond styx", "Routing preferences", "prefer codex"} {
+		if !strings.Contains(withExtras, want) {
+			t.Fatalf("missing %q in:\n%s", want, withExtras)
+		}
+	}
+}
