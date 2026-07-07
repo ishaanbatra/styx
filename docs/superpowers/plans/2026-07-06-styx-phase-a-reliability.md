@@ -320,7 +320,7 @@ E2E evidence: `dispatch` without `project` → `resolve project: no target: name
 - Consumes: `resolveGlobalTarget(arg string) (project.Project, error)` (`cmd/styx/dispatch.go:42`), `config.LoadProjects() ([]Project, error)`, `target.Resolve`.
 - Produces: `managerFor("")` = launch-directory project; `registeredProjectNames() string` helper.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `cmd/styx/mcp_conductor_test.go`:
 
@@ -367,12 +367,12 @@ func TestManagerForUnknownAliasListsRegistry(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run TestManagerFor -v`
 Expected: `TestManagerForEmptyAliasUsesCwd` FAILs with the old "no target: name a project (--project)…" error; `TestManagerForUnknownAliasListsRegistry` FAILs on the missing "registered projects" text.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Replace `managerFor` in `cmd/styx/mcp_conductor.go`:
 
@@ -420,12 +420,12 @@ Update the `project` schema descriptions on all three tools:
 "project": map[string]any{"type": "string", "description": "registered project alias; empty = the project styx was launched in"},
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestManagerFor -v` → PASS
 Run: `go test ./cmd/styx/ -v` → existing `TestThreadStatusNoThreads` may now expect the new error text — update its assertion to match `registered projects` if it asserted the old wording.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md`: update the `managerFor` bullet in "Conductor MCP tools" AND the "no cwd fallback" sentences in "MCP server" — the revised contract is: *strict resolution for named projects; empty = launch directory project (conductor case), matching pipeline_run*. Bump `last_verified`.
 

@@ -12,12 +12,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/agent"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
+	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
@@ -55,17 +57,38 @@ func newConductorDeps(a *app) *conductorDeps {
 	}
 }
 
-// managerFor lazily binds a project exactly the way the REPL does
-// (cmd/styx/repl.go bind()): project memory db, thread store, adapters,
-// budget tracker, ollama summarizer, distill threshold. Resolution has no
-// cwd fallback — an MCP server's cwd is not the caller's project, matching
-// resolveProjectStrict's contract for the other project-scoped tools.
+// managerFor lazily binds a project. An empty alias resolves to the server's
+// cwd project — the launcher starts `styx mcp` in the launch directory, so
+// cwd IS the caller's project for the conductor (same rule pipeline_run
+// already uses). A named alias resolves strictly (no fallback); resolution
+// failures list the registry so an MCP consumer can self-correct — it cannot
+// "pass --dir" or "cd into a repo".
 func (d *conductorDeps) managerFor(alias string) (*managed, error) {
-	p, err := target.Resolve(target.Spec{Alias: alias})
+	var p project.Project
+	var err error
+	if alias == "" {
+		p, err = resolveGlobalTarget("")
+	} else {
+		p, err = target.Resolve(target.Spec{Alias: alias})
+	}
 	if err != nil {
-		return nil, fmt.Errorf("resolve project: %w", err)
+		return nil, fmt.Errorf("resolve project %q: %w (registered projects: %s)",
+			alias, err, registeredProjectNames())
 	}
 	return d.managerForProject(p)
+}
+
+// registeredProjectNames renders the registry for MCP error messages.
+func registeredProjectNames() string {
+	projs, err := config.LoadProjects()
+	if err != nil || len(projs) == 0 {
+		return "none"
+	}
+	names := make([]string, len(projs))
+	for i, p := range projs {
+		names[i] = p.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 // managerForProject binds an already-resolved project (cached by project ID).
@@ -148,7 +171,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"project":       map[string]any{"type": "string", "description": "registered project alias (required to touch persistent threads; not needed for cli=ollama)"},
+					"project":       map[string]any{"type": "string", "description": "registered project alias; empty = the project styx was launched in"},
 					"thread":        map[string]any{"type": "string", "description": "thread name; empty = cli name"},
 					"cli":           map[string]any{"type": "string", "enum": []string{"claude", "codex", "agy", "ollama"}},
 					"message":       map[string]any{"type": "string"},
@@ -245,7 +268,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 			Name:        "thread_status",
 			Description: "List this project's persistent agent threads with turn counts and context usage.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
-				"project": map[string]any{"type": "string"}}},
+				"project": map[string]any{"type": "string", "description": "registered project alias; empty = the project styx was launched in"}}},
 			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 				var in struct {
 					Project string `json:"project"`
@@ -264,7 +287,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 			Name:        "memory_save",
 			Description: "Persist a durable fact, decision, todo, or routing preference to styx memory.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
-				"project": map[string]any{"type": "string"},
+				"project": map[string]any{"type": "string", "description": "registered project alias; empty = the project styx was launched in"},
 				"kind":    map[string]any{"type": "string", "enum": []string{"fact", "decision", "todo", "routing-preference"}},
 				"text":    map[string]any{"type": "string"},
 				"scope":   map[string]any{"type": "string"},

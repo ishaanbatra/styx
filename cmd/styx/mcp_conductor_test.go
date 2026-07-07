@@ -327,3 +327,39 @@ func TestMemorySaveValidatesKind(t *testing.T) {
 		t.Fatal("empty text must error")
 	}
 }
+
+func TestManagerForEmptyAliasUsesCwd(t *testing.T) {
+	// Isolated config home; cwd (this repo) auto-registers on resolution.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	d := &conductorDeps{managers: map[string]*managed{}}
+	// managerFor needs deps only past resolution; a nil app panics later,
+	// so resolve-only is asserted through the error path shape:
+	// build minimal deps the way managerForProject needs them.
+	tr, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	d.a = &app{tracker: tr, routing: config.Routing{}, channels: map[string]channel.Channel{"ollama": &captureChannel{}}}
+	m, err := d.managerFor("")
+	if err != nil {
+		t.Fatalf("empty alias must resolve via cwd (launch dir), got %v", err)
+	}
+	if m.mgr.Project.Name == "" {
+		t.Fatal("resolved project must be the cwd repo")
+	}
+}
+
+func TestManagerForUnknownAliasListsRegistry(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	d := &conductorDeps{managers: map[string]*managed{}}
+	_, err := d.managerFor("definitely-not-registered")
+	if err == nil {
+		t.Fatal("unknown alias must stay a loud error")
+	}
+	if !strings.Contains(err.Error(), "registered projects") {
+		t.Fatalf("error must list registered projects for the MCP consumer, got: %v", err)
+	}
+}

@@ -764,7 +764,12 @@ respect:
 argument through `resolveProjectStrict`, which has no cwd fallback (an MCP
 server's cwd is not the caller's project) and turns an empty/unknown project
 into a `channel.ClassifiedError` rather than a silent default — the shared
-cross-cutting contract for every project-scoped v2 tool.
+cross-cutting contract for every project-scoped v2 tool. This differs
+deliberately from the conductor tools' `managerFor` (see "Conductor MCP
+tools" below): there, an empty `project` resolves to the server's launch-
+directory project instead of erroring, because the conductor case matches
+`pipeline_run`'s cwd-anchored model rather than the routing-brain tools'
+always-explicit one.
 
 ## Conductor MCP tools (cmd/styx/mcp_conductor.go)
 
@@ -784,10 +789,17 @@ REPL loop.
   claude/codex/agy adapters (`agent.NewClaudeAdapter/NewCodexAdapter/
   NewAgyAdapter`), the shared budget tracker, an ollama-backed `Summarize`
   closure for distill-and-restart, and the `[budget.claude].timeout_minutes`
-  subprocess timeout (default 10m). Like `resolveProjectStrict`, resolution
-  goes through `target.Resolve(target.Spec{Alias: alias})` with **no cwd
-  fallback**; an empty or unregistered alias is a loud error, not a
-  server-side default project.
+  subprocess timeout (default 10m). Resolution: an **empty alias resolves to
+  the server's cwd project** via `resolveGlobalTarget("")` — the launcher
+  starts `styx mcp` in the launch directory, so cwd IS the caller's project
+  for the conductor, matching `pipeline_run`'s own cwd resolution. A
+  **named alias resolves strictly**, no fallback, via
+  `target.Resolve(target.Spec{Alias: alias})`. Either way, a resolution
+  failure is wrapped as `resolve project %q: %w (registered projects: %s)`
+  via the `registeredProjectNames()` helper (`config.LoadProjects()` joined
+  by name, or `"none"`) — unlike a CLI invocation, an MCP consumer can't
+  "pass --dir" or "cd into a repo", so the error lists the registry instead
+  of suggesting shell remedies.
 - `dispatch(project?, thread?, cli, message, model?, risk, extra_roots?,
   confirm_token?)` — `cli` is one of `claude|codex|agy|ollama`; `risk` is
   `read|edit|ship`. Validation (unknown cli, empty message, invalid risk)
@@ -838,10 +850,13 @@ REPL loop.
   project** via `resolveGlobalTarget("")` (the launcher starts `styx mcp`
   in the project dir) — the same resolution research/review/auto perform
   internally. The project-scoped tools (`dispatch`, `thread_status`,
-  `memory_save`) keep the strict no-cwd-fallback `managerFor(alias)`
-  contract; `managerForProject` binds an already-resolved project for the
-  research indexing step. On success returns `{pipeline, done: true, note}`
-  pointing at `styx/research/` and `styx/plans/` for artifacts.
+  `memory_save`) now match this: their shared `managerFor(alias)` resolves
+  an empty alias to the same cwd project via `resolveGlobalTarget("")`,
+  while a named alias still resolves strictly (no fallback) via
+  `target.Resolve`; `managerForProject` binds an already-resolved project
+  for the research indexing step. On success returns `{pipeline, done:
+  true, note}` pointing at `styx/research/` and `styx/plans/` for
+  artifacts.
 
 ## Progress (internal/progress)
 
