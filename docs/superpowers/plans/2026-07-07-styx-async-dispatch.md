@@ -1,6 +1,6 @@
 # Styx Async Dispatch (B1) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** A conductor can fire a dispatch with `background: true`, keep talking, and pick the result up later via `collect` — with piggybacked status on every conductor tool result, a global concurrency cap, per-thread and per-project-write ordering, honest orphan reporting after crashes, and an append-only `outcomes` table that every dispatch completion (sync or background) feeds.
 
@@ -49,7 +49,7 @@ The shared substrate with the self-improvement spec. Append-only except the sing
   - `func (t *Tracker) RateOutcome(ctx context.Context, ref string, ok bool, note string) (int64, error)` — most-recent-matching semantics.
   - `func (t *Tracker) OutcomesSince(ctx context.Context, since time.Time) ([]Outcome, error)` — newest first.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/budget/outcome_test.go`:
 
@@ -154,12 +154,12 @@ func TestRateOutcomeMostRecentMatch(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/budget/ -run 'TestRecordAndReadOutcomes|TestRateOutcome' -v`
 Expected: FAIL — `undefined: Outcome`, `tr.RecordOutcome undefined`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `internal/budget/outcome.go`:
 
@@ -295,11 +295,11 @@ In `internal/budget/budget.go`, in `New`, right after the existing `schema` exec
 
 Note: `time.Time{}.Unix()` is a large negative number, so `OutcomesSince(ctx, time.Time{})` returns everything — the tests rely on that.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/budget/ -v` → PASS (all, including existing tracker tests — the new schema is additive).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Budget (internal/budget)" section: add a paragraph — append-only `outcomes` table (schema fields), `RecordOutcome`/`RateOutcome` (most-recent-matching, the sanctioned mutation)/`OutcomesSince`, created idempotently in `New`. Bump `last_verified`.
 
@@ -327,7 +327,7 @@ Every dispatch completion — ollama one-shot or thread — appends one outcome 
   - `func dispatchSignals(message string) string`
   - `func outcomeErrKind(err error) string`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `cmd/styx/mcp_conductor_test.go` (the file already imports `budget`, `channel`, `config`, `shipgate`, `os`, `filepath`, `strings`; add `"time"` if absent):
 
@@ -426,12 +426,12 @@ func TestDispatchOllamaAppendsOutcomeRow(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run 'TestDispatchThreadAppendsOutcomeRow|TestDispatchOllamaAppendsOutcomeRow' -v`
 Expected: FAIL — `want 1 outcome row, got 0` (both).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `cmd/styx/mcp_conductor.go`, add three helpers (near `registeredProjectNames`); add `"errors"` and the `signals` import (`github.com/ishaanbatra/styx/internal/signals`) to the import block:
 
@@ -562,11 +562,11 @@ In the **ollama branch**, right before `if err != nil { return nil, fmt.Errorf("
 					}
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestDispatch -v` → PASS (new tests plus all existing dispatch tests — the happy-path/gate/validation tests must be untouched by the refactor).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Conductor MCP tools" `dispatch` bullet: every dispatch completion appends an outcome row (both branches; signals extracted from the message; record failures narrated, never fatal); name `finishDispatch` as the shared sync/background completion function. Bump `last_verified`.
 
@@ -590,7 +590,7 @@ git commit -m "feat(mcp): every dispatch completion appends an outcomes row via 
 - Consumes: `Tracker.RateOutcome` (Task 1).
 - Produces: MCP tool `rate_dispatch({thread_or_task, ok, note?}) → {rated, outcome_id, target}`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `cmd/styx/mcp_conductor_test.go`:
 
@@ -639,12 +639,12 @@ func TestRateDispatchStampsMostRecentOutcome(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./cmd/styx/ -run TestRateDispatch -v`
 Expected: FAIL — `tool "rate_dispatch" not registered`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to the `[]mcpserver.Tool` slice returned by `conductorTools` (after `pipeline_run`):
 
@@ -693,12 +693,12 @@ In `e2e/e2e_test.go` `TestFirstContact`, update the tool count:
 	}
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestRateDispatch -v` → PASS
 Run: `make e2e` → PASS (tool count now 12)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md`: "MCP server" tool enumeration ("eleven tools" → twelve, add `rate_dispatch` to the list) and a `rate_dispatch` bullet under "Conductor MCP tools" (most-recent-matching semantics, rate-only-notable guidance). Bump `last_verified`.
 
@@ -722,7 +722,7 @@ git commit -m "feat(mcp): rate_dispatch tool stamps ratings onto the most recent
 **Interfaces:**
 - Produces: `config.Conductor.MaxBackgroundTasks int` (default 4); `EnsureConductorTaskCap(content string) (string, bool)`; `UpgradeRoutingFile` returns `(geminiN int, implementInjected, fableRestored, taskCapInjected bool, err error)`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `internal/config/upgrade_test.go`:
 
@@ -773,12 +773,12 @@ func TestConductorTaskCapDefault(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/config/ -run 'TestEnsureConductorTaskCap|TestConductorTaskCapDefault' -v`
 Expected: FAIL — `undefined: EnsureConductorTaskCap`; `r.Conductor.MaxBackgroundTasks undefined`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `internal/config/routing.go` — extend the struct and defaults:
 
@@ -916,11 +916,11 @@ func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fab
 
 Fix any other `UpgradeRoutingFile` call sites the compiler reports (e.g. tests): `grep -rn "UpgradeRoutingFile(" --include="*.go"`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/config/ -v` → PASS (all — including the existing `UpgradeRoutingFile` tests, updated for the new return).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Routing" section: extend the `Conductor` sentence with `max_background_tasks` (default 4, seeded, `EnsureConductorTaskCap` upgrade path). Bump `last_verified`.
 
@@ -954,7 +954,7 @@ The in-memory heart of B1: mutex-guarded registry, monotonic `t<n>` ids, global 
   - `func (r *taskRegistry) Snapshot() []bgTask` — copies, creation order; nil-safe (returns nil).
   - `func (r *taskRegistry) StatusLine() string` — the piggyback line; nil-safe (returns "").
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `cmd/styx/mcp_tasks_test.go`:
 
@@ -1128,12 +1128,12 @@ func TestRegistryBusyAndNilSafety(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run TestRegistry -v`
 Expected: FAIL — `undefined: newTaskRegistry` (compile error)
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `cmd/styx/mcp_tasks.go`:
 
@@ -1439,12 +1439,12 @@ For this task only, add a temporary stub so the file compiles (Task 6 replaces i
 func writeTaskFile(dir string, t *bgTask) {}
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestRegistry -v -race` → PASS (run with `-race`; the registry is the one concurrent structure in this plan)
 Run: `make test` → green
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Conductor MCP tools" section: add a "Background task registry" subsection — states, monotonic ids, cap from `[conductor] max_background_tasks`, both ordering rules verbatim, root-context lifetime rule, claim semantics, `Busy` guard for sync dispatches. Bump `last_verified`.
 
@@ -1471,7 +1471,7 @@ git commit -m "feat(mcp): background task registry with cap, thread serializatio
   - `func adoptOrphanedTaskFiles(dir string, maxClaimedAge time.Duration) []taskFile` — startup scan: flips unclaimed files to orphaned on disk, prunes old claimed files, returns the orphans.
   - `func (r *taskRegistry) adoptOrphans(files []taskFile)` — inserts them as `o1`, `o2`, … registry entries.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `cmd/styx/mcp_tasks_test.go` (add `"encoding/json"`, `"os"`, `"path/filepath"` imports):
 
@@ -1553,12 +1553,12 @@ func TestOrphanPruneOldClaimedFiles(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run 'TestTaskStateMirror|TestOrphanPrune' -v`
 Expected: FAIL — `undefined: taskFile`, `undefined: adoptOrphanedTaskFiles`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `internal/paths/paths.go`, after `ThreadsDir`:
 
@@ -1699,11 +1699,11 @@ func (r *taskRegistry) adoptOrphans(files []taskFile) {
 
 Note on the orphan-state edge in the scan: a file already marked `orphaned` (flipped by a previous scan, never collected) keeps its existing `Err` text and keeps resurfacing until claimed — that's the `prior == taskQueued || ...` condition leaving `orphaned` files' Err intact.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run 'TestTaskStateMirror|TestOrphanPrune|TestRegistry' -v -race` → PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md`: "On-disk layout" gains `~/.config/styx/state/tasks/<run-id>.json  background-task state mirrors (crash honesty)`; the Task 5 registry subsection gains the mirror/orphan/prune paragraph. Bump `last_verified`.
 
@@ -1729,7 +1729,7 @@ git commit -m "feat(mcp): task state mirrors with startup orphan adoption and cl
   - dispatch arg `background bool`; background return `{task_id, thread, cli, status}`.
   - `func (d *conductorDeps) spawnBudgetCheck(ctx context.Context, cli string) error`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `cmd/styx/mcp_conductor_test.go`:
 
@@ -1812,12 +1812,12 @@ func TestDispatchSyncBusyThreadGuard(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run 'TestDispatchBackground|TestDispatchSyncBusy' -v`
 Expected: FAIL — `unknown field reg` compile error first; after adding the field (Step 3 does), the ship/ollama test fails because `background` is silently ignored and the dispatch proceeds.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `conductorDeps` gains the registry; `newConductorDeps` takes the server root context:
 
@@ -1978,12 +1978,12 @@ func cmdMCP(a *app, args []string) error {
 
 Fix the other `newConductorDeps(a)` call sites the compiler reports (there is at least the one in `cmdMCP`; check tests): `grep -rn "newConductorDeps(" --include="*.go" cmd/`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run 'TestDispatch|TestRegistry' -v -race` → PASS (all existing dispatch tests too — sync behavior is unchanged when `background` is absent and `reg` is nil)
 Run: `make test` → green
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Conductor MCP tools" `dispatch` bullet: `background` param, spawn-time work (validation → ship/ollama rejection → budget + circuit check → project/thread resolution → immediate `{task_id, thread, cli, status}`), root-context lifetime, sync busy-thread guard. "MCP server" section: `cmdMCP`'s cancellable root context + startup orphan adoption. Bump `last_verified`.
 
@@ -2011,7 +2011,7 @@ git commit -m "feat(mcp): dispatch background=true spawns registry tasks with sp
   - `thread_status` result gains `"tasks": []string` (always an array, `[]` when empty).
   - `func taskLine(t bgTask) string` — shared one-line renderer.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `cmd/styx/mcp_conductor_test.go`:
 
@@ -2105,12 +2105,12 @@ For `thread_status` task rows, extend the tail of the existing `TestDispatchHapp
 	}
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run 'TestCollect|TestDispatchHappyPath' -v`
 Expected: FAIL — `tool "collect" not registered`; happy-path FAILs on the missing `tasks` key.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add the shared renderer to `cmd/styx/mcp_tasks.go`:
 
@@ -2225,12 +2225,12 @@ In the `thread_status` handler, change the return to include task rows:
 
 `cmd/styx/mcp.go` readiness line: append `, collect` to the tool list string. `e2e/e2e_test.go` `TestFirstContact`: `if len(tools) != 13`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run 'TestCollect|TestDispatch|TestThreadStatus' -v -race` → PASS
 Run: `make e2e` → PASS (count 13)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md`: "MCP server" tool enumeration → thirteen (+`collect`); "Conductor MCP tools" gains the `collect` bullet (both call shapes, claim-on-collect, orphan payload) and the `thread_status` bullet gains the `tasks` array. Bump `last_verified`.
 
@@ -2252,7 +2252,7 @@ git commit -m "feat(mcp): collect tool + background task rows on thread_status"
 **Interfaces:**
 - Produces: `func withBackgroundStatus(tools []mcpserver.Tool, reg *taskRegistry) []mcpserver.Tool` — the one decoration point from the spec. Map-shaped results gain `"bg"` when the registry holds live or unclaimed work; non-map results (e.g. the raw `shipgate.Result` pass-through) and errors pass through untouched.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `cmd/styx/mcp_tasks_test.go` (add imports `"encoding/json"` — already added in Task 6 — and `"github.com/ishaanbatra/styx/internal/mcpserver"`, `"errors"`):
 
@@ -2306,12 +2306,12 @@ func TestWithBackgroundStatusPiggyback(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./cmd/styx/ -run TestWithBackgroundStatus -v`
 Expected: FAIL — `undefined: withBackgroundStatus`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add to `cmd/styx/mcp_tasks.go` (import `"encoding/json"` is present from Task 6; add `mcpserver`):
 
@@ -2350,11 +2350,11 @@ In `cmdMCP`, change the tool assembly line:
 	tools := append(mcpTools(a), withBackgroundStatus(conductorTools(d), d.reg)...)
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -v -race` → PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Conductor MCP tools": add the Piggyback paragraph (`withBackgroundStatus`, the `"bg"` field, map-results-only rule). Bump `last_verified`.
 
@@ -2375,7 +2375,7 @@ git commit -m "feat(mcp): piggyback background status line onto every conductor 
 **Interfaces:**
 - Produces: fakeagent env knob `FAKEAGENT_SLEEP` (seconds; sleeps before emitting events).
 
-- [ ] **Step 1: Extend fakeagent**
+- [x] **Step 1: Extend fakeagent**
 
 In `testdata/fakeagent`, add to the knobs comment block:
 
@@ -2391,7 +2391,7 @@ if [ -n "$FAKEAGENT_SLEEP" ]; then
 fi
 ```
 
-- [ ] **Step 2: Write the failing roundtrip test**
+- [x] **Step 2: Write the failing roundtrip test**
 
 Add to `cmd/styx/mcp_conductor_test.go`:
 
@@ -2486,14 +2486,14 @@ func TestBackgroundDispatchRoundtrip(t *testing.T) {
 
 Note: the `waitFor` collect-poll consumes the "done" collect (claiming it). That is the intended piggyback+collect flow.
 
-- [ ] **Step 3: Run the test**
+- [x] **Step 3: Run the test**
 
 Run: `go test ./cmd/styx/ -run TestBackgroundDispatchRoundtrip -v -race`
 Expected: FAIL before Step 1's fakeagent edit is saved (no sleep → possible flake) and PASS after; if it fails on `status != "running"` the fakeagent sleep isn't taking effect — check the knob placement above the protocol blocks.
 
 Run: `go test ./internal/agent/ -v` → PASS (fakeagent change must not disturb runner/manager tests — they don't set FAKEAGENT_SLEEP).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 `docs/ARCHITECTURE.md` "Agent threads" fakeagent sentence: add the `FAKEAGENT_SLEEP` knob to the fixture description. Bump `last_verified`.
 
@@ -2514,7 +2514,7 @@ git commit -m "test(mcp): FAKEAGENT_SLEEP knob + background dispatch roundtrip c
 **Interfaces:**
 - Produces: new `Seed` content; previous Seed retained verbatim as `const seedV3`; `Load` recognizes `seedV1 || seedV2 || seedV3` as unmodified.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `internal/guidance/guidance_test.go` (mirroring the existing upgrade test's structure):
 
@@ -2546,12 +2546,12 @@ func TestSeedV3UpgradesToCurrent(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/guidance/ -run TestSeedV3 -v`
 Expected: FAIL — `undefined: seedV3`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 1. Copy the entire current `Seed` constant into a new `const seedV3 = …` (verbatim), with the comment:
 
@@ -2603,11 +2603,11 @@ thread name or task id and a one-line note. Rate only notable outcomes —
 not every dispatch. Ratings feed styx's learning loop.
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/guidance/ -v` → PASS (including the existing seedV1/seedV2 upgrade tests)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Guidance" section: mention the V3→current upgrade and the two new taught behaviors. Bump `last_verified`.
 
@@ -2628,7 +2628,7 @@ git commit -m "feat(guidance): teach background dispatch, collect, and rate_disp
 - Consumes: everything above via a real `styx mcp` subprocess.
 - Produces: `startServer(t *testing.T, extraEnv ...string)` (backward-compatible variadic); `TestBackgroundDispatchRoundtrip`.
 
-- [ ] **Step 1: Extend startServer**
+- [x] **Step 1: Extend startServer**
 
 Change the signature and the env block in `e2e/e2e_test.go`:
 
@@ -2646,7 +2646,7 @@ func startServer(t *testing.T, extraEnv ...string) (*mcpClient, string) {
 	srv.Env = append(srv.Env, extraEnv...)
 ```
 
-- [ ] **Step 2: Write the roundtrip test**
+- [x] **Step 2: Write the roundtrip test**
 
 Add to `e2e/e2e_test.go`:
 
@@ -2711,13 +2711,13 @@ func TestBackgroundDispatchRoundtrip(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 Run: `make e2e`
 Expected: `TestFirstContact` (13 tools), `TestVersionVerb`, `TestBackgroundDispatchRoundtrip` PASS; `TestLiveSmoke` SKIP.
 Debug tip: server stderr passes through — look for `task t1 started` / `task t1 done` `[styx]` lines; a roundtrip hang usually means the fakeagent sleep knob or the registry promotion loop.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 `docs/ARCHITECTURE.md` "Testing conventions" e2e paragraph: add the background roundtrip to the described tool-call sequence. Bump `last_verified`.
 
@@ -2731,8 +2731,8 @@ git commit -m "test(e2e): background dispatch -> piggyback -> collect roundtrip 
 
 ## Post-plan verification (whole-phase acceptance)
 
-- [ ] `make test && make e2e` green; `go test ./cmd/styx/ -race` green.
-- [ ] `STYX_E2E_LIVE=1 make e2e` green on this machine (the one sanctioned live run; needs ollama up).
-- [ ] Manual conductor session: `make install`, then `styx` in this repo; ask the conductor to "dispatch a 2-minute codex investigation in the background, keep chatting, then collect it". Verify: immediate task handle, `bg` lines on subsequent tool results, collect returns the result, `rate_dispatch` on the thread succeeds, and the row shows in sqlite: `sqlite3 ~/.config/styx/state/usage.db 'SELECT cli, background, rating FROM outcomes ORDER BY id DESC LIMIT 3;'`.
-- [ ] Kill the `styx mcp` process mid-task (quit Claude Code during a background dispatch), relaunch `styx`, and confirm the orphan is reported by the first tool call's `bg` line and by `collect`.
-- [ ] `docs/ARCHITECTURE.md` `last_verified` is the final commit date; `git log --oneline` shows one commit per task.
+- [x] `make test && make e2e` green; `go test ./cmd/styx/ -race` green.
+- [x] `STYX_E2E_LIVE=1 make e2e` green on this machine (the one sanctioned live run; needs ollama up).
+- [x] Manual conductor session: `make install`, then `styx` in this repo; ask the conductor to "dispatch a 2-minute codex investigation in the background, keep chatting, then collect it". Verify: immediate task handle, `bg` lines on subsequent tool results, collect returns the result, `rate_dispatch` on the thread succeeds, and the row shows in sqlite: `sqlite3 ~/.config/styx/state/usage.db 'SELECT cli, background, rating FROM outcomes ORDER BY id DESC LIMIT 3;'`.
+- [x] Kill the `styx mcp` process mid-task (quit Claude Code during a background dispatch), relaunch `styx`, and confirm the orphan is reported by the first tool call's `bg` line and by `collect`.
+- [x] `docs/ARCHITECTURE.md` `last_verified` is the final commit date; `git log --oneline` shows one commit per task.
