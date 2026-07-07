@@ -797,8 +797,30 @@ hosts like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
 stdlib, no provider SDK; stdout carries the protocol,
 status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
-`cmd/styx/cmdMCP` builds the tool set as `append(mcpTools(a),
-conductorTools(newConductorDeps(a))...)`. Before `srv.Serve`, `cmdMCP` fires
+
+**Cancellable root context (no daemons).** `cmdMCP` opens `ctx, cancel :=
+context.WithCancel(context.Background())` and `defer cancel()` before doing
+anything else, then builds `d := newConductorDeps(a, ctx)` — this is the same
+`ctx` `srv.Serve(ctx, os.Stdin, os.Stdout)` runs on. `Serve` blocks until the
+host closes stdin (EOF); the deferred `cancel()` then fires, which is what
+tears down every background dispatch goroutine spawned off `d.reg` (see
+"Background task registry" below) — there is no separate supervisor process,
+matching the project's "no daemons" rule. Background work's context is
+therefore always this one root, never a per-call context from the tool
+invocation that spawned it.
+
+**Startup task-state wiring.** Right after constructing `d`, `cmdMCP` resolves
+`paths.TasksDir()`, `paths.EnsureDir`s it, and — narrating any failure via
+`logStatus` and continuing without persistence rather than failing startup —
+sets `d.reg.dir = dir` so `Spawn`/completion/`Claim` start mirroring task
+state to disk. It then calls `adoptOrphanedTaskFiles(dir, 7*24*time.Hour)`
+(see "Startup orphan adoption" below) and, when it finds unclaimed files from
+a previous `styx mcp` lifetime, feeds them to `d.reg.adoptOrphans(orphans)`
+and narrates the count via `logStatus` — a crashed or killed prior process's
+in-flight/finished-but-uncollected background tasks resurface as `o1`, `o2`,
+… entries in this session's `collect`/status line instead of vanishing
+silently. Finally `cmdMCP` builds the tool set as `append(mcpTools(a),
+conductorTools(d)...)`. Before `srv.Serve`, `cmdMCP` fires
 `go preloadOllamaModels(a)`: a fire-and-forget, 20s-timeout best-effort call
 to `/api/generate` with `keep_alive: "30m"` for `a.routing.Brain.Model` and
 `a.routing.Brain.EmbedModel`, so the first real dispatch/recall doesn't pay a
@@ -879,10 +901,16 @@ Code, per the conductor spec) a dispatch surface onto the same
 REPL loop.
 
 - `conductorDeps` (`a *app`, `gate *shipgate.Gate`, `emb memory.Embedder`,
-  and a mutex-guarded `managers map[string]*managed` cache keyed by project
-  ID) is built once per `styx mcp` invocation via `newConductorDeps(a)`.
-  `conductorTools(d)` returns five tools: `dispatch`, `thread_status`,
-  `memory_save`, `pipeline_run`, and `rate_dispatch`.
+  `reg *taskRegistry` — the background dispatch registry, nil-safe on every
+  read path — and a mutex-guarded `managers map[string]*managed` cache keyed
+  by project ID) is built once per `styx mcp` invocation via
+  `newConductorDeps(a, rootCtx)`. The `rootCtx` parameter is `cmdMCP`'s
+  cancellable root context (see "MCP server" above); it flows straight into
+  `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks)` so every
+  background task this server ever spawns is rooted on the server's own
+  lifetime, not any single tool call's. `conductorTools(d)` returns five
+  tools: `dispatch`, `thread_status`, `memory_save`, `pipeline_run`, and
+  `rate_dispatch`.
 - `conductorDeps.managerFor(alias)` lazily binds a project exactly the way
   `replSession.bind` does (`cmd/styx/repl.go`): opens `<memDir>/<projectID>.db`
   via `memory.Open`, loads `agent.LoadThreads(projectID)`, wires the
@@ -953,10 +981,60 @@ REPL loop.
   agent.TurnResult, dispatchErr error) (map[string]any, error)` method —
   built from a `dispatchMeta{ProjectID, Thread, CLI, Model, Risk, Signals,
   TaskID, Background, Start}` struct assembled before `Manager.Dispatch`
-  runs. `finishDispatch` is the function background task completions
-  (Task 7's async dispatch) share with this synchronous path — `TaskID`/
-  `Background` exist on `dispatchMeta` today only for that reuse; the sync
-  path always passes `TaskID: ""`, `Background: false`.
+  runs. `finishDispatch` is the function background task completions share
+  with this synchronous path — reused verbatim, not reimplemented.
+- **`background: bool`** — `dispatch` takes an optional `background`
+  argument. `false`/omitted is the synchronous path described above,
+  unchanged. `true` spawns a `taskRegistry` task and returns
+  `{task_id, thread, cli, status}` immediately instead of waiting for the
+  turn to finish; `collect` (Task 8) later fetches the result. Spawn-time
+  work runs in this fixed order, deliberately front-loaded so failures are
+  synchronous and cheap — nothing here touches the (potentially expensive)
+  project/thread resolution that follows:
+  1. The same arg validation as sync (unknown cli, empty message, invalid
+     risk).
+  2. **Ship/ollama rejection**: `risk: ship` background dispatches are
+     rejected — the confirm-token handshake is interactive and cannot
+     survive a tool call returning immediately — as are `cli: ollama`
+     background dispatches, since one-shots are already local and fast
+     enough to run synchronously. Both are plain errors naming `"background"`
+     / `"ollama"` respectively.
+  3. A nil `d.reg` (registry unavailable) is rejected loudly rather than
+     silently falling back to sync.
+  4. **`(*conductorDeps).spawnBudgetCheck(ctx, cli) error`** — refuses the
+     spawn when `tracker.ShouldCircuitBreak(ctx, cli, budget.BreakerThreshold,
+     budget.BreakerWindow)` reports the channel's circuit open, or when
+     `tracker.UsedPct(ctx, cli)` is at or over that channel's `cap_pct`
+     (`capPctFor(routing, cli)`, reading `Budget.{Claude,Codex,Agy}.CapPct`;
+     ollama never reaches here). A background task that would immediately
+     fail on budget/circuit grounds is refused at spawn time instead of
+     burning a registry slot only to fail invisibly later.
+  5. Only past all four checks does project/thread resolution happen, after
+     which (in the thread branch, right after `meta := dispatchMeta{...}` is
+     assembled) the background fork builds an `agent.DispatchSpec` and a
+     `runFn(bctx, id)` closure — `bctx` is the registry's root context, not
+     this call's `ctx` — that sets `bmeta.Background = true; bmeta.TaskID =
+     id`, runs `m.mgr.Dispatch(bctx, spec, nil)` (no progress callback: this
+     tool call's JSON-RPC exchange is long gone by the time it completes),
+     and finishes through the same `d.finishDispatch(bctx, bmeta, res,
+     derr)` as sync. `d.reg.Spawn(taskSpec{...}, runFn)` registers it and
+     returns immediately with `{task_id, thread, cli, status}`
+     (`status` is `"running"` or `"queued"` per the registry's cap/ordering
+     rules — see "Background task registry" below).
+- **Sync busy-thread guard.** Immediately after the background branch
+  returns (so it never reaches here), a **synchronous** dispatch checks
+  `d.reg.Busy(m.mgr.ProjectID, thread, in.Risk)` and, if a live background
+  task already owns that thread or that project's edit-risk write lock,
+  errors `thread %q is busy with background task %s — collect it, wait, or
+  use another thread` instead of proceeding. This asymmetry is deliberate: a
+  **background** dispatch that collides with another live task QUEUES (the
+  registry's ordering rules handle it silently — see "Background task
+  registry"); a **synchronous** dispatch that collides cannot queue, because
+  the caller is blocked waiting on this call, so it errors loudly instead of
+  interleaving with a stateful thread's other in-flight turn. `Busy` is
+  nil-safe, so this guard is a no-op (never busy) when `d.reg` is nil —
+  existing sync dispatch behavior is unchanged when `background` is absent
+  and the registry isn't wired (e.g. most unit tests).
 - `thread_status(project?)` — resolves the project via the same
   `managerFor` and returns `{threads: []string}` from
   `agent.Manager.StatusLines()` (name, CLI, turn count, context-window
@@ -1010,9 +1088,13 @@ it owns every background task of one `styx mcp` process and enforces the cap
 and ordering rules that keep background work from racing a project's own
 stateful sessions. Task 5 lands the registry itself (cap, ordering,
 collect/claim); Task 6 wires the state-file mirror (`writeTaskFile`) and
-startup orphan adoption; Task 7+ wire the `dispatch(background: true)` /
-`collect` tool surface on top, including registering `r.dir` and calling
-`adoptOrphanedTaskFiles`/`adoptOrphans` at `styx mcp` startup.
+startup orphan adoption; Task 7 wires the `dispatch(background: true)` tool
+surface on top (see "Conductor MCP tools" above) and `cmdMCP`'s startup
+sequencing — constructing the registry on the server's cancellable root
+context, registering `r.dir`, and calling
+`adoptOrphanedTaskFiles`/`adoptOrphans` before serving (see "MCP server"
+above); `collect` (Task 8) is the read side that surfaces `Get`/`Claim`
+results to the caller.
 
 - **States** — `taskQueued` ("queued"), `taskRunning` ("running"),
   `taskDone` ("done"), `taskError` ("error"), `taskOrphaned` ("orphaned").
@@ -1054,7 +1136,7 @@ startup orphan adoption; Task 7+ wire the `dispatch(background: true)` /
 - **Claim semantics** — a finished task (done/error/orphaned) stays
   unclaimed until `Claim(id)` sets `Claimed = true`; `StatusLine` only lists
   unclaimed terminal tasks (as `"<id> <state> unclaimed — call collect"`),
-  so once the caller has read a result via `collect` (Task 7+) it stops
+  so once the caller has read a result via `collect` (Task 8) it stops
   resurfacing on every status line. `run` errors are never swallowed: a
   failed task's `Err` field carries `err.Error()`, surfaced through `Get`/
   `Snapshot`/`StatusLine`, not dropped.

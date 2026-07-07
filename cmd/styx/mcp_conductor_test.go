@@ -506,3 +506,80 @@ func TestRateDispatchStampsMostRecentOutcome(t *testing.T) {
 		t.Fatal("missing thread_or_task must error")
 	}
 }
+
+func TestDispatchBackgroundRejectsShipAndOllama(t *testing.T) {
+	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff)}
+	_, err := callTool(t, d, "dispatch", map[string]any{
+		"cli": "codex", "message": "ship it", "risk": "ship", "background": true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "background") {
+		t.Fatalf("ship-risk background dispatch must be rejected at spawn, got %v", err)
+	}
+	_, err = callTool(t, d, "dispatch", map[string]any{
+		"cli": "ollama", "message": "quick", "risk": "read", "background": true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ollama") {
+		t.Fatalf("ollama background dispatch must be rejected, got %v", err)
+	}
+}
+
+func TestDispatchBackgroundSpawnBudgetCheck(t *testing.T) {
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	// Trip the circuit: 3 failures inside the breaker window.
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if err := bud.Record(ctx, budget.Event{Channel: "codex", Verb: "thread", Success: false, ErrorKind: "5xx"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := &conductorDeps{
+		gate: shipgate.New(shipgate.ModeOff),
+		a:    &app{tracker: bud, routing: config.Routing{}},
+		reg:  newTaskRegistry(context.Background(), 4),
+	}
+	_, err = callTool(t, d, "dispatch", map[string]any{
+		"cli": "codex", "message": "long task", "risk": "read", "background": true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "circuit") {
+		t.Fatalf("spawn must fail synchronously on an open circuit, got %v", err)
+	}
+}
+
+func TestDispatchSyncBusyThreadGuard(t *testing.T) {
+	reg := newTaskRegistry(context.Background(), 4)
+	run1, started1, release1 := blockingRun(nil)
+	reg.Spawn(taskSpec{ProjectID: "proj1", Thread: "codex", CLI: "codex", Risk: "edit"}, run1)
+	<-started1
+	defer close(release1)
+
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	projDir := t.TempDir()
+	if err := config.SaveProjects([]config.Project{{ID: "proj1", Name: "proj1", Path: projDir}}); err != nil {
+		t.Fatal(err)
+	}
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	d := &conductorDeps{
+		a: &app{
+			routing:  config.Routing{Brain: config.BrainConfig{ContextThresholdPct: 70}, Tiers: map[string]string{}},
+			tracker:  bud,
+			channels: map[string]channel.Channel{},
+		},
+		gate: shipgate.New(shipgate.ModeOff), emb: replEmbedder{},
+		managers: map[string]*managed{}, reg: reg,
+	}
+	_, err = callTool(t, d, "dispatch", map[string]any{
+		"project": "proj1", "thread": "codex", "cli": "codex", "message": "hi", "risk": "read",
+	})
+	if err == nil || !strings.Contains(err.Error(), "busy") || !strings.Contains(err.Error(), "t1") {
+		t.Fatalf("sync dispatch to a thread with a live background task must error naming it, got %v", err)
+	}
+}

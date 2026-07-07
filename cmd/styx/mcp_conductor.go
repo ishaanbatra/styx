@@ -43,21 +43,56 @@ type conductorDeps struct {
 	a    *app
 	gate *shipgate.Gate
 	emb  memory.Embedder
+	reg  *taskRegistry // background dispatch registry (nil-safe on read paths)
 
 	mu       sync.Mutex
 	managers map[string]*managed
 }
 
 // newConductorDeps wires conductorDeps the same way cmdMCP wires the rest of
-// the app: real ollama embedder, ship gate from routing.toml's
-// [conductor] section (default "handshake").
-func newConductorDeps(a *app) *conductorDeps {
+// the app: real ollama embedder, ship gate + background-task cap from
+// routing.toml's [conductor] section, task registry rooted on the server's
+// context (background work dies with the server — no daemons).
+func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 	return &conductorDeps{
 		a:        a,
 		gate:     shipgate.New(shipgate.Mode(a.routing.Conductor.ShipGate)),
 		emb:      memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel),
+		reg:      newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks),
 		managers: map[string]*managed{},
 	}
+}
+
+// capPctFor returns the routing.toml cap_pct for a channel (0 = no cap).
+func capPctFor(r config.Routing, cli string) float64 {
+	switch cli {
+	case "claude":
+		return r.Budget.Claude.CapPct
+	case "codex":
+		return r.Budget.Codex.CapPct
+	case "agy":
+		return r.Budget.Agy.CapPct
+	}
+	return 0
+}
+
+// spawnBudgetCheck refuses a background spawn when the target channel is
+// circuit-open or over its budget cap — spawn-time failures must be
+// synchronous errors, never background losses discovered at collect time.
+func (d *conductorDeps) spawnBudgetCheck(ctx context.Context, cli string) error {
+	if broken, err := d.a.tracker.ShouldCircuitBreak(ctx, cli, budget.BreakerThreshold, budget.BreakerWindow); err != nil {
+		return fmt.Errorf("spawn budget check: %w", err)
+	} else if broken {
+		return fmt.Errorf("channel %s circuit is open (recent failures) — check channel_health before dispatching", cli)
+	}
+	pct, err := d.a.tracker.UsedPct(ctx, cli)
+	if err != nil {
+		return fmt.Errorf("spawn budget check: %w", err)
+	}
+	if cap := capPctFor(d.a.routing, cli); cap > 0 && pct >= cap {
+		return fmt.Errorf("channel %s is over budget (%.0f%% used, cap %.0f%%) — pick another channel or wait", cli, pct, cap)
+	}
+	return nil
 }
 
 // managerFor lazily binds a project. An empty alias resolves to the server's
@@ -219,6 +254,7 @@ type dispatchArgs struct {
 	Risk         string   `json:"risk"`
 	ExtraRoots   []string `json:"extra_roots"`
 	ConfirmToken string   `json:"confirm_token"`
+	Background   bool     `json:"background"`
 }
 
 // conductorTools builds the dispatch + thread_status tool set bound to d.
@@ -240,6 +276,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					"risk":          map[string]any{"type": "string", "enum": []string{"read", "edit", "ship"}},
 					"extra_roots":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 					"confirm_token": map[string]any{"type": "string"},
+					"background":    map[string]any{"type": "boolean", "description": "true = return a task_id immediately and run in the background; collect fetches the result"},
 				},
 				"required": []string{"cli", "message", "risk"},
 			},
@@ -258,6 +295,20 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				}
 				if in.Risk != "read" && in.Risk != "edit" && in.Risk != "ship" {
 					return nil, fmt.Errorf("risk must be read|edit|ship, got %q", in.Risk)
+				}
+				if in.Background {
+					if in.Risk == "ship" {
+						return nil, fmt.Errorf("ship-risk dispatch cannot run in background — the confirmation handshake is interactive; dispatch it synchronously")
+					}
+					if in.CLI == "ollama" {
+						return nil, fmt.Errorf("ollama one-shots are synchronous (local and fast) — drop background")
+					}
+					if d.reg == nil {
+						return nil, fmt.Errorf("background dispatch unavailable (no task registry)")
+					}
+					if err := d.spawnBudgetCheck(ctx, in.CLI); err != nil {
+						return nil, err
+					}
 				}
 				start := time.Now()
 				if in.Risk == "ship" {
@@ -325,6 +376,33 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					ProjectID: m.mgr.ProjectID, Thread: thread, CLI: in.CLI,
 					Model: model, Risk: in.Risk, Signals: dispatchSignals(in.Message),
 					Start: start,
+				}
+				if in.Background {
+					spec := agent.DispatchSpec{
+						Thread: in.Thread, CLI: in.CLI, Model: model,
+						Message: in.Message, ExtraRoots: in.ExtraRoots,
+						ReadOnly: in.Risk == "read",
+					}
+					runFn := func(bctx context.Context, id string) (map[string]any, error) {
+						// bctx is the server's root context: the task survives
+						// this tool call returning and dies with the server.
+						// No progress notifications mid-flight (this call's
+						// JSON-RPC exchange is long gone); completion
+						// bookkeeping is the same finishDispatch as sync.
+						bmeta := meta
+						bmeta.Background = true
+						bmeta.TaskID = id
+						res, derr := m.mgr.Dispatch(bctx, spec, nil)
+						return d.finishDispatch(bctx, bmeta, res, derr)
+					}
+					id, state := d.reg.Spawn(taskSpec{
+						Project: in.Project, ProjectID: m.mgr.ProjectID, Thread: thread,
+						CLI: in.CLI, Model: model, Risk: in.Risk,
+					}, runFn)
+					return map[string]any{"task_id": id, "thread": thread, "cli": in.CLI, "status": state}, nil
+				}
+				if blocker, busy := d.reg.Busy(m.mgr.ProjectID, thread, in.Risk); busy {
+					return nil, fmt.Errorf("thread %q is busy with background task %s — collect it, wait, or use another thread", thread, blocker)
 				}
 				notify, hasNotify := mcpserver.ProgressFn(ctx)
 				var events int
