@@ -12,6 +12,8 @@ import (
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/memory"
+	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/shipgate"
 )
 
@@ -337,6 +339,56 @@ func TestMemorySaveValidatesKind(t *testing.T) {
 	}
 	if _, err := callTool(t, d, "memory_save", map[string]any{"kind": "decision", "text": ""}); err == nil {
 		t.Fatal("empty text must error")
+	}
+}
+
+func TestMemorySaveRoutesLearningKindsToGlobalStore(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	d := &conductorDeps{
+		gate:     shipgate.New(shipgate.ModeOff),
+		emb:      replEmbedder{},
+		managers: map[string]*managed{},
+	}
+	res, err := callTool(t, d, "memory_save", map[string]any{
+		"kind": "retrospective", "text": "worked: codex on specced tasks / didn't: agy timeouts",
+	})
+	if err != nil {
+		t.Fatalf("memory_save retrospective: %v", err)
+	}
+	if res["saved"] != true {
+		t.Fatalf("want saved=true, got %v", res)
+	}
+	if _, err := callTool(t, d, "memory_save", map[string]any{
+		"kind": "user-preference", "text": "prefers table-driven tests",
+	}); err != nil {
+		t.Fatalf("memory_save user-preference: %v", err)
+	}
+
+	// Both landed in global.db — not a project store (note: no project was
+	// even resolvable here; global kinds must not require one).
+	memDir, err := paths.MemoryDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	glob, err := memory.Open(filepath.Join(memDir, "global.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer glob.Close()
+	items, err := glob.All(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("want 2 global items, got %d", len(items))
+	}
+	kinds := map[memory.Kind]bool{items[0].Kind: true, items[1].Kind: true}
+	if !kinds[memory.KindRetrospective] || !kinds[memory.KindUserPreference] {
+		t.Fatalf("wrong kinds in global store: %+v", items)
+	}
+	if items[0].Scope != "global" {
+		t.Fatalf("learning kinds default to global scope, got %q", items[0].Scope)
 	}
 }
 

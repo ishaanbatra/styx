@@ -1009,8 +1009,10 @@ REPL loop.
 
 - `conductorDeps` (`a *app`, `gate *shipgate.Gate`, `emb memory.Embedder`,
   `reg *taskRegistry` — the background dispatch registry, nil-safe on every
-  read path — and a mutex-guarded `managers map[string]*managed` cache keyed
-  by project ID) is built once per `styx mcp` invocation via
+  read path — a mutex-guarded `managers map[string]*managed` cache keyed by
+  project ID, and a mutex-guarded `gmem *memory.Store` — lazy handle on the
+  shared `global.db`, opened on first use via `globalMem()` and cached for
+  the life of the process) is built once per `styx mcp` invocation via
   `newConductorDeps(a, rootCtx)`. The `rootCtx` parameter is `cmdMCP`'s
   cancellable root context (see "MCP server" above); it flows straight into
   `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks)` so every
@@ -1156,11 +1158,19 @@ REPL loop.
   initialized to `[]string{}`, never nil, so `tasks` is likewise always a
   JSON array (`[]`, never `null`) even when nothing is outstanding.
 - `memory_save(project?, kind, text, scope?)` — validates `kind` against
-  `memory.KindFact/KindDecision/KindTodo/KindRoutingPreference` (any other
-  value errors loudly) and requires non-empty `text`, then embeds via
-  `d.emb.Embed` and writes through `managerFor(project).mem.Add` with
-  `Source: "conductor"`, `Confidence: 0.9`, and `scope` defaulting to
-  `"project"`. Returns `{saved, id}`.
+  `memory.KindFact/KindDecision/KindTodo/KindRoutingPreference` plus the two
+  learning kinds `KindUserPreference` ("user-preference") and
+  `KindRetrospective` ("retrospective") (any other value errors loudly) and
+  requires non-empty `text`, then embeds via `d.emb.Embed`. Routing forks on
+  kind: the two learning kinds describe the user/session, not one repo, so
+  they write through `d.globalMem()` — a lazy, mutex-guarded, cached handle
+  on a shared `global.db` under `paths.MemoryDir()` (opened once per
+  `conductorDeps`, no project resolution needed) — with `Project: ""` and
+  `scope` defaulting to `"global"`; the launch-time guidance injection
+  (Task 7) reads this same store. All other kinds keep writing through
+  `managerFor(project).mem.Add` with `scope` defaulting to `"project"`.
+  Every write uses `Source: "conductor"`, `Confidence: 0.9`. Returns
+  `{saved, id}`.
 - `pipeline_run(pipeline, arg?, confirm_token?)` — `pipeline` is one of
   `research|review|intel|auto`; an unknown value is rejected **before** the
   ship gate so it errors loudly regardless of gate mode. `auto` (which

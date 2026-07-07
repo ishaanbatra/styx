@@ -47,6 +47,7 @@ type conductorDeps struct {
 
 	mu       sync.Mutex
 	managers map[string]*managed
+	gmem     *memory.Store // lazy global.db handle for learning kinds
 }
 
 // newConductorDeps wires conductorDeps the same way cmdMCP wires the rest of
@@ -114,6 +115,30 @@ func (d *conductorDeps) managerFor(alias string) (*managed, error) {
 			alias, err, registeredProjectNames())
 	}
 	return d.managerForProject(p)
+}
+
+// globalMem lazily opens the shared global memory store. user-preference and
+// retrospective memories describe the user, not a repo, so they live in
+// global.db — the same store launch-time guidance injection reads.
+func (d *conductorDeps) globalMem() (*memory.Store, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.gmem != nil {
+		return d.gmem, nil
+	}
+	memDir, err := paths.MemoryDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := paths.EnsureDir(memDir); err != nil {
+		return nil, err
+	}
+	s, err := memory.Open(filepath.Join(memDir, "global.db"))
+	if err != nil {
+		return nil, fmt.Errorf("open global memory: %w", err)
+	}
+	d.gmem = s
+	return s, nil
 }
 
 // registeredProjectNames renders the registry for MCP error messages.
@@ -495,7 +520,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 			Description: "Persist a durable fact, decision, todo, or routing preference to styx memory.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
 				"project": map[string]any{"type": "string", "description": "registered project alias; empty = the project styx was launched in"},
-				"kind":    map[string]any{"type": "string", "enum": []string{"fact", "decision", "todo", "routing-preference"}},
+				"kind":    map[string]any{"type": "string", "enum": []string{"fact", "decision", "todo", "routing-preference", "user-preference", "retrospective"}},
 				"text":    map[string]any{"type": "string"},
 				"scope":   map[string]any{"type": "string"},
 			}, "required": []string{"kind", "text"}},
@@ -505,16 +530,32 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					return nil, fmt.Errorf("memory_save args: %w", err)
 				}
 				switch memory.Kind(in.Kind) {
-				case memory.KindFact, memory.KindDecision, memory.KindTodo, memory.KindRoutingPreference:
+				case memory.KindFact, memory.KindDecision, memory.KindTodo, memory.KindRoutingPreference,
+					memory.KindUserPreference, memory.KindRetrospective:
 				default:
 					return nil, fmt.Errorf("unknown kind %q", in.Kind)
 				}
 				if in.Text == "" {
 					return nil, fmt.Errorf("text is required")
 				}
-				m, err := d.managerFor(in.Project)
-				if err != nil {
-					return nil, err
+				kind := memory.Kind(in.Kind)
+				var store *memory.Store
+				projectName := ""
+				defaultScope := "project"
+				if kind == memory.KindUserPreference || kind == memory.KindRetrospective {
+					// Learning kinds are about the user/session, not one repo:
+					// they live in global.db (no project resolution needed).
+					g, err := d.globalMem()
+					if err != nil {
+						return nil, err
+					}
+					store, defaultScope = g, "global"
+				} else {
+					m, err := d.managerFor(in.Project)
+					if err != nil {
+						return nil, err
+					}
+					store, projectName = m.mem, m.mgr.Project.Name
 				}
 				vec, err := d.emb.Embed(ctx, in.Text)
 				if err != nil {
@@ -522,11 +563,11 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				}
 				scope := in.Scope
 				if scope == "" {
-					scope = "project"
+					scope = defaultScope
 				}
-				id, err := m.mem.Add(ctx, memory.Item{
-					Kind: memory.Kind(in.Kind), Text: in.Text, Source: "conductor",
-					Project: m.mgr.Project.Name, Scope: scope, Confidence: 0.9, Embedding: vec,
+				id, err := store.Add(ctx, memory.Item{
+					Kind: kind, Text: in.Text, Source: "conductor",
+					Project: projectName, Scope: scope, Confidence: 0.9, Embedding: vec,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("save memory: %w", err)
