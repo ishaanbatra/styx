@@ -271,6 +271,26 @@ func (r *taskRegistry) StatusLine() string {
 	return strings.Join(parts, "; ")
 }
 
+// taskLine renders one task for thread_status / collect pending summaries.
+func taskLine(t bgTask) string {
+	switch t.State {
+	case taskRunning:
+		return fmt.Sprintf("%s %s (%s, thread %s, %s)", t.ID, t.State, t.Spec.CLI, t.Spec.Thread, elapsedShort(time.Since(t.Started)))
+	case taskQueued:
+		behind := "at cap"
+		if t.QueuedBehind != "" {
+			behind = "behind " + t.QueuedBehind
+		}
+		return fmt.Sprintf("%s queued %s (%s, thread %s, %s)", t.ID, behind, t.Spec.CLI, t.Spec.Thread, elapsedShort(time.Since(t.Created)))
+	default:
+		claimed := ""
+		if !t.Claimed {
+			claimed = " unclaimed"
+		}
+		return fmt.Sprintf("%s %s%s (%s, thread %s)", t.ID, t.State, claimed, t.Spec.CLI, t.Spec.Thread)
+	}
+}
+
 // elapsedShort renders a duration as 12s / 4m03s / 1h12m for status lines.
 func elapsedShort(d time.Duration) string {
 	d = d.Round(time.Second)

@@ -245,6 +245,35 @@ func (d *conductorDeps) managerForProject(p project.Project) (*managed, error) {
 	return m, nil
 }
 
+// collectOne shapes one task's collect payload. Finished tasks (done, error,
+// orphaned) are claimed by being collected; live tasks report status only.
+func collectOne(reg *taskRegistry, tk bgTask) map[string]any {
+	switch tk.State {
+	case taskQueued, taskRunning:
+		out := map[string]any{
+			"task_id": tk.ID, "status": tk.State,
+			"elapsed_s": math.Round(time.Since(tk.Created).Seconds()*10) / 10,
+		}
+		if tk.QueuedBehind != "" {
+			out["queued_behind"] = tk.QueuedBehind
+		}
+		return out
+	case taskDone:
+		out := map[string]any{"task_id": tk.ID, "status": taskDone}
+		for k, v := range tk.Result {
+			out[k] = v
+		}
+		reg.Claim(tk.ID)
+		return out
+	default: // error, orphaned
+		reg.Claim(tk.ID)
+		return map[string]any{
+			"task_id": tk.ID, "status": tk.State, "error": tk.Err,
+			"thread": tk.Spec.Thread, "cli": tk.Spec.CLI,
+		}
+	}
+}
+
 type dispatchArgs struct {
 	Project      string   `json:"project"`
 	Thread       string   `json:"thread"`
@@ -452,7 +481,13 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				if err != nil {
 					return nil, err
 				}
-				return map[string]any{"threads": m.mgr.StatusLines()}, nil
+				tasks := []string{}
+				for _, tk := range d.reg.Snapshot() {
+					if tk.State == taskQueued || tk.State == taskRunning || !tk.Claimed {
+						tasks = append(tasks, taskLine(tk))
+					}
+				}
+				return map[string]any{"threads": m.mgr.StatusLines(), "tasks": tasks}, nil
 			},
 		},
 		{
@@ -594,6 +629,43 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					return nil, err
 				}
 				return map[string]any{"rated": true, "outcome_id": id, "target": in.ThreadOrTask}, nil
+			},
+		},
+		{
+			Name: "collect",
+			Description: "Fetch background dispatch results. With task_id: that task's result " +
+				"(or its live status). Without: every finished-unclaimed result plus one-line " +
+				"summaries of running/queued tasks.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
+				"task_id": map[string]any{"type": "string", "description": "task id from dispatch background:true; omit to collect everything finished"},
+			}},
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in struct {
+					TaskID string `json:"task_id"`
+				}
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("collect args: %w", err)
+				}
+				if in.TaskID != "" {
+					tk, ok := d.reg.Get(in.TaskID)
+					if !ok {
+						return nil, fmt.Errorf("unknown task %q — thread_status lists live and unclaimed tasks", in.TaskID)
+					}
+					return collectOne(d.reg, tk), nil
+				}
+				results := []map[string]any{}
+				pending := []string{}
+				for _, tk := range d.reg.Snapshot() {
+					switch tk.State {
+					case taskQueued, taskRunning:
+						pending = append(pending, taskLine(tk))
+					default:
+						if !tk.Claimed {
+							results = append(results, collectOne(d.reg, tk))
+						}
+					}
+				}
+				return map[string]any{"results": results, "pending": pending}, nil
 			},
 		},
 	}

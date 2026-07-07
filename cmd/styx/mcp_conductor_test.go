@@ -176,6 +176,11 @@ func TestDispatchHappyPath(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("threads = %v, want 1 line", statusRes["threads"])
 	}
+
+	// thread_status carries background task rows (always an array).
+	if _, ok := statusRes["tasks"].([]any); !ok {
+		t.Fatalf("thread_status must include a tasks array, got %T", statusRes["tasks"])
+	}
 }
 
 // TestDispatchOllamaOneShotRecordsUsage is a regression test: the ollama
@@ -581,5 +586,84 @@ func TestDispatchSyncBusyThreadGuard(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "busy") || !strings.Contains(err.Error(), "t1") {
 		t.Fatalf("sync dispatch to a thread with a live background task must error naming it, got %v", err)
+	}
+}
+
+func TestCollectSingleTaskLifecycle(t *testing.T) {
+	reg := newTaskRegistry(context.Background(), 4)
+	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff), reg: reg}
+	run1, started1, release1 := blockingRun(map[string]any{"text": "answer", "cli": "codex"})
+	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "read"}, run1)
+	<-started1
+
+	// Unfinished: status + elapsed, NOT claimed.
+	res, err := callTool(t, d, "collect", map[string]any{"task_id": id})
+	if err != nil {
+		t.Fatalf("collect running: %v", err)
+	}
+	if res["status"] != "running" {
+		t.Fatalf("want running, got %v", res)
+	}
+	if _, ok := res["elapsed_s"]; !ok {
+		t.Fatal("unfinished collect must report elapsed_s")
+	}
+
+	close(release1)
+	waitFor(t, "done", func() bool { return state(reg, id) == taskDone })
+
+	// Finished: full result, marks claimed.
+	res, err = callTool(t, d, "collect", map[string]any{"task_id": id})
+	if err != nil {
+		t.Fatalf("collect done: %v", err)
+	}
+	if res["status"] != "done" || res["text"] != "answer" {
+		t.Fatalf("collect must return the dispatch result, got %v", res)
+	}
+	if tk, _ := reg.Get(id); !tk.Claimed {
+		t.Fatal("collecting a finished task must claim it")
+	}
+
+	// Unknown id: loud error.
+	if _, err := callTool(t, d, "collect", map[string]any{"task_id": "t99"}); err == nil {
+		t.Fatal("unknown task id must error")
+	}
+}
+
+func TestCollectAllAndThreadStatusTasks(t *testing.T) {
+	reg := newTaskRegistry(context.Background(), 4)
+	runA, startedA, releaseA := blockingRun(map[string]any{"text": "A"})
+	idA, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "a", CLI: "codex", Risk: "read"}, runA)
+	<-startedA
+	close(releaseA)
+	waitFor(t, "A done", func() bool { return state(reg, idA) == taskDone })
+	runB, startedB, releaseB := blockingRun(nil)
+	idB, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "b", CLI: "claude", Risk: "read"}, runB)
+	<-startedB
+	defer close(releaseB)
+
+	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff), reg: reg}
+	res, err := callTool(t, d, "collect", map[string]any{})
+	if err != nil {
+		t.Fatalf("collect all: %v", err)
+	}
+	results, _ := res["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("want 1 finished result, got %v", res["results"])
+	}
+	first, _ := results[0].(map[string]any)
+	if first["task_id"] != idA || first["text"] != "A" {
+		t.Fatalf("finished result mismatch: %v", first)
+	}
+	pending, _ := res["pending"].([]any)
+	if len(pending) != 1 || !strings.Contains(pending[0].(string), idB) {
+		t.Fatalf("running task must be summarized in pending, got %v", res["pending"])
+	}
+	if tk, _ := reg.Get(idA); !tk.Claimed {
+		t.Fatal("collect all must claim returned results")
+	}
+	// Second collect: nothing left to return.
+	res, _ = callTool(t, d, "collect", map[string]any{})
+	if results, _ := res["results"].([]any); len(results) != 0 {
+		t.Fatalf("claimed results must not repeat, got %v", res["results"])
 	}
 }

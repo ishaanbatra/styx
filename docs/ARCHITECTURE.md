@@ -171,7 +171,7 @@ Shared pieces:
   `[]mcpserver.Tool`, unmarshaling raw JSON arguments before each dispatch.
   `cmdMCP(a *app, args []string)` constructs the server via `mcpserver.New("styx",
   mcpServerVersion, append(mcpTools(a), conductorTools(newConductorDeps(a))...))`,
-  logs readiness to stderr via `logStatus` (naming all twelve tools), and runs
+  logs readiness to stderr via `logStatus` (naming all thirteen tools), and runs
   `srv.Serve(ctx, os.Stdin, os.Stdout)` — stdout carries the JSON-RPC protocol
   only, nothing else. `const mcpServerVersion = "0.1.0"`. See the "MCP
   server" and "Conductor MCP tools" sections below for the
@@ -790,11 +790,11 @@ and writes a config file for it to read.
 ## MCP server (internal/mcpserver + cmd/styx/mcp.go + cmd/styx/mcp_conductor.go)
 
 A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the
-routing brain and the conductor dispatch surface as twelve tools for MCP
+routing brain and the conductor dispatch surface as thirteen tools for MCP
 hosts like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
 `channel_health`, `get_intel`, `refresh_intel`, `recall`, `dispatch`,
-`thread_status`, `memory_save`, `pipeline_run`, and `rate_dispatch`. Pure
-stdlib, no provider SDK; stdout carries the protocol,
+`thread_status`, `memory_save`, `pipeline_run`, `rate_dispatch`, and
+`collect`. Pure stdlib, no provider SDK; stdout carries the protocol,
 status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
 
@@ -908,9 +908,9 @@ REPL loop.
   cancellable root context (see "MCP server" above); it flows straight into
   `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks)` so every
   background task this server ever spawns is rooted on the server's own
-  lifetime, not any single tool call's. `conductorTools(d)` returns five
-  tools: `dispatch`, `thread_status`, `memory_save`, `pipeline_run`, and
-  `rate_dispatch`.
+  lifetime, not any single tool call's. `conductorTools(d)` returns six
+  tools: `dispatch`, `thread_status`, `memory_save`, `pipeline_run`,
+  `rate_dispatch`, and `collect`.
 - `conductorDeps.managerFor(alias)` lazily binds a project exactly the way
   `replSession.bind` does (`cmd/styx/repl.go`): opens `<memDir>/<projectID>.db`
   via `memory.Open`, loads `agent.LoadThreads(projectID)`, wires the
@@ -1036,12 +1036,18 @@ REPL loop.
   existing sync dispatch behavior is unchanged when `background` is absent
   and the registry isn't wired (e.g. most unit tests).
 - `thread_status(project?)` — resolves the project via the same
-  `managerFor` and returns `{threads: []string}` from
-  `agent.Manager.StatusLines()` (name, CLI, turn count, context-window
-  percent per thread). `StatusLines()` guarantees a non-nil `[]string{}`
-  when a project has no threads, so the JSON shape is always
+  `managerFor` and returns `{threads: []string, tasks: []string}`. `threads`
+  comes from `agent.Manager.StatusLines()` (name, CLI, turn count,
+  context-window percent per thread); `StatusLines()` guarantees a non-nil
+  `[]string{}` when a project has no threads, so the JSON shape is always
   `{"threads": []}`, never `{"threads": null}` — MCP consumers can rely on
-  the key always being an array.
+  the key always being an array. `tasks` is built fresh each call from
+  `d.reg.Snapshot()` (not project-scoped — it lists every background task
+  this server knows about): one `taskLine(tk)` entry per task that is
+  `taskQueued`/`taskRunning` OR terminal-and-unclaimed, so a caller sees
+  live and not-yet-collected work without a separate call. Always
+  initialized to `[]string{}`, never nil, so `tasks` is likewise always a
+  JSON array (`[]`, never `null`) even when nothing is outstanding.
 - `memory_save(project?, kind, text, scope?)` — validates `kind` against
   `memory.KindFact/KindDecision/KindTodo/KindRoutingPreference` (any other
   value errors loudly) and requires non-empty `text`, then embeds via
@@ -1080,6 +1086,38 @@ REPL loop.
   `Rating: "good"`, `false` writes `"bad"`; `note` is freeform and optional.
   Guidance baked into the tool description: rate only notable outcomes, not
   every dispatch. Returns `{rated: true, outcome_id, target}`.
+- `collect(task_id?)` — the read side of async dispatch (Task 8), backed by
+  the shared `collectOne(reg *taskRegistry, tk bgTask) map[string]any`
+  helper. Two call shapes:
+  - **With `task_id`**: `d.reg.Get(task_id)` first — an unknown id is a loud
+    `fmt.Errorf`, never a silent empty result. Live tasks (`taskQueued`/
+    `taskRunning`) return `{task_id, status, elapsed_s}` (`elapsed_s` since
+    `Created`, rounded to 0.1s) plus `queued_behind` when the task names a
+    specific blocker; nothing is claimed. Terminal tasks are **claimed as a
+    side effect of being collected**: `taskDone` returns a fresh
+    `map[string]any` seeded with `task_id`/`status: "done"` and every key
+    from `tk.Result` copied in (`for k, v := range tk.Result { out[k] = v
+    }` — a read of the registry-shared `Result` map, never a mutation of
+    it) before calling `reg.Claim(tk.ID)`; `taskError`/`taskOrphaned`
+    return `{task_id, status, error: tk.Err, thread, cli}` (the orphan
+    payload's `error` is the "lost when styx mcp exited" message set at
+    adoption time) and likewise claim. Once claimed, a task stops appearing
+    in `thread_status.tasks` and in a no-`task_id` `collect` call — but
+    remains fetchable by id from `Snapshot`/`Get` for the process lifetime.
+  - **Without `task_id`**: iterates `d.reg.Snapshot()` once. Live tasks are
+    summarized via `taskLine(tk)` into `pending` (no claim — a live task
+    can't be claimed); every unclaimed terminal task is passed through
+    `collectOne` into `results` (claiming each). Returns `{results:
+    []map[string]any, pending: []string}`, both initialized to empty
+    slices (never nil) so the JSON shape is always `{"results": [],
+    "pending": []}` at minimum — repeat calls after everything is claimed
+    return empty `results` rather than repeating prior payloads.
+  - `taskLine(t bgTask)` (`cmd/styx/mcp_tasks.go`) is the one-line renderer
+    shared by `collect`'s `pending` list and `thread_status.tasks`:
+    `taskRunning` → `"<id> running (<cli>, thread <thread>, <elapsed>)"`;
+    `taskQueued` → `"<id> queued <behind X|at cap> (<cli>, thread
+    <thread>, <elapsed>)"`; terminal states → `"<id> <state>[ unclaimed]
+    (<cli>, thread <thread>)"`.
 
 ### Background task registry (cmd/styx/mcp_tasks.go)
 
