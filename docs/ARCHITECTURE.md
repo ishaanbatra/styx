@@ -929,6 +929,29 @@ REPL loop.
   `agent.EventInit` ("session started"), `agent.EventResult` ("finishing"),
   and every 5th `agent.EventText` (throttled to avoid notification
   spam on streaming chatter); other event types emit nothing.
+  **Every dispatch completion — both the ollama one-shot branch and the
+  thread branch — also appends one `budget.Outcome` row** via
+  `(*Tracker).RecordOutcome` (see "Budget tracker" `outcomes` table): CLI,
+  resolved model, risk, wall-clock duration, real token counts, and
+  `Signals` (routing signals extracted from the raw message via
+  `dispatchSignals` → `signals.Extract("dispatch", []string{message},
+  config.Project{})`, comma-joined — recorded for learning, not routing,
+  since the conductor picks the cli explicitly). `ErrorKind` is `""` on
+  success, else the channel's `channel.ClassifiedError.Kind` when the
+  dispatch error wraps one, else `"other"` (`outcomeErrKind`). As with the
+  budget-event record above, an outcome-record failure is narrated via
+  `logStatus` and never fails an otherwise-completed dispatch — this is
+  the plan's one sanctioned soften of "never swallow errors". The thread
+  branch's post-dispatch bookkeeping (append the outcome row, wrap a
+  dispatch error as `dispatch %s: %w`, or shape the success result map) is
+  the shared `(*conductorDeps).finishDispatch(ctx, dispatchMeta, res
+  agent.TurnResult, dispatchErr error) (map[string]any, error)` method —
+  built from a `dispatchMeta{ProjectID, Thread, CLI, Model, Risk, Signals,
+  TaskID, Background, Start}` struct assembled before `Manager.Dispatch`
+  runs. `finishDispatch` is the function background task completions
+  (Task 7's async dispatch) share with this synchronous path — `TaskID`/
+  `Background` exist on `dispatchMeta` today only for that reuse; the sync
+  path always passes `TaskID: ""`, `Background: false`.
 - `thread_status(project?)` — resolves the project via the same
   `managerFor` and returns `{threads: []string}` from
   `agent.Manager.StatusLines()` (name, CLI, turn count, context-window

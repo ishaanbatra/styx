@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
@@ -367,5 +368,98 @@ func TestManagerForUnknownAliasListsRegistry(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "registered projects") {
 		t.Fatalf("error must list registered projects for the MCP consumer, got: %v", err)
+	}
+}
+
+func TestDispatchThreadAppendsOutcomeRow(t *testing.T) {
+	// Same scaffolding as TestDispatchHappyPath: fakeagent as `claude` on PATH.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "done")
+	fakeSrc, err := filepath.Abs("../../testdata/fakeagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	copyExecutable(t, fakeSrc, filepath.Join(binDir, "claude"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	projDir := t.TempDir()
+	if err := config.SaveProjects([]config.Project{{ID: "proj1", Name: "proj1", Path: projDir}}); err != nil {
+		t.Fatal(err)
+	}
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	d := &conductorDeps{
+		a: &app{
+			routing: config.Routing{
+				Brain: config.BrainConfig{Model: "haiku", ContextThresholdPct: 70},
+				Tiers: map[string]string{"haiku": "haiku"},
+			},
+			tracker:  bud,
+			channels: map[string]channel.Channel{},
+		},
+		gate:     shipgate.New(shipgate.ModeOff),
+		emb:      replEmbedder{},
+		managers: map[string]*managed{},
+	}
+
+	if _, err := callTool(t, d, "dispatch", map[string]any{
+		"project": "proj1", "cli": "claude",
+		"message": "refactor the loader architecture", "risk": "edit",
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	rows, err := bud.OutcomesSince(context.Background(), time.Time{})
+	if err != nil {
+		t.Fatalf("read outcomes: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 outcome row, got %d", len(rows))
+	}
+	o := rows[0]
+	if o.CLI != "claude" || o.Thread != "claude" || o.Risk != "edit" || o.Background {
+		t.Fatalf("outcome row mismatch: %+v", o)
+	}
+	if o.ErrorKind != "" {
+		t.Fatalf("success must record empty error kind, got %q", o.ErrorKind)
+	}
+	if !strings.Contains(o.Signals, "complex") {
+		t.Fatalf("signals must be extracted from the message (refactor => complex), got %q", o.Signals)
+	}
+	if o.TokensIn == 0 || o.DurationS < 0 {
+		t.Fatalf("tokens/duration must be recorded: %+v", o)
+	}
+}
+
+func TestDispatchOllamaAppendsOutcomeRow(t *testing.T) {
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	cap := &captureChannel{}
+	d := &conductorDeps{
+		gate: shipgate.New(shipgate.ModeOff),
+		a: &app{
+			channels: map[string]channel.Channel{"ollama": cap},
+			tracker:  bud,
+			routing:  config.Routing{Brain: config.BrainConfig{Model: "qwen2.5-coder:7b"}},
+		},
+	}
+	if _, err := callTool(t, d, "dispatch", map[string]any{
+		"cli": "ollama", "message": "say pong", "risk": "read",
+	}); err != nil {
+		t.Fatalf("ollama dispatch: %v", err)
+	}
+	rows, err := bud.OutcomesSince(context.Background(), time.Time{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("want 1 outcome row, got %d (%v)", len(rows), err)
+	}
+	if rows[0].CLI != "ollama" || rows[0].Thread != "" || rows[0].Model != "qwen2.5-coder:7b" {
+		t.Fatalf("ollama outcome mismatch: %+v", rows[0])
 	}
 }

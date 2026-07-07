@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/pipeline"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/shipgate"
+	"github.com/ishaanbatra/styx/internal/signals"
 	"github.com/ishaanbatra/styx/internal/target"
 )
 
@@ -90,6 +92,64 @@ func registeredProjectNames() string {
 		names[i] = p.Name
 	}
 	return strings.Join(names, ", ")
+}
+
+// dispatchSignals tags the dispatch message with routing signals for the
+// outcome row (comma-joined). The conductor picks the cli explicitly, so the
+// signals are recorded for learning, not for routing.
+func dispatchSignals(message string) string {
+	return strings.Join(signals.Extract("dispatch", []string{message}, config.Project{}), ",")
+}
+
+// outcomeErrKind classifies a dispatch error for the outcome row: the
+// channel's classified kind when available, else "other". "" on success.
+func outcomeErrKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ce *channel.ClassifiedError
+	if errors.As(err, &ce) {
+		return string(ce.Kind)
+	}
+	return "other"
+}
+
+// dispatchMeta carries what finishDispatch needs to append an outcome row
+// and shape the result map — the post-dispatch bookkeeping shared by the
+// synchronous handler and background task completions.
+type dispatchMeta struct {
+	ProjectID  string
+	Thread     string
+	CLI        string
+	Model      string
+	Risk       string
+	Signals    string
+	TaskID     string // "" for sync dispatches
+	Background bool
+	Start      time.Time
+}
+
+// finishDispatch appends the outcome row (success and failure alike; record
+// errors are narrated, never fail the dispatch — budget events are already
+// recorded inside Manager.Dispatch) and shapes the dispatch result map.
+func (d *conductorDeps) finishDispatch(ctx context.Context, meta dispatchMeta, res agent.TurnResult, dispatchErr error) (map[string]any, error) {
+	durS := math.Round(time.Since(meta.Start).Seconds()*10) / 10
+	if rerr := d.a.tracker.RecordOutcome(ctx, budget.Outcome{
+		Project: meta.ProjectID, Thread: meta.Thread, TaskID: meta.TaskID,
+		CLI: meta.CLI, Model: meta.Model, Signals: meta.Signals, Risk: meta.Risk,
+		DurationS: durS, TokensIn: res.InputTokens, TokensOut: res.OutputTokens,
+		ErrorKind: outcomeErrKind(dispatchErr), Background: meta.Background,
+	}); rerr != nil {
+		logStatus("outcome record (%s) failed: %v", meta.CLI, rerr)
+	}
+	if dispatchErr != nil {
+		return nil, fmt.Errorf("dispatch %s: %w", meta.CLI, dispatchErr)
+	}
+	return map[string]any{
+		"thread": meta.Thread, "cli": meta.CLI, "text": res.Text,
+		"tokens_in": res.InputTokens, "tokens_out": res.OutputTokens,
+		"model": meta.Model, "duration_s": durS,
+	}, nil
 }
 
 // managerForProject binds an already-resolved project (cached by project ID).
@@ -235,6 +295,14 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}); rerr != nil {
 						logStatus("budget record (ollama one-shot) failed: %v", rerr)
 					}
+					if rerr := d.a.tracker.RecordOutcome(ctx, budget.Outcome{
+						CLI: "ollama", Model: model, Signals: dispatchSignals(in.Message),
+						Risk: in.Risk, DurationS: math.Round(time.Since(start).Seconds()*10) / 10,
+						TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
+						ErrorKind: outcomeErrKind(err),
+					}); rerr != nil {
+						logStatus("outcome record (ollama one-shot) failed: %v", rerr)
+					}
 					if err != nil {
 						return nil, fmt.Errorf("ollama dispatch: %w", err)
 					}
@@ -248,6 +316,15 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				model := in.Model
 				if resolved, ok := d.a.routing.Tiers[model]; ok {
 					model = resolved
+				}
+				thread := in.Thread
+				if thread == "" {
+					thread = in.CLI
+				}
+				meta := dispatchMeta{
+					ProjectID: m.mgr.ProjectID, Thread: thread, CLI: in.CLI,
+					Model: model, Risk: in.Risk, Signals: dispatchSignals(in.Message),
+					Start: start,
 				}
 				notify, hasNotify := mcpserver.ProgressFn(ctx)
 				var events int
@@ -278,18 +355,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					Message: in.Message, ExtraRoots: in.ExtraRoots,
 					ReadOnly: in.Risk == "read",
 				}, onEvent)
-				if err != nil {
-					return nil, fmt.Errorf("dispatch %s: %w", in.CLI, err)
-				}
-				thread := in.Thread
-				if thread == "" {
-					thread = in.CLI
-				}
-				return map[string]any{
-					"thread": thread, "cli": in.CLI, "text": res.Text,
-					"tokens_in": res.InputTokens, "tokens_out": res.OutputTokens,
-					"model": model, "duration_s": math.Round(time.Since(start).Seconds()*10) / 10,
-				}, nil
+				return d.finishDispatch(ctx, meta, res, err)
 			},
 		},
 		{
