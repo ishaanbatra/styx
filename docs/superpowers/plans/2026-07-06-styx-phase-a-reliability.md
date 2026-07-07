@@ -1059,7 +1059,7 @@ Ollama unloads models after 5 idle minutes (3–10s cold reload) and defaults co
 **Interfaces:**
 - Produces: every styx→ollama request carries `keep_alive: "30m"`; chat requests whose estimated prompt tokens approach 4096 carry `options.num_ctx`; `preloadOllamaModels(a *app)` fire-and-forget at MCP server start.
 
-- [ ] **Step 1: Write the failing channel test**
+- [x] **Step 1: Write the failing channel test**
 
 Extend `TestSend_EmitsCorrectPayload` in `internal/channel/ollama/ollama_test.go` (it already decodes the posted body — add assertions):
 
@@ -1085,12 +1085,12 @@ func TestSend_SetsNumCtxForLargePrompts(t *testing.T) {
 
 (Mirror the existing test's server/decode scaffolding exactly — same `httptest.NewServer` + capture pattern already in the file.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/channel/ollama/ -v`
 Expected: FAIL on both new assertions.
 
-- [ ] **Step 3: Implement channel changes**
+- [x] **Step 3: Implement channel changes**
 
 `chatRequest` gains two fields:
 
@@ -1115,7 +1115,7 @@ if est := estimateTokens(prompt + req.System); est+1024 > 4096 {
 body, err := json.Marshal(creq)
 ```
 
-- [ ] **Step 4: Brain + embedder (same pattern)**
+- [x] **Step 4: Brain + embedder (same pattern)**
 
 `internal/brain/brain.go` — `brainChatRequest` gains `KeepAlive string \`json:"keep_alive,omitempty"\``; in `chat()` the literal gains `KeepAlive: "30m"` and the Options map gains num_ctx sizing:
 
@@ -1130,7 +1130,7 @@ if est := (len(system) + len(user)) / 4; est+1024 > 4096 {
 
 `internal/memory/embed.go` — `embedRequest` gains `KeepAlive string \`json:"keep_alive,omitempty"\``, set to `"30m"` in `Embed`. Test with an httptest server asserting the field.
 
-- [ ] **Step 5: Preload at MCP server start**
+- [x] **Step 5: Preload at MCP server start**
 
 In `cmd/styx/mcp.go`, inside `cmdMCP` before `srv.Serve(...)`:
 
@@ -1170,7 +1170,7 @@ func preloadOllamaModels(a *app) {
 
 (Add `"bytes"`, `"net/http"`, `"time"` imports as needed. An empty `/api/generate` call with just model+keep_alive loads the model — documented ollama preload idiom.)
 
-- [ ] **Step 5b: Batch-embed audit (spec A2 closeout)**
+- [x] **Step 5b: Batch-embed audit (spec A2 closeout)**
 
 The spec calls for batching multi-embed calls through `/api/embed`'s array input. Audit for loops that call `Embed` per item:
 
@@ -1178,7 +1178,7 @@ Run: `grep -rn "\.Embed(" --include="*.go" internal/ cmd/ | grep -v _test.go`
 
 If every call site embeds a single text per user action (expected today: recall query, memory_save, distillation, brief indexing), batching has no call site — record that in the commit message and move on; the backlog keeps it for when intel indexing embeds in bulk. If a loop IS found, add an `EmbedBatch(ctx, texts []string) ([][]float32, error)` method to `OllamaEmbedder` mirroring `Embed` with `"input": texts`, and use it in that loop (test with httptest asserting one POST for N inputs).
 
-- [ ] **Step 6: Brain prompt size audit**
+- [x] **Step 6: Brain prompt size audit**
 
 Add a regression test in `internal/brain/` (e.g. `prompt_size_test.go`):
 
@@ -1196,7 +1196,7 @@ func TestBrainPromptFitsDefaultContextOrSetsNumCtx(t *testing.T) {
 
 This documents the measured size in test output; the payload test from Step 4 is the actual gate.
 
-- [ ] **Step 7: Run everything + commit**
+- [x] **Step 7: Run everything + commit**
 
 Run: `make test` → green.
 

@@ -55,6 +55,29 @@ func TestSend_EmitsCorrectPayload(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("messages len = %d, want 2 (system + user)", len(msgs))
 	}
+	if gotBody["keep_alive"] != "30m" {
+		t.Errorf("keep_alive = %v, want 30m (avoid 5-min unload / cold reload)", gotBody["keep_alive"])
+	}
+}
+
+func TestSend_SetsNumCtxForLargePrompts(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Write([]byte(`{"message":{"content":"ok"}}`))
+	}))
+	defer srv.Close()
+	c := NewWithBaseURL(srv.URL)
+	// ~24k chars ≈ 6k estimated tokens > the 4096 ollama default.
+	big := strings.Repeat("x ", 12000)
+	_, err := c.Send(context.Background(), channel.Request{Model: "qwen2.5-coder:14b", Prompt: big})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts, _ := gotBody["options"].(map[string]any)
+	if opts == nil || opts["num_ctx"] == nil {
+		t.Fatal("large prompts must set options.num_ctx (ollama default 4096 silently truncates)")
+	}
 }
 
 func TestSend_NetworkErrorIsClassified(t *testing.T) {

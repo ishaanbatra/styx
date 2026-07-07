@@ -51,9 +51,11 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
-	Model    string        `json:"model"`
-	Stream   bool          `json:"stream"`
-	Messages []chatMessage `json:"messages"`
+	Model     string         `json:"model"`
+	Stream    bool           `json:"stream"`
+	KeepAlive string         `json:"keep_alive,omitempty"`
+	Options   map[string]any `json:"options,omitempty"`
+	Messages  []chatMessage  `json:"messages"`
 }
 
 type chatResponse struct {
@@ -82,7 +84,12 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 	}
 	msgs = append(msgs, chatMessage{Role: "user", Content: prompt})
 
-	body, err := json.Marshal(chatRequest{Model: req.Model, Stream: false, Messages: msgs})
+	creq := chatRequest{Model: req.Model, Stream: false, KeepAlive: "30m", Messages: msgs}
+	if est := estimateTokens(prompt + req.System); est+1024 > 4096 {
+		// Ollama defaults num_ctx to 4096 and silently truncates beyond it.
+		creq.Options = map[string]any{"num_ctx": est + 2048}
+	}
+	body, err := json.Marshal(creq)
 	if err != nil {
 		return channel.Response{}, fmt.Errorf("marshal request: %w", err)
 	}

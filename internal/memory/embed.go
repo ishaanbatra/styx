@@ -33,8 +33,9 @@ func NewOllamaEmbedder(baseURL, model string) *OllamaEmbedder {
 }
 
 type embedRequest struct {
-	Model string `json:"model"`
-	Input string `json:"input"`
+	Model     string `json:"model"`
+	Input     string `json:"input"`
+	KeepAlive string `json:"keep_alive,omitempty"`
 }
 
 type embedResponse struct {
@@ -43,7 +44,7 @@ type embedResponse struct {
 
 // Embed implements Embedder.
 func (e *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, err := json.Marshal(embedRequest{Model: e.model, Input: text})
+	body, err := json.Marshal(embedRequest{Model: e.model, Input: text, KeepAlive: "30m"})
 	if err != nil {
 		return nil, fmt.Errorf("marshal embed request: %w", err)
 	}

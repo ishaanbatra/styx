@@ -243,7 +243,12 @@ counts in `Response` are `len/4` estimates.
 - Claude one-shot requests keep `--model <alias>` when routed to a class alias
   and pass `--effort <effort>` when `Request.Effort` is set.
 - `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the macOS
-  Ollama app with a 20s wait if it's down.
+  Ollama app with a 20s wait if it's down. Every chat request carries
+  `keep_alive: "30m"` (ollama's default 5-minute idle unload otherwise forces
+  a 3-10s cold reload on the next call); when the estimated prompt tokens
+  (`len(prompt+system)/4`) plus 1024 headroom exceed ollama's 4096-token
+  default, `Send` also sets `options.num_ctx` to the estimate plus 2048 so
+  large prompts aren't silently truncated.
 - `decorator.go` — `WithProgress` narrates each Send as a progress stage;
   skipped for interactive sends (spinner would fight the child for the TTY).
   `WithTimeout` gives non-interactive sends a deadline while leaving
@@ -395,7 +400,13 @@ model-facing schema exposes risk only on dispatch items, taught via a few `read`
 `Action.Risk` exists but is code-derived (e.g. `auto` → ship), never model-set.
 `Action.Valid` performs local structural validation (including the risk enum)
 before the REPL trusts a model response; `ActionSchema` is sent to ollama as the
-structured-output format. Capability cards describe claude, codex, agy, and
+structured-output format. `chat()` sends `keep_alive: "30m"` on every brain
+call (avoids the 3-10s cold reload after ollama's 5-minute idle unload) and
+sets `options.num_ctx` to `(len(system)+len(user))/4 + 2048` whenever that
+estimate plus 1024 headroom would exceed ollama's 4096-token default — the
+~40-exemplar preamble routinely sits near/over that default (measured ~3.3k
+tokens for a minimal turn in `TestBrainPromptFitsDefaultContextOrSetsNumCtx`).
+Capability cards describe claude, codex, agy, and
 ollama on every brain turn; `styx doctor` uses the same cards as drift probes
 for expected CLI flags and resume support. `BuildPrompt` combines those cards
 with the current user utterance, rolling summary, recent turns, live-thread
@@ -609,7 +620,12 @@ so stale or low-confidence corrections fade at personal scale. In a
 multi-project REPL session, recall spans every bound repo's store plus the
 global store, giving cross-repo recall without an explicit scope hint. `Embedder`
 abstracts text to float32 vectors; the production `OllamaEmbedder` posts to
-`/api/embed` with a 30s HTTP client timeout and caller-provided context.
+`/api/embed` with a 30s HTTP client timeout and caller-provided context,
+carrying `keep_alive: "30m"` on every request so the embed model isn't evicted
+between calls. Every `Embed` call site embeds a single text per user action
+(recall query, `memory_save`, distillation, brief indexing, routing-preference
+correction, session-end summary) — no call site batches, so `EmbedBatch` stays
+unimplemented pending bulk-embedding intel indexing.
 
 ## Audit (internal/audit)
 
@@ -745,7 +761,12 @@ SDK; stdout carries the protocol,
 status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
 `cmd/styx/cmdMCP` builds the tool set as `append(mcpTools(a),
-conductorTools(newConductorDeps(a))...)`.
+conductorTools(newConductorDeps(a))...)`. Before `srv.Serve`, `cmdMCP` fires
+`go preloadOllamaModels(a)`: a fire-and-forget, 20s-timeout best-effort call
+to `/api/generate` with `keep_alive: "30m"` for `a.routing.Brain.Model` and
+`a.routing.Brain.EmbedModel`, so the first real dispatch/recall doesn't pay a
+cold model load while it overlaps with the host handshake. Failures are
+narrated via `logStatus` (stderr) and never fatal — ollama may simply be down.
 
 **`route` v2 additive fields.** `routeResult` gained five fields that v1
 consumers safely ignore (all `omitempty` except `blocked_by_budget`):

@@ -65,12 +65,13 @@ type brainChatMessage struct {
 }
 
 type brainChatRequest struct {
-	Model    string             `json:"model"`
-	Stream   bool               `json:"stream"`
-	Think    bool               `json:"think"`
-	Format   json.RawMessage    `json:"format"`
-	Options  map[string]any     `json:"options"`
-	Messages []brainChatMessage `json:"messages"`
+	Model     string             `json:"model"`
+	Stream    bool               `json:"stream"`
+	Think     bool               `json:"think"`
+	Format    json.RawMessage    `json:"format"`
+	KeepAlive string             `json:"keep_alive,omitempty"`
+	Options   map[string]any     `json:"options"`
+	Messages  []brainChatMessage `json:"messages"`
 }
 
 type brainChatResponse struct {
@@ -113,6 +114,11 @@ func (b *Ollama) Decide(ctx context.Context, t Turn) (Action, error) {
 }
 
 func (b *Ollama) chat(ctx context.Context, system, user string) (string, error) {
+	opts := map[string]any{"temperature": 0}
+	if est := (len(system) + len(user)) / 4; est+1024 > 4096 {
+		// Ollama defaults num_ctx to 4096 and silently truncates beyond it.
+		opts["num_ctx"] = est + 2048
+	}
 	body, err := json.Marshal(brainChatRequest{
 		Model:  b.Model,
 		Stream: false,
@@ -120,9 +126,10 @@ func (b *Ollama) chat(ctx context.Context, system, user string) (string, error) 
 		// schema-constrained classification, not a reasoning task; thinking adds
 		// many seconds per turn (blowing the sub-second target and the request
 		// timeout) and bleeds into the structured output, mis-slotting fields.
-		Think:   false,
-		Format:  ActionSchema,
-		Options: map[string]any{"temperature": 0},
+		Think:     false,
+		Format:    ActionSchema,
+		KeepAlive: "30m",
+		Options:   opts,
 		Messages: []brainChatMessage{
 			{Role: "system", Content: system},
 			{Role: "user", Content: user},

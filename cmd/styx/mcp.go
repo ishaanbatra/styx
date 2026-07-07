@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -628,5 +630,32 @@ func cmdMCP(a *app, args []string) error {
 	tools := append(mcpTools(a), conductorTools(newConductorDeps(a))...)
 	srv := mcpserver.New("styx", mcpServerVersion, tools)
 	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, thread_status, memory_save, pipeline_run)")
+	go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake
 	return srv.Serve(context.Background(), os.Stdin, os.Stdout)
+}
+
+// preloadOllamaModels warms the brain + embedding models with keep_alive so
+// the first real dispatch/recall doesn't pay a 3-10s cold load. Best-effort:
+// failures are narrated, never fatal (ollama may simply be down).
+func preloadOllamaModels(a *app) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, m := range []string{a.routing.Brain.Model, a.routing.Brain.EmbedModel} {
+		if m == "" {
+			continue
+		}
+		body, _ := json.Marshal(map[string]any{"model": m, "keep_alive": "30m"})
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			"http://localhost:11434/api/generate", bytes.NewReader(body))
+		if err != nil {
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			logStatus("ollama preload %s skipped: %v", m, err)
+			continue
+		}
+		resp.Body.Close()
+	}
 }

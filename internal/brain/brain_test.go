@@ -40,6 +40,32 @@ func min(a, b int) int {
 	return b
 }
 
+// fakeOllamaCapture serves /api/chat returning a fixed reply and captures the
+// posted body for payload assertions.
+func fakeOllamaCapture(t *testing.T, reply string, gotBody *map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": map[string]string{"role": "assistant", "content": reply},
+			"done":    true,
+		})
+	}))
+}
+
+func TestDecideEmitsKeepAlive(t *testing.T) {
+	var gotBody map[string]any
+	srv := fakeOllamaCapture(t, `{"action":"reply","reply":"hi","confidence":0.9}`, &gotBody)
+	defer srv.Close()
+	b := &Ollama{BaseURL: srv.URL, Model: "qwen3:4b"}
+	if _, err := b.Decide(context.Background(), Turn{Utterance: "hello"}); err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if gotBody["keep_alive"] != "30m" {
+		t.Errorf("keep_alive = %v, want 30m (avoid 5-min unload / cold reload)", gotBody["keep_alive"])
+	}
+}
+
 func TestDecideHappyPath(t *testing.T) {
 	srv := fakeOllama(t, `{"action":"dispatch","dispatches":[{"thread":"codex","message":"implement the fix","rationale":"well-scoped implementation"}],"confidence":0.9}`)
 	defer srv.Close()

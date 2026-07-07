@@ -40,6 +40,25 @@ func TestOllamaEmbedder(t *testing.T) {
 	}
 }
 
+func TestOllamaEmbedderEmitsKeepAlive(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"embeddings": [][]float64{{0.1, 0.2}},
+		})
+	}))
+	defer srv.Close()
+
+	e := NewOllamaEmbedder(srv.URL, "nomic-embed-text")
+	if _, err := e.Embed(context.Background(), "hello world"); err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if gotBody["keep_alive"] != "30m" {
+		t.Errorf("keep_alive = %v, want 30m (avoid 5-min unload / cold reload)", gotBody["keep_alive"])
+	}
+}
+
 func TestOllamaEmbedderHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "model not found", http.StatusNotFound)
