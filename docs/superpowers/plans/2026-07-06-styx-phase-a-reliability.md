@@ -599,79 +599,20 @@ git commit -m "fix(agent): claude threads meter against the real 1M context wind
 
 ---
 
-### Task 7: `--bare` on dispatched claude turns
+### Task 7: DROPPED — `--bare` on dispatched claude turns
 
-E2E evidence: a "pong" dispatch = 48,551 input tokens of session bootstrap (hooks, CLAUDE.md, skills, MCP autodiscovery — including styx's own MCP server, recursively). `--bare` skips all of it; the conductor session, not the dispatched thread, owns that context. The thread seed line must stop claiming `.claude/context.md` auto-loads (it no longer does under `--bare`).
-
-**Files:**
-- Modify: `internal/agent/adapter.go:52-66` (`claudeArgs`)
-- Modify: `internal/agent/manager.go:100-103` (`seedMessage` role line)
-- Test: `internal/agent/adapter_test.go`
-
-**Interfaces:**
-- Consumes: claude CLI ≥ 2.1.x `--bare` flag (verified present in installed 2.1.201 via `claude --help`).
-- Produces: every headless dispatched claude turn runs `--bare`. Interactive `Handoff` (manager.go:226) builds its own args and stays un-bare — do not touch it.
-
-- [ ] **Step 1: Write the failing test**
-
-Add to `internal/agent/adapter_test.go`:
-
-```go
-func TestClaudeArgsBare(t *testing.T) {
-	args := claudeArgs("sess-1", "sonnet", "do it", nil, false)
-	found := false
-	for _, a := range args {
-		if a == "--bare" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("headless dispatch must pass --bare (skip hooks/CLAUDE.md/MCP bootstrap), got %v", args)
-	}
-}
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `go test ./internal/agent/ -run TestClaudeArgsBare -v`
-Expected: FAIL — `must pass --bare`
-
-- [ ] **Step 3: Implement**
-
-In `claudeArgs`:
-
-```go
-args = append(args, "-p", msg, "--output-format", "stream-json", "--verbose", "--bare")
-```
-
-In `manager.go` `seedMessage`, replace the fresh-thread role line:
-
-```go
-parts = append(parts, fmt.Sprintf(
-	"You are the long-running %q agent thread of styx for project %s. You run bare — no hooks or auto-loaded project files — so rely on the message content and the files on disk in the working directory.",
-	th.Name, m.Project.Name))
-```
-
-- [ ] **Step 4: Run tests + live verification**
-
-Run: `go test ./internal/agent/ -v` → PASS (existing `claudeArgs` assertions in adapter_test.go may enumerate exact args — update them to include `--bare`).
-Live check (one cheap real call):
-
-```bash
-claude --bare -p 'reply with exactly: ok' --output-format stream-json --verbose | tail -1
-```
-
-Expected: a `result` line whose `usage.input_tokens + cache_*` total is a small fraction of ~48k. If `--bare` is rejected by the installed CLI, STOP and flag — do not ship this task.
-
-- [ ] **Step 5: Commit**
-
-`docs/ARCHITECTURE.md` "Agent threads": document `--bare` and the new seed wording. Bump `last_verified`.
-
-```bash
-go vet ./... && gofmt -w . && make test
-git add -A
-git commit -m "feat(agent): dispatched claude turns run --bare, cutting ~48k bootstrap tokens per turn"
-```
+> **Removed 2026-07-07 (user decision, permanent).** The task's STOP gate
+> tripped during execution: claude 2.1.202's `--bare` skips keychain reads
+> entirely — its help text states Anthropic auth is "strictly
+> ANTHROPIC_API_KEY or apiKeyHelper via --settings (OAuth and keychain are
+> never read)". Styx is subscription-OAuth-only by design (no API keys), so
+> every `--bare` dispatch fails "Not logged in" before reaching the API
+> (verified live both ways: non-bare authenticates with ~37k bootstrap input
+> tokens; bare fails deterministically). The implementation commit was
+> reverted; Task 8's seed message kept the existing `.claude/context.md`
+> wording. The ~37–48k/turn bootstrap saving returns to the backlog only if
+> `--bare` (or an equivalent minimal mode) gains subscription auth.
+> Task numbering below is preserved to keep cross-references stable.
 
 ---
 

@@ -157,14 +157,13 @@ Full citations live in the research transcripts; load-bearing facts:
   conservative unknown-model default. Honor
   `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` in the environment by keeping 200k.
   The distill threshold stays 70% but now measures the real window.
-- **`--bare` on dispatched claude turns**: the agent adapter's headless args
-  gain `--bare` (hooks, skills, CLAUDE.md, and MCP autodiscovery are the
-  *conductor session's* job, not the dispatched thread's; this also stops the
-  recursive styx-MCP load and pre-adapts to Anthropic flipping `--bare`
-  default-on for `-p`). Intel context injection, when wanted, is explicit:
-  the dispatch message/system seed, not ambient session bootstrap.
-  Verify `--bare` coexists with `--resume` + `stream-json` in the adapter
-  test against a scripted fakeagent and one live smoke run.
+- **DROPPED (2026-07-07): `--bare` on dispatched claude turns.** Original
+  intent: skip the ~48k/turn session bootstrap (hooks, skills, CLAUDE.md,
+  recursive styx-MCP autodiscovery), which is the conductor session's job.
+  Dropped permanently at the implementation STOP gate: claude 2.1.202's
+  `--bare` never reads OAuth/keychain (API-key-only auth), so on a
+  subscription-only setup every bare dispatch fails "Not logged in".
+  Revisit only if a minimal mode gains subscription auth.
 - **Codex becomes a resume-capable adapter**: capture `thread_id` from
   `codex exec --json`'s `thread.started` event; resume turns run
   `codex exec resume <thread_id>`; parse `turn.completed.usage` for exact
@@ -215,9 +214,9 @@ Full citations live in the research transcripts; load-bearing facts:
   fallback, unknown-project error text (lists registry), `[]`-not-`null`,
   progress notifications present, dispatch result fields.
 - `make e2e` runs it hermetically (no quota, CI-able).
-- `STYX_E2E_LIVE=1` extends it: real `styx doctor`, one ollama dispatch, one
-  minimal `--bare` claude dispatch with usage assertions. Opt-in, run on this
-  machine before releases.
+- `STYX_E2E_LIVE=1` extends it: real `styx doctor` and one ollama dispatch
+  (the planned `--bare` claude smoke was dropped with the `--bare` item
+  above). Opt-in, run on this machine before releases.
 - Docker is deliberately not used: styx's substance is subscription-authed
   CLIs, Keychain, and local ollama — none available in a container. Hermetic
   fakes + host-live smoke is the honest equivalent.
