@@ -463,3 +463,46 @@ func TestDispatchOllamaAppendsOutcomeRow(t *testing.T) {
 		t.Fatalf("ollama outcome mismatch: %+v", rows[0])
 	}
 }
+
+func TestRateDispatchStampsMostRecentOutcome(t *testing.T) {
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	ctx := context.Background()
+	for _, o := range []budget.Outcome{
+		{Thread: "codex", CLI: "codex"},
+		{Thread: "codex", CLI: "codex"},
+	} {
+		if err := bud.RecordOutcome(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff), a: &app{tracker: bud}}
+
+	res, err := callTool(t, d, "rate_dispatch", map[string]any{
+		"thread_or_task": "codex", "ok": true, "note": "clean implement",
+	})
+	if err != nil {
+		t.Fatalf("rate_dispatch: %v", err)
+	}
+	if res["rated"] != true {
+		t.Fatalf("want rated=true, got %v", res)
+	}
+	rows, _ := bud.OutcomesSince(ctx, time.Time{})
+	if rows[0].Rating != "good" || rows[0].Note != "clean implement" {
+		t.Fatalf("most recent codex outcome must carry the rating: %+v", rows[0])
+	}
+	if rows[1].Rating != "" {
+		t.Fatalf("older outcome must stay unrated: %+v", rows[1])
+	}
+
+	// Unknown ref is a loud error; missing arg too.
+	if _, err := callTool(t, d, "rate_dispatch", map[string]any{"thread_or_task": "ghost", "ok": false}); err == nil {
+		t.Fatal("unknown thread/task must error")
+	}
+	if _, err := callTool(t, d, "rate_dispatch", map[string]any{"ok": true}); err == nil {
+		t.Fatal("missing thread_or_task must error")
+	}
+}

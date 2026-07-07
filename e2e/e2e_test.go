@@ -168,11 +168,11 @@ func startServer(t *testing.T) (*mcpClient, string) {
 func TestFirstContact(t *testing.T) {
 	c, _ := startServer(t)
 
-	// tools/list: all 11 tools present.
+	// tools/list: all 12 tools present.
 	resp := c.call("tools/list", nil)
 	tools, _ := resp["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 11 {
-		t.Fatalf("want 11 tools, got %d", len(tools))
+	if len(tools) != 12 {
+		t.Fatalf("want 12 tools, got %d", len(tools))
 	}
 
 	// route: pure local decision.

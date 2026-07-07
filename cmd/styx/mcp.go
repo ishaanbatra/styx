@@ -629,7 +629,7 @@ func mcpTools(a *app) []mcpserver.Tool {
 func cmdMCP(a *app, args []string) error {
 	tools := append(mcpTools(a), conductorTools(newConductorDeps(a))...)
 	srv := mcpserver.New("styx", mcpServerVersion, tools)
-	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, thread_status, memory_save, pipeline_run)")
+	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, thread_status, memory_save, pipeline_run, rate_dispatch)")
 	go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake
 	return srv.Serve(context.Background(), os.Stdin, os.Stdout)
 }

@@ -490,5 +490,33 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					"note": "artifacts under styx/research/ and styx/plans/; runs ls for pipeline state"}, nil
 			},
 		},
+		{
+			Name: "rate_dispatch",
+			Description: "Rate a recent dispatch outcome as notably good or bad (feeds styx learn). " +
+				"Rate only notable outcomes — not every dispatch.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
+				"thread_or_task": map[string]any{"type": "string", "description": "thread name or background task id; the most recent matching outcome is rated"},
+				"ok":             map[string]any{"type": "boolean", "description": "true = notably good, false = notably bad"},
+				"note":           map[string]any{"type": "string", "description": "one line on why (optional)"},
+			}, "required": []string{"thread_or_task", "ok"}},
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in struct {
+					ThreadOrTask string `json:"thread_or_task"`
+					OK           bool   `json:"ok"`
+					Note         string `json:"note"`
+				}
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("rate_dispatch args: %w", err)
+				}
+				if in.ThreadOrTask == "" {
+					return nil, fmt.Errorf("thread_or_task is required")
+				}
+				id, err := d.a.tracker.RateOutcome(ctx, in.ThreadOrTask, in.OK, in.Note)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"rated": true, "outcome_id": id, "target": in.ThreadOrTask}, nil
+			},
+		},
 	}
 }

@@ -171,7 +171,7 @@ Shared pieces:
   `[]mcpserver.Tool`, unmarshaling raw JSON arguments before each dispatch.
   `cmdMCP(a *app, args []string)` constructs the server via `mcpserver.New("styx",
   mcpServerVersion, append(mcpTools(a), conductorTools(newConductorDeps(a))...))`,
-  logs readiness to stderr via `logStatus` (naming all eleven tools), and runs
+  logs readiness to stderr via `logStatus` (naming all twelve tools), and runs
   `srv.Serve(ctx, os.Stdin, os.Stdout)` — stdout carries the JSON-RPC protocol
   only, nothing else. `const mcpServerVersion = "0.1.0"`. See the "MCP
   server" and "Conductor MCP tools" sections below for the
@@ -785,11 +785,11 @@ and writes a config file for it to read.
 ## MCP server (internal/mcpserver + cmd/styx/mcp.go + cmd/styx/mcp_conductor.go)
 
 A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the
-routing brain and the conductor dispatch surface as eleven tools for MCP
+routing brain and the conductor dispatch surface as twelve tools for MCP
 hosts like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
 `channel_health`, `get_intel`, `refresh_intel`, `recall`, `dispatch`,
-`thread_status`, `memory_save`, and `pipeline_run`. Pure stdlib, no provider
-SDK; stdout carries the protocol,
+`thread_status`, `memory_save`, `pipeline_run`, and `rate_dispatch`. Pure
+stdlib, no provider SDK; stdout carries the protocol,
 status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
 `cmd/styx/cmdMCP` builds the tool set as `append(mcpTools(a),
@@ -876,8 +876,8 @@ REPL loop.
 - `conductorDeps` (`a *app`, `gate *shipgate.Gate`, `emb memory.Embedder`,
   and a mutex-guarded `managers map[string]*managed` cache keyed by project
   ID) is built once per `styx mcp` invocation via `newConductorDeps(a)`.
-  `conductorTools(d)` returns four tools: `dispatch`, `thread_status`,
-  `memory_save`, and `pipeline_run`.
+  `conductorTools(d)` returns five tools: `dispatch`, `thread_status`,
+  `memory_save`, `pipeline_run`, and `rate_dispatch`.
 - `conductorDeps.managerFor(alias)` lazily binds a project exactly the way
   `replSession.bind` does (`cmd/styx/repl.go`): opens `<memDir>/<projectID>.db`
   via `memory.Open`, loads `agent.LoadThreads(projectID)`, wires the
@@ -988,6 +988,15 @@ REPL loop.
   for the research indexing step. On success returns `{pipeline, done:
   true, note}` pointing at `styx/research/` and `styx/plans/` for
   artifacts.
+- `rate_dispatch(thread_or_task, ok, note?)` — stamps a rating onto the
+  **most recent matching outcome row** (by thread name or background task
+  id) via `(*budget.Tracker).RateOutcome`, feeding the future `styx learn`
+  loop. Rejects an empty `thread_or_task` before calling the tracker (a
+  plain error, not a tracker round-trip); `RateOutcome` itself errors loudly
+  on an unknown ref too, so there's no silent no-op. `ok: true` writes
+  `Rating: "good"`, `false` writes `"bad"`; `note` is freeform and optional.
+  Guidance baked into the tool description: rate only notable outcomes, not
+  every dispatch. Returns `{rated: true, outcome_id, target}`.
 
 ## Progress (internal/progress)
 
