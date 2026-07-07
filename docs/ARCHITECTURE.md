@@ -560,6 +560,24 @@ WAL change: `projects.toml` is written via `config.SaveProjects` tmp+rename,
 the model cache is written via `modelsync.Cache.Save` tmp+rename, and
 same-repo pipeline runs are serialized by `internal/pipeline/lock.go`.
 
+`internal/budget/outcome.go` adds a second append-only table, `outcomes`, in
+the same `usage.db` — the learning substrate shared with the planned
+self-improvement digest (`styx learn`, B1 async-dispatch spec). Its schema
+(`id`, `ts`, `project`, `thread`, `task_id`, `cli`, `model`, `signals`,
+`risk`, `duration_s`, `tokens_in`, `tokens_out`, `error_kind`, `background`,
+`rating`, `note`) records one dispatch-completion row per call, independent
+of the token-counting `usage` table. `RecordOutcome(ctx, Outcome)` appends a
+row. `RateOutcome(ctx, ref, ok, note)` is the single sanctioned mutation: it
+stamps `rating`/`note` onto the most-recent row whose `thread` or `task_id`
+matches `ref` (`ORDER BY id DESC LIMIT 1`), erroring loudly on no match —
+callers rate by handle, not by row id, and get last-dispatch semantics for
+free. `OutcomesSince(ctx, since)` reads rows with `ts >= since.Unix()` newest
+first (`time.Time{}` returns the full table, since its zero-value Unix
+timestamp is far in the past). The `outcomesSchema` DDL runs idempotently in
+`New`, right after the existing `usage`/`cooldown` schema exec and before the
+v0.3/v0.4 `ALTER TABLE` migrations — additive, so it never touches existing
+`usage.db` files' prior tables.
+
 ## Projects & paths (internal/project, internal/config/projects.go, internal/paths)
 
 `project.Current()` walks up to the git root and auto-registers unknown repos
