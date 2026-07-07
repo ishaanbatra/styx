@@ -271,6 +271,35 @@ func TestSeedMessage(t *testing.T) {
 	})
 }
 
+func TestDispatchSeedsCodexSummaryTransition(t *testing.T) {
+	// A codex thread created while codex was summary-based (rolling Summary,
+	// no SessionID) must seed that summary into the first resume-capable turn.
+	dir := t.TempDir()
+	threads, _ := LoadThreadsFrom(filepath.Join(dir, "threads.json"))
+	argsLog := filepath.Join(dir, "args.log")
+	m := &Manager{
+		Project:  config.Project{Name: "proj", Path: dir},
+		Threads:  threads,
+		Adapters: map[string]Adapter{"codex": &CodexAdapter{BinPath: fakeBin(t)}},
+		Timeout:  10 * time.Second,
+	}
+	th := m.Threads.Get("codex", "codex")
+	th.Summary = "prior context"
+
+	t.Setenv("FAKEAGENT_PROTO", "codex")
+	t.Setenv("FAKEAGENT_ARGS_LOG", argsLog)
+	t.Setenv("FAKEAGENT_TEXT", "ok")
+	if _, err := m.Dispatch(context.Background(), DispatchSpec{
+		Thread: "codex", CLI: "codex", Message: "next step",
+	}, nil); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	b, _ := os.ReadFile(argsLog)
+	if !strings.Contains(string(b), "prior context") {
+		t.Errorf("codex summary transition not seeded into dispatched message, argv: %s", b)
+	}
+}
+
 func TestStatusLinesEmptyIsNotNil(t *testing.T) {
 	m := &Manager{Threads: &ThreadStore{Threads: map[string]*Thread{}}}
 	got := m.StatusLines()

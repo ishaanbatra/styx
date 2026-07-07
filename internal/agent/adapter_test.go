@@ -65,22 +65,37 @@ func TestClaudeContextWindow(t *testing.T) {
 	}
 }
 
-func TestPlainAdapters(t *testing.T) {
-	cx := NewCodexAdapter()
-	got := cx.BuildArgs("check this", "", "gpt-5", nil, false)
-	want := []string{"--model", "gpt-5", "exec", "check this"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("codex args = %v, want %v", got, want)
-	}
-	if cx.SupportsResume() || cx.SupportsStream() {
-		t.Error("codex adapter is plain in v1: no resume, no stream")
-	}
-
+func TestAgyPlainAdapter(t *testing.T) {
 	ag := NewAgyAdapter()
-	got = ag.BuildArgs("summarize", "", "", nil, false)
-	want = []string{"-p", "summarize", "--dangerously-skip-permissions"}
+	got := ag.BuildArgs("summarize", "", "", nil, false)
+	want := []string{"-p", "summarize", "--dangerously-skip-permissions"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("agy args = %v, want %v", got, want)
+	}
+	if ag.SupportsResume() || ag.SupportsStream() {
+		t.Error("agy adapter is plain: no resume, no stream")
+	}
+}
+
+func TestCodexAdapterArgs(t *testing.T) {
+	a := NewCodexAdapter()
+	if !a.SupportsResume() || !a.SupportsStream() {
+		t.Fatal("codex adapter must be resume- and stream-capable")
+	}
+	if a.ContextWindow() != 400000 {
+		t.Fatalf("codex window = %d, want 400000 (GPT-5.5 in Codex)", a.ContextWindow())
+	}
+
+	fresh := a.BuildArgs("fix it", "", "gpt-5.5", nil, false)
+	want := []string{"--model", "gpt-5.5", "exec", "--json", "--sandbox", "workspace-write", "fix it"}
+	if !reflect.DeepEqual(fresh, want) {
+		t.Fatalf("fresh args = %v, want %v", fresh, want)
+	}
+
+	resumed := a.BuildArgs("continue", "th-9", "", []string{"--add-dir", "/x"}, true)
+	want = []string{"exec", "resume", "th-9", "--json", "--add-dir", "/x", "continue"}
+	if !reflect.DeepEqual(resumed, want) {
+		t.Fatalf("resume args = %v, want %v", resumed, want)
 	}
 }
 
@@ -102,14 +117,4 @@ func containsArg(args []string, want string) bool {
 		}
 	}
 	return false
-}
-
-func TestCodexAdapterPlacesExtraAfterExec(t *testing.T) {
-	a := NewCodexAdapter()
-	got := a.BuildArgs("hello", "", "opus", []string{"--add-dir", "/a"}, false)
-	// --add-dir must come AFTER exec and before the message.
-	want := []string{"--model", "opus", "exec", "--add-dir", "/a", "hello"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("args = %v, want %v", got, want)
-	}
 }

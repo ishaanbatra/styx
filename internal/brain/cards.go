@@ -23,8 +23,8 @@ var Cards = []Card{
 	{
 		CLI:           "codex",
 		Bin:           "codex",
-		Condensed:     "codex - OpenAI Codex CLI (gpt-5 class). PRIMARY IMPLEMENTER: best for applying well-scoped work from a clear plan or spec (fast to a first diff) - fixing tests, writing/refactoring functions, single-file or tightly-scoped multi-file edits; also algorithmic one-shots, sandboxed script checks, and second-opinion reviews. Headless `codex exec` (applies edits autonomously with `--sandbox workspace-write`). No interactive handoff; route ambiguous or architectural implementation to claude instead.",
-		ExpectedFlags: []string{"exec", "--model", "--add-dir"},
+		Condensed:     "codex - OpenAI Codex CLI (gpt-5 class). PRIMARY IMPLEMENTER: best for applying well-scoped work from a clear plan or spec (fast to a first diff) - fixing tests, writing/refactoring functions, single-file or tightly-scoped multi-file edits; also algorithmic one-shots, sandboxed script checks, and second-opinion reviews. Headless `codex exec` (applies edits autonomously with `--sandbox workspace-write`). Persistent sessions via native exec resume; no interactive handoff - route ambiguous or architectural implementation to claude instead.",
+		ExpectedFlags: []string{"exec", "--model", "--add-dir", "--json"},
 		ResumeProbe:   "resume",
 	},
 	{
@@ -32,7 +32,8 @@ var Cards = []Card{
 		Bin:           "agy",
 		Condensed:     "agy - Google Antigravity CLI (Gemini, 1M context). Best for: summarizing or explaining very large files/diffs, web-flavored research questions. Headless only; styx maintains conversation continuity for it.",
 		ExpectedFlags: []string{"-p", "--add-dir"},
-		ResumeProbe:   "", // no known resume support; doctor reports degraded mode
+		// agy has --continue/--conversation <id> but never surfaces conversation IDs in --print output (google-antigravity/antigravity-cli#7) — headless resume stays impossible; styx-maintained summaries remain correct until that lands.
+		ResumeProbe: "", // no known resume support; doctor reports degraded mode
 	},
 	{
 		CLI:       "ollama",

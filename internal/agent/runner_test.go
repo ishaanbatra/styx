@@ -80,6 +80,30 @@ func TestRunnerSendFailsOnResumeError(t *testing.T) {
 	}
 }
 
+func TestRunnerCodexProtocol(t *testing.T) {
+	th := &Thread{Name: "codex", CLI: "codex"}
+	ad := &CodexAdapter{BinPath: fakeBin(t)}
+	r := &Runner{Adapter: ad, Thread: th, Timeout: 10 * time.Second}
+	t.Setenv("FAKEAGENT_PROTO", "codex")
+	t.Setenv("FAKEAGENT_SESSION", "th-42")
+	t.Setenv("FAKEAGENT_TEXT", "done: patched")
+	t.Setenv("FAKEAGENT_IN", "500")
+	t.Setenv("FAKEAGENT_OUT", "50")
+	res, err := r.Send(context.Background(), "patch it", "", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "done: patched" {
+		t.Fatalf("result text must fall back to the last agent_message, got %q", res.Text)
+	}
+	if th.SessionID != "th-42" {
+		t.Fatalf("thread must capture codex thread_id, got %q", th.SessionID)
+	}
+	if res.InputTokens != 500 || res.OutputTokens != 50 {
+		t.Fatalf("usage must come from turn.completed, got %d/%d", res.InputTokens, res.OutputTokens)
+	}
+}
+
 func TestRunnerPlainAdapter(t *testing.T) {
 	// Plain adapters capture whole stdout as the result (no stream parsing).
 	// echo prints its args, simulating a plain CLI.

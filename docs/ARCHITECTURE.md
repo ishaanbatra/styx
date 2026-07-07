@@ -429,18 +429,29 @@ JSON output, and pre-granted permissions matching the existing execute path.
 `ClaudeAdapter.ContextWindow()` defaults to the real 1M-token window that
 Opus/Sonnet/Fable run on the API and Max plans, honoring Claude Code's own
 `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` opt-out (200k when set); the adapter's
-`Window` field still overrides both for tests. Codex and agy are plain v1
-adapters with no native resume/stream support from styx's perspective: codex
-runs `codex exec`, agy runs `agy -p --dangerously-skip-permissions`, and
-continuity will be maintained by styx summaries.
+`Window` field still overrides both for tests. `CodexAdapter` is a
+resume-capable stream adapter: it drives `codex exec --json` with native
+session resume (`codex exec resume <thread_id>`), captures exact per-turn token
+usage from `turn.completed` events (never len/4 estimates), and defaults to a
+400k-token window (`Window` overrides for tests). Edit-risk turns add
+`--sandbox workspace-write` (codex exec is read-only by default); read-risk
+turns keep the default. Agy remains a plain adapter with no native
+resume/stream support: it runs `agy -p --dangerously-skip-permissions`, and
+continuity is maintained by styx summaries (agy exposes `--continue`/
+`--conversation <id>` but never surfaces conversation IDs in `--print` output,
+so headless resume stays impossible).
 
-The package defines the shared event shape and parses Claude's stream protocol:
-`system/init` captures session IDs, assistant text chunks stream intermediate
-output, and final `result` events carry the answer plus real usage. Context
-size counts normal input, cache creation input, and cache-read input tokens so
-future thread compaction is metered against the actual Claude context window
-rather than rough character estimates. Hook, tool-use-only, and malformed
-stream lines are ignored.
+The package defines the shared event shape and parses both Claude's and Codex's
+stream protocols. For claude: `system/init` captures session IDs, assistant
+text chunks stream intermediate output, and final `result` events carry the
+answer plus real usage (normal input, cache creation input, and cache-read
+input tokens). For codex (`ParseCodexEvent`): `thread.started` captures the
+resumable `thread_id`, `item.completed` `agent_message` items stream assistant
+text, `turn.completed` carries exact usage (`input_tokens` +
+`cached_input_tokens`, and `output_tokens`) but no text, and `turn.failed`
+surfaces an error result. Context size is metered against each adapter's real
+context window rather than rough character estimates. Hook, tool-use-only,
+command-execution, and malformed stream lines are ignored.
 
 Each project has a JSON thread store under
 `~/.config/styx/state/threads/<id>.json`, keyed by the stable project ID rather
@@ -451,9 +462,12 @@ and update timestamp. Stores are created lazily and saved with tmp+rename.
 
 `Runner` executes one turn by spawning the adapter's CLI with an optional
 timeout and working directory. For stream-capable adapters it scans stdout
-line-by-line, emits parsed events to the caller, captures Claude session IDs,
-and records real input/output token counts from the final result. For plain
-adapters it treats full stdout as the result and falls back to len/4 token
+line-by-line, emits parsed events to the caller, captures session IDs, and
+records real input/output token counts from the final result. Because codex's
+`turn.completed` carries usage but no text (the text arrived in a prior
+`item.completed`), the runner remembers the last streamed `EventText` and uses
+it as the result text when the final event's text is empty. For plain adapters
+(agy) it treats full stdout as the result and falls back to len/4 token
 estimates until those CLIs expose structured usage. Every successful turn
 updates the thread's context meter, turn count, and timestamp in memory; callers
 persist the store after lifecycle decisions. `testdata/fakeagent` is an
@@ -464,17 +478,20 @@ resume argument assertions and dead-session simulation.
 `ExtraRoots []string` field (absolute repo roots for cross-repo dispatch);
 `Manager.Dispatch` renders them via `addDirArgs` into `--add-dir <root>` pairs,
 merges them once into the `extra` slice, and passes that same merged slice at
-both the first-attempt and crash-recovery `run.Send` sites. The codex agent
-adapter's `ArgsFn` places the merged `--add-dir` flags after `exec` — the same
-arg-order rule as the channel layer (the installed Codex CLI exposes `exec`,
-`--model`, `--add-dir`, and `resume`, as noted above).
+both the first-attempt and crash-recovery `run.Send` sites. `CodexAdapter.
+BuildArgs` places the merged `--add-dir` flags (and any brain-supplied extras)
+after `exec [resume <id>] --json [--sandbox workspace-write]` and before the
+message — the same arg-order rule as the channel layer (the installed Codex CLI
+exposes `exec`, `resume`, `--json`, `--sandbox`, `--model`, and `--add-dir`).
 `Dispatch` resolves the adapter,
 creates the thread on first use, seeds fresh/restarted sessions with a project
 role line or last distillation, runs the turn, records real token usage and the
 routed model to the budget log under verb `thread`, maintains rolling summaries
-for plain adapters, and saves the thread store. If a resume-capable CLI reports
-a dead session, the manager clears the session ID and retries once using the
-last distillation as the handoff seed. When a resume-capable thread crosses its
+for plain adapters, and saves the thread store. A codex thread that predates
+native resume (rolling `Summary`, no `SessionID`) seeds that summary into its
+first resume-capable turn as a one-time transition. If a resume-capable CLI
+reports a dead session, the manager clears the session ID and retries once using
+the last distillation as the handoff seed. When a resume-capable thread crosses its
 configured context threshold, the manager asks the live session for a structured
 handoff using the distill model, writes that distillation to memory when an
 embedder/store are configured, clears the session ID, and starts the next turn

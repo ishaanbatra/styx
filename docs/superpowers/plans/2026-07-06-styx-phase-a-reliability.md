@@ -694,7 +694,7 @@ Codex has had native `codex exec resume <id>` (Stable) and `--json` JSONL events
   - Runner: `EventResult` with empty `Text` falls back to the last `EventText` payload.
   - fakeagent env knob `FAKEAGENT_PROTO=codex`.
 
-- [ ] **Step 1: Write the failing event-parser tests**
+- [x] **Step 1: Write the failing event-parser tests**
 
 Add to `internal/agent/event_test.go`:
 
@@ -729,12 +729,12 @@ func TestParseCodexEvent(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/agent/ -run TestParseCodexEvent -v`
 Expected: FAIL — `undefined: ParseCodexEvent`
 
-- [ ] **Step 3: Implement the parser**
+- [x] **Step 3: Implement the parser**
 
 Add to `internal/agent/event.go`:
 
@@ -793,7 +793,7 @@ func ParseCodexEvent(line []byte) (Event, bool) {
 
 Run: `go test ./internal/agent/ -run TestParseCodexEvent -v` → PASS
 
-- [ ] **Step 4: Write the failing adapter tests**
+- [x] **Step 4: Write the failing adapter tests**
 
 Add to `internal/agent/adapter_test.go`:
 
@@ -823,12 +823,12 @@ func TestCodexAdapterArgs(t *testing.T) {
 
 (Add `"reflect"` to the test file imports if absent.)
 
-- [ ] **Step 5: Run to verify failure**
+- [x] **Step 5: Run to verify failure**
 
 Run: `go test ./internal/agent/ -run TestCodexAdapterArgs -v`
 Expected: FAIL — `NewCodexAdapter` returns `*PlainAdapter` (no resume/stream), args mismatch.
 
-- [ ] **Step 6: Implement the adapter**
+- [x] **Step 6: Implement the adapter**
 
 In `internal/agent/adapter.go`, replace `NewCodexAdapter` (delete the old `PlainAdapter` construction; `PlainAdapter` itself stays — agy uses it):
 
@@ -886,7 +886,7 @@ func (a *CodexAdapter) ParseEvent(line []byte) (Event, bool) { return ParseCodex
 
 Run: `go test ./internal/agent/ -run TestCodexAdapterArgs -v` → PASS
 
-- [ ] **Step 7: Runner result-text fallback (failing test first)**
+- [x] **Step 7: Runner result-text fallback (failing test first)**
 
 Codex's `turn.completed` carries usage but no text; the text arrived in a prior `item.completed`. Add to `internal/agent/runner_test.go` a case using the fakeagent codex mode (see Step 9 for the fixture; write the test now):
 
@@ -918,7 +918,7 @@ func TestRunnerCodexProtocol(t *testing.T) {
 
 (If `runner_test.go` has no `fakeagentPath` helper, mirror how its existing tests locate `testdata/fakeagent` — typically `filepath.Join("..", "..", "testdata", "fakeagent")` resolved absolute.)
 
-- [ ] **Step 8: Implement the runner fallback**
+- [x] **Step 8: Implement the runner fallback**
 
 In `runner.go`'s scan loop:
 
@@ -957,7 +957,7 @@ if res.Text == "" {
 
 (Place the fallback right after the scan loop, before `cmd.Wait()` error handling uses `res`.)
 
-- [ ] **Step 9: Extend fakeagent with the codex protocol**
+- [x] **Step 9: Extend fakeagent with the codex protocol**
 
 Edit `testdata/fakeagent` — add after the knobs comment block:
 
@@ -988,7 +988,7 @@ fi
 
 Run: `go test ./internal/agent/ -run TestRunnerCodexProtocol -v` → PASS
 
-- [ ] **Step 10: Seed-message transition for existing codex threads**
+- [x] **Step 10: Seed-message transition for existing codex threads**
 
 Existing codex threads carry a rolling `Summary` but no `SessionID`/`LastDistillation`; the resume-capable seed path would drop it. In `manager.go` `seedMessage`, extend the resume branch:
 
@@ -1016,13 +1016,13 @@ if ad.SupportsResume() {
 
 Add a `manager_test.go` case: a thread with `Summary: "prior context"`, `SessionID: ""`, CLI codex → dispatched message contains "prior context" (assert via `FAKEAGENT_ARGS_LOG`, which records the final message argument).
 
-- [ ] **Step 11: Update the codex + agy capability cards**
+- [x] **Step 11: Update the codex + agy capability cards**
 
 `internal/brain/cards.go` codex entry: in `Condensed`, replace the sentence `"No interactive handoff; route ambiguous or architectural implementation to claude instead."` with `"Persistent sessions via native exec resume; no interactive handoff — route ambiguous or architectural implementation to claude instead."` and add `"--json"` to `ExpectedFlags`.
 
 Same file, agy entry: extend its `Condensed` (or the comment on `ResumeProbe: ""` at cards.go:35) with the tracked upstream gap: `// agy has --continue/--conversation <id> but never surfaces conversation IDs in --print output (google-antigravity/antigravity-cli#7) — headless resume stays impossible; styx-maintained summaries remain correct until that lands.` This keeps doctor's drift probes honest about WHY agy runs in degraded-continuity mode.
 
-- [ ] **Step 12: Full test pass + live smoke**
+- [x] **Step 12: Full test pass + live smoke**
 
 Run: `make test` → green (fix any repl/conductor tests that constructed `*PlainAdapter` for codex).
 Live (burns one small codex turn):
@@ -1033,7 +1033,7 @@ codex exec --json 'reply with exactly: ok' 2>/dev/null | grep -E 'thread.started
 
 Expected: a `thread.started` line with a `thread_id` and a `turn.completed` line with `usage`. If field names differ from `codexLine`, adjust the struct to match reality — the installed CLI is the source of truth, then re-run tests.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 `docs/ARCHITECTURE.md`: rewrite the codex sentences in "Agent threads" (plain adapter → resume-capable stream adapter, exact usage, sandbox rule, Summary transition) and the `--add-dir` arg-order note if the new arg layout changes it. Bump `last_verified`.
 

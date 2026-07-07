@@ -7,6 +7,7 @@
 #   FAKEAGENT_OUT          output_tokens in result usage (default 20)
 #   FAKEAGENT_FAIL_RESUME  "1": exit 1 if --resume present (crash-recovery tests)
 #   FAKEAGENT_ARGS_LOG     append "$@" to this file (arg assertions)
+#   FAKEAGENT_PROTO        "codex": emit codex exec --json events instead
 if [ -n "$FAKEAGENT_ARGS_LOG" ]; then
   echo "$@" >> "$FAKEAGENT_ARGS_LOG"
 fi
@@ -22,6 +23,20 @@ S=${FAKEAGENT_SESSION:-sess-1}
 T=${FAKEAGENT_TEXT:-ok}
 IN=${FAKEAGENT_IN:-100}
 OUT=${FAKEAGENT_OUT:-20}
+if [ "$FAKEAGENT_PROTO" = "codex" ]; then
+  if [ "$FAKEAGENT_FAIL_RESUME" = "1" ]; then
+    for a in "$@"; do
+      if [ "$a" = "resume" ]; then
+        echo "session not found" >&2
+        exit 1
+      fi
+    done
+  fi
+  echo "{\"type\":\"thread.started\",\"thread_id\":\"$S\"}"
+  echo "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"$T\"}}"
+  echo "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":$IN,\"cached_input_tokens\":0,\"output_tokens\":$OUT}}"
+  exit 0
+fi
 echo "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$S\"}"
 echo "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"$T\"}]}}"
 echo "{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"$T\",\"session_id\":\"$S\",\"is_error\":false,\"usage\":{\"input_tokens\":$IN,\"output_tokens\":$OUT}}"

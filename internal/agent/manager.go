@@ -97,6 +97,10 @@ func (m *Manager) seedMessage(th *Thread, ad Adapter, msg string) string {
 		var parts []string
 		if th.LastDistillation != "" {
 			parts = append(parts, "Handoff from the previous session of this thread:\n"+th.LastDistillation)
+		} else if th.Summary != "" {
+			// One-time transition: threads created while this CLI was
+			// summary-based (pre-native-resume codex) seed from that summary.
+			parts = append(parts, "Context from earlier in this conversation:\n"+th.Summary)
 		} else if th.Turns == 0 {
 			parts = append(parts, fmt.Sprintf(
 				"You are the long-running %q agent thread of styx for project %s. Project context auto-loads from .claude/context.md when present.",

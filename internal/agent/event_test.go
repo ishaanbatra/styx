@@ -64,3 +64,32 @@ func TestParseClaudeEvent(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCodexEvent(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want Event
+		ok   bool
+	}{
+		{"thread started", `{"type":"thread.started","thread_id":"th-9"}`,
+			Event{Type: EventInit, SessionID: "th-9"}, true},
+		{"agent message", `{"type":"item.completed","item":{"type":"agent_message","text":"hi"}}`,
+			Event{Type: EventText, Text: "hi"}, true},
+		{"turn completed with usage",
+			`{"type":"turn.completed","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":9}}`,
+			Event{Type: EventResult, InputTokens: 140, OutputTokens: 9}, true},
+		{"turn failed", `{"type":"turn.failed","error":{"message":"boom"}}`,
+			Event{Type: EventResult, Text: "boom", IsError: true}, true},
+		{"ignored", `{"type":"item.completed","item":{"type":"command_execution"}}`, Event{}, false},
+		{"garbage", `not json`, Event{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseCodexEvent([]byte(tc.line))
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("got %+v ok=%v, want %+v ok=%v", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}

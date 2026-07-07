@@ -66,6 +66,7 @@ func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, re
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024) // results can be large
 	var res TurnResult
 	var resultErr bool
+	var lastText string
 	for sc.Scan() {
 		ev, ok := r.Adapter.ParseEvent(sc.Bytes())
 		if !ok {
@@ -77,6 +78,8 @@ func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, re
 		switch ev.Type {
 		case EventInit:
 			r.Thread.SessionID = ev.SessionID
+		case EventText:
+			lastText = ev.Text
 		case EventResult:
 			res.Text = ev.Text
 			res.InputTokens = ev.InputTokens
@@ -86,6 +89,9 @@ func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, re
 				r.Thread.SessionID = ev.SessionID
 			}
 		}
+	}
+	if res.Text == "" {
+		res.Text = lastText // codex: text arrives in item.completed, not turn.completed
 	}
 	if err := cmd.Wait(); err != nil {
 		return TurnResult{}, fmt.Errorf("%s turn failed: %w: %s",

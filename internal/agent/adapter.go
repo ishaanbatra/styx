@@ -103,23 +103,55 @@ func (a *PlainAdapter) BuildArgs(msg, sessionID, model string, extra []string, r
 	return a.ArgsFn(msg, model, extra)
 }
 
-// NewCodexAdapter drives `codex exec`.
-func NewCodexAdapter() *PlainAdapter {
-	return &PlainAdapter{
-		CLIName: "codex",
-		BinPath: "codex",
-		Window:  200000,
-		ArgsFn: func(msg, model string, extra []string) []string {
-			args := []string{}
-			if model != "" {
-				args = append(args, "--model", model)
-			}
-			args = append(args, "exec")
-			args = append(args, extra...)
-			return append(args, msg)
-		},
-	}
+// CodexAdapter drives `codex exec --json` with native session resume
+// (`codex exec resume <thread_id>`). Usage comes from turn.completed events —
+// exact tokens, not estimates. Edit-risk turns run --sandbox workspace-write
+// (codex exec defaults to read-only); read-risk turns keep the default.
+type CodexAdapter struct {
+	BinPath string // override for tests; "" means "codex" on PATH
+	Window  int    // override for tests; 0 means 400000 (GPT-5.5 in Codex)
 }
+
+// NewCodexAdapter returns the production codex adapter.
+func NewCodexAdapter() *CodexAdapter { return &CodexAdapter{} }
+
+func (a *CodexAdapter) CLI() string { return "codex" }
+
+func (a *CodexAdapter) Bin() string {
+	if a.BinPath != "" {
+		return a.BinPath
+	}
+	return "codex"
+}
+
+func (a *CodexAdapter) SupportsResume() bool { return true }
+func (a *CodexAdapter) SupportsStream() bool { return true }
+
+func (a *CodexAdapter) ContextWindow() int {
+	if a.Window > 0 {
+		return a.Window
+	}
+	return 400000
+}
+
+func (a *CodexAdapter) BuildArgs(msg, sessionID, model string, extra []string, readOnly bool) []string {
+	args := []string{}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, "exec")
+	if sessionID != "" {
+		args = append(args, "resume", sessionID)
+	}
+	args = append(args, "--json")
+	if !readOnly {
+		args = append(args, "--sandbox", "workspace-write")
+	}
+	args = append(args, extra...)
+	return append(args, msg)
+}
+
+func (a *CodexAdapter) ParseEvent(line []byte) (Event, bool) { return ParseCodexEvent(line) }
 
 // NewAgyAdapter drives `agy -p` (Antigravity). Always headless-permissive,
 // matching the existing agy channel.

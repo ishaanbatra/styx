@@ -82,3 +82,54 @@ func ParseClaudeEvent(line []byte) (Event, bool) {
 	}
 	return Event{}, false
 }
+
+// codexLine mirrors the subset of `codex exec --json` events styx reads:
+// thread.started (thread_id = resumable session), item.completed
+// agent_message items (assistant text), turn.completed (exact usage),
+// turn.failed (error).
+type codexLine struct {
+	Type     string `json:"type"`
+	ThreadID string `json:"thread_id"`
+	Item     struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"item"`
+	Usage struct {
+		InputTokens       int `json:"input_tokens"`
+		CachedInputTokens int `json:"cached_input_tokens"`
+		OutputTokens      int `json:"output_tokens"`
+	} `json:"usage"`
+	Error struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// ParseCodexEvent parses one codex exec --json line. ok is false for lines
+// styx does not care about (command executions, deltas, malformed input).
+func ParseCodexEvent(line []byte) (Event, bool) {
+	var l codexLine
+	if err := json.Unmarshal(line, &l); err != nil {
+		return Event{}, false
+	}
+	switch l.Type {
+	case "thread.started":
+		if l.ThreadID == "" {
+			return Event{}, false
+		}
+		return Event{Type: EventInit, SessionID: l.ThreadID}, true
+	case "item.completed":
+		if l.Item.Type != "agent_message" || l.Item.Text == "" {
+			return Event{}, false
+		}
+		return Event{Type: EventText, Text: l.Item.Text}, true
+	case "turn.completed":
+		return Event{
+			Type:         EventResult,
+			InputTokens:  l.Usage.InputTokens + l.Usage.CachedInputTokens,
+			OutputTokens: l.Usage.OutputTokens,
+		}, true
+	case "turn.failed":
+		return Event{Type: EventResult, Text: l.Error.Message, IsError: true}, true
+	}
+	return Event{}, false
+}
