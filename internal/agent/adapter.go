@@ -1,5 +1,7 @@
 package agent
 
+import "os"
+
 // Adapter encodes how to drive one CLI agent: argument construction, stream
 // parsing, and what session features it supports. `styx doctor` reports which
 // mode (native-resume vs styx-maintained continuity) each adapter runs in.
@@ -18,7 +20,7 @@ type Adapter interface {
 // `execute` verb behavior; interactive handoff keeps native prompts.
 type ClaudeAdapter struct {
 	BinPath string // override for tests; "" means "claude" on PATH
-	Window  int    // override for tests; 0 means 200000
+	Window  int    // override for tests; 0 means 1M (200k if CLAUDE_CODE_DISABLE_1M_CONTEXT=1)
 }
 
 // NewClaudeAdapter returns the production claude adapter.
@@ -40,7 +42,14 @@ func (a *ClaudeAdapter) ContextWindow() int {
 	if a.Window > 0 {
 		return a.Window
 	}
-	return 200000
+	// Opus 4.8 / Sonnet 5 / Fable 5 run the 1M window on the Anthropic API
+	// and Max plans; honor Claude Code's own opt-out env. Haiku threads
+	// (rare) over-estimate their window — acceptable: distill still fires,
+	// just later; claude's own compaction is the backstop.
+	if os.Getenv("CLAUDE_CODE_DISABLE_1M_CONTEXT") == "1" {
+		return 200000
+	}
+	return 1000000
 }
 
 func (a *ClaudeAdapter) BuildArgs(msg, sessionID, model string, extra []string, readOnly bool) []string {

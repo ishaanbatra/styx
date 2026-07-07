@@ -424,12 +424,15 @@ valid action so the REPL can keep moving.
 
 Agent threads are the durable conversation layer for the planned REPL
 orchestrator. Adapters encode how styx invokes each CLI. Claude runs in
-headless `stream-json` mode with native session resume (`--resume`), a 200k
-token context window, verbose JSON output, and pre-granted permissions matching
-the existing execute path. Codex and agy are plain v1 adapters with no native
-resume/stream support from styx's perspective: codex runs `codex exec`, agy
-runs `agy -p --dangerously-skip-permissions`, and continuity will be maintained
-by styx summaries.
+headless `stream-json` mode with native session resume (`--resume`), verbose
+JSON output, and pre-granted permissions matching the existing execute path.
+`ClaudeAdapter.ContextWindow()` defaults to the real 1M-token window that
+Opus/Sonnet/Fable run on the API and Max plans, honoring Claude Code's own
+`CLAUDE_CODE_DISABLE_1M_CONTEXT=1` opt-out (200k when set); the adapter's
+`Window` field still overrides both for tests. Codex and agy are plain v1
+adapters with no native resume/stream support from styx's perspective: codex
+runs `codex exec`, agy runs `agy -p --dangerously-skip-permissions`, and
+continuity will be maintained by styx summaries.
 
 The package defines the shared event shape and parses Claude's stream protocol:
 `system/init` captures session IDs, assistant text chunks stream intermediate

@@ -537,7 +537,7 @@ E2E evidence: "context 24%" after one trivial turn → distill-and-restart fires
 **Interfaces:**
 - Produces: `ClaudeAdapter.ContextWindow()` = 1_000_000 default, 200_000 when `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`, `Window` field still overrides for tests.
 
-- [ ] **Step 1: Update the failing test**
+- [x] **Step 1: Update the failing test**
 
 `internal/agent/adapter_test.go:51-52` currently asserts 200000. Replace with:
 
@@ -558,12 +558,12 @@ func TestClaudeContextWindow(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./internal/agent/ -run TestClaudeContextWindow -v`
 Expected: FAIL — `ContextWindow = 200000, want 1000000`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```go
 func (a *ClaudeAdapter) ContextWindow() int {
@@ -583,11 +583,11 @@ func (a *ClaudeAdapter) ContextWindow() int {
 
 Add `"os"` to the imports.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/agent/ -v` → PASS. If `manager_test.go` fixtures relied on the 200k default to trigger distill, they set `Window` explicitly (they use `ThresholdPct: 70` with fake adapters) — fix any that break by setting `Window` on the fixture adapter.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Agent threads" section: replace "a 200k token context window" with the 1M/env-opt-out rule. Bump `last_verified`.
 

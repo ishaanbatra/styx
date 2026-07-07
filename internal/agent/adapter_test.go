@@ -48,8 +48,20 @@ func TestClaudeAdapterBuildArgs(t *testing.T) {
 	if !a.SupportsResume() || !a.SupportsStream() {
 		t.Error("claude adapter must support resume and stream")
 	}
+}
+
+func TestClaudeContextWindow(t *testing.T) {
+	a := NewClaudeAdapter()
+	if a.ContextWindow() != 1000000 {
+		t.Errorf("ContextWindow = %d, want 1000000 (opus/sonnet/fable are 1M-class)", a.ContextWindow())
+	}
+	t.Setenv("CLAUDE_CODE_DISABLE_1M_CONTEXT", "1")
 	if a.ContextWindow() != 200000 {
-		t.Errorf("ContextWindow = %d, want 200000", a.ContextWindow())
+		t.Errorf("with 1M disabled, ContextWindow = %d, want 200000", a.ContextWindow())
+	}
+	b := &ClaudeAdapter{Window: 12345}
+	if b.ContextWindow() != 12345 {
+		t.Errorf("explicit Window override must win, got %d", b.ContextWindow())
 	}
 }
 
