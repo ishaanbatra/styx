@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // protocolVersion is the MCP revision this server advertises.
@@ -31,6 +32,26 @@ type Server struct {
 	version string
 	tools   []Tool
 	byName  map[string]Tool
+
+	mu  sync.Mutex    // serializes writes to enc
+	enc *json.Encoder // set for the duration of Serve
+}
+
+func (s *Server) write(v any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.enc.Encode(v)
+}
+
+// progressKey carries the per-call progress emitter through handler context.
+type progressKey struct{}
+
+// ProgressFn returns the progress emitter installed for this tool call, if
+// the client requested progress (params._meta.progressToken). Handlers call
+// it to narrate long-running work; it is nil-safe via the ok bool.
+func ProgressFn(ctx context.Context) (func(progress float64, message string), bool) {
+	fn, ok := ctx.Value(progressKey{}).(func(float64, string))
+	return fn, ok
 }
 
 // New builds a Server with the given identity and tool set.
@@ -68,7 +89,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	// A line larger than this cap makes scanner.Err() return bufio.ErrTooLong and
 	// Serve returns — acceptable for a local, single-host v1 (no untrusted input).
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024) // tolerate large tool payloads
-	enc := json.NewEncoder(out)
+	s.enc = json.NewEncoder(out)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -76,7 +97,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 		}
 		var req rpcRequest
 		if err := json.Unmarshal(line, &req); err != nil {
-			if encErr := enc.Encode(rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"),
+			if encErr := s.write(rpcResponse{JSONRPC: "2.0", ID: json.RawMessage("null"),
 				Error: &rpcError{Code: -32700, Message: "parse error"}}); encErr != nil {
 				return fmt.Errorf("write parse error: %w", encErr)
 			}
@@ -86,7 +107,7 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 		if isNotification {
 			continue
 		}
-		if err := enc.Encode(resp); err != nil {
+		if err := s.write(resp); err != nil {
 			return fmt.Errorf("write response: %w", err)
 		}
 	}
@@ -136,6 +157,9 @@ func (s *Server) toolList() []map[string]any {
 type callParams struct {
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	Meta      struct {
+		ProgressToken json.RawMessage `json:"progressToken"`
+	} `json:"_meta"`
 }
 
 // callTool runs a tool. A handler error becomes an MCP tool result with
@@ -149,6 +173,20 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *rpcEr
 	tool, ok := s.byName[p.Name]
 	if !ok {
 		return nil, &rpcError{Code: -32602, Message: "unknown tool: " + p.Name}
+	}
+	if len(p.Meta.ProgressToken) > 0 && string(p.Meta.ProgressToken) != "null" {
+		tok := p.Meta.ProgressToken
+		ctx = context.WithValue(ctx, progressKey{}, func(progress float64, message string) {
+			_ = s.write(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "notifications/progress",
+				"params": map[string]any{
+					"progressToken": tok,
+					"progress":      progress,
+					"message":       message,
+				},
+			})
+		})
 	}
 	result, err := tool.Handler(ctx, p.Arguments)
 	if err != nil {

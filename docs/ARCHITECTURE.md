@@ -768,6 +768,23 @@ to `/api/generate` with `keep_alive: "30m"` for `a.routing.Brain.Model` and
 cold model load while it overlaps with the host handshake. Failures are
 narrated via `logStatus` (stderr) and never fatal — ollama may simply be down.
 
+**Progress notifications (`_meta.progressToken`).** `Server` carries a
+mutex-guarded `enc *json.Encoder` (`s.write(v any) error`, `s.mu`-serialized)
+so every stdout write — protocol responses and out-of-band notifications
+alike — goes through one lock; `Serve` sets `s.enc` before its read loop and
+both former direct `enc.Encode` call sites now call `s.write`. `callTool`
+reads `params._meta.progressToken` off the new `callParams.Meta` field; when
+present (and not the literal `"null"`), it installs a progress-emitter
+closure into the handler's `context.Context` under an unexported
+`progressKey{}` before invoking `tool.Handler`. Handlers read it back via
+`mcpserver.ProgressFn(ctx) (func(progress float64, message string), bool)` —
+the bool is `false` when the client sent no token, so a handler can no-op
+without a nil check. Calling the emitter writes a
+`{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken","progress","message"}}`
+line via `s.write`, interleaved with (but never colliding with) the eventual
+`tools/call` response — stdout carries JSON-RPC exclusively, so this is the
+only channel for mid-call narration; `logStatus` stays on stderr.
+
 **`route` v2 additive fields.** `routeResult` gained five fields that v1
 consumers safely ignore (all `omitempty` except `blocked_by_budget`):
 `classified_signals` (the signal slice actually used for routing — either the
@@ -861,12 +878,25 @@ REPL loop.
   not the raw request field — on the budget tracker for
   success and failure alike (record errors are narrated via `logStatus`,
   never fail the dispatch), so local one-shots show up in `styx budget`
-  like every other channel. Otherwise the
+  like every other channel. Its result gains `model` (the resolved model
+  string) and `duration_s` (wall-clock seconds since a `start := time.Now()`
+  taken right after arg validation, rounded via
+  `math.Round(time.Since(start).Seconds()*10)/10` to one decimal) alongside
+  `{cli, text}`. Otherwise the
   call routes through `managerFor` + `agent.Manager.Dispatch`, returning
-  `{thread, cli, text, tokens_in, tokens_out}` (`thread` defaults to `cli`
-  when unset, matching `Manager.Dispatch`'s own thread-naming default) or,
-  when gated and denied, the raw `shipgate.Result` (`{allowed, token,
-  message}`) so the brain can relay the confirmation token to the user.
+  `{thread, cli, text, tokens_in, tokens_out, model, duration_s}` (`thread`
+  defaults to `cli` when unset, matching `Manager.Dispatch`'s own
+  thread-naming default; `model`/`duration_s` computed the same way as the
+  ollama branch) or, when gated and denied, the raw `shipgate.Result`
+  (`{allowed, token, message}`) so the brain can relay the confirmation
+  token to the user. The thread branch also wires dispatch narration:
+  `mcpserver.ProgressFn(ctx)` (see "MCP server" above) is checked once per
+  call, and an `onEvent(ev agent.Event)` closure — replacing the prior
+  `nil` — fires `logStatus("dispatch %s", msg)` on stderr and, when the
+  client sent a progress token, `notify(float64(events), msg)` on
+  `agent.EventInit` ("session started"), `agent.EventResult` ("finishing"),
+  and every 5th `agent.EventText` (throttled to avoid notification
+  spam on streaming chatter); other event types emit nothing.
 - `thread_status(project?)` — resolves the project via the same
   `managerFor` and returns `{threads: []string}` from
   `agent.Manager.StatusLines()` (name, CLI, turn count, context-window

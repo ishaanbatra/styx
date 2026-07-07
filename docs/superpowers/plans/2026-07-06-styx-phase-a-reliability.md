@@ -1224,7 +1224,7 @@ E2E evidence: zero output during a dispatch — a multi-minute codex run is indi
   - `mcpserver.ProgressFn(ctx) (func(progress float64, message string), bool)` — handlers emit progress; no-op absent a client token.
   - dispatch results gain `"duration_s"` (float, 1-decimal) and `"model"` (string) — additive, existing consumers unaffected.
 
-- [ ] **Step 1: Write the failing server test**
+- [x] **Step 1: Write the failing server test**
 
 Add to `internal/mcpserver/server_test.go`:
 
@@ -1277,12 +1277,12 @@ func TestProgressFnAbsentWithoutToken(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/mcpserver/ -run TestProgress -v`
 Expected: FAIL — `undefined: ProgressFn`
 
-- [ ] **Step 3: Implement in mcpserver**
+- [x] **Step 3: Implement in mcpserver**
 
 In `server.go`:
 
@@ -1359,7 +1359,7 @@ Add `"sync"` to imports.
 
 Run: `go test ./internal/mcpserver/ -v` → PASS
 
-- [ ] **Step 4: Wire dispatch narration + result fields**
+- [x] **Step 4: Wire dispatch narration + result fields**
 
 In `cmd/styx/mcp_conductor.go`'s dispatch handler:
 
@@ -1424,7 +1424,7 @@ return map[string]any{
 
 Add `"math"`, `"time"`, and the `agent` import usages as needed (`agent` is already imported).
 
-- [ ] **Step 5: Conductor-level test**
+- [x] **Step 5: Conductor-level test**
 
 Add to `cmd/styx/mcp_conductor_test.go` an assertion on the new fields using the Task 3 fake channel test — extend `TestDispatchOllamaDefaultsModel`:
 
@@ -1439,7 +1439,7 @@ if res["model"] != "qwen2.5-coder:7b" {
 
 Run: `go test ./cmd/styx/ -run TestDispatch -v` → PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 `docs/ARCHITECTURE.md`: "MCP server" section — progress notifications + `_meta.progressToken` support, write serialization; "Conductor MCP tools" — dispatch narration + new result fields. Bump `last_verified`.
 

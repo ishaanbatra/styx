@@ -154,6 +154,53 @@ func TestServe_MalformedJSONRecovers(t *testing.T) {
 	}
 }
 
+func TestProgressNotifications(t *testing.T) {
+	tool := Tool{
+		Name: "slow",
+		Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+			if notify, ok := ProgressFn(ctx); ok {
+				notify(1, "working")
+			}
+			return map[string]any{"done": true}, nil
+		},
+	}
+	srv := New("t", "0", []Tool{tool})
+	in := strings.NewReader(
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow","arguments":{},"_meta":{"progressToken":"tok-1"}}}` + "\n")
+	var out bytes.Buffer
+	if err := srv.Serve(context.Background(), in, &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want notification + response, got %d lines: %s", len(lines), out.String())
+	}
+	if !strings.Contains(lines[0], `"notifications/progress"`) ||
+		!strings.Contains(lines[0], `"tok-1"`) ||
+		!strings.Contains(lines[0], `"working"`) {
+		t.Fatalf("first line must be the progress notification, got %s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"id":1`) {
+		t.Fatalf("second line must be the response, got %s", lines[1])
+	}
+}
+
+func TestProgressFnAbsentWithoutToken(t *testing.T) {
+	tool := Tool{
+		Name: "plain",
+		Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+			if _, ok := ProgressFn(ctx); ok {
+				t.Error("ProgressFn must report absent when the client sent no progressToken")
+			}
+			return "ok", nil
+		},
+	}
+	srv := New("t", "0", []Tool{tool})
+	in := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plain","arguments":{}}}` + "\n")
+	var out bytes.Buffer
+	_ = srv.Serve(context.Background(), in, &out)
+}
+
 func TestServe_ToolHandlerErrorIsToolResult(t *testing.T) {
 	s := New("styx", "test", []Tool{{
 		Name: "boom", Description: "always fails", InputSchema: map[string]any{"type": "object"},

@@ -316,6 +316,12 @@ func TestDispatchOllamaDefaultsModel(t *testing.T) {
 	if res["text"] != "pong" {
 		t.Fatalf("want text pong, got %v", res["text"])
 	}
+	if _, ok := res["duration_s"]; !ok {
+		t.Fatal("dispatch result must include duration_s")
+	}
+	if res["model"] != "qwen2.5-coder:7b" {
+		t.Fatalf("dispatch result must echo the resolved model, got %v", res["model"])
+	}
 }
 
 func TestMemorySaveValidatesKind(t *testing.T) {

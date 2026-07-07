@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -198,6 +199,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				if in.Risk != "read" && in.Risk != "edit" && in.Risk != "ship" {
 					return nil, fmt.Errorf("risk must be read|edit|ship, got %q", in.Risk)
 				}
+				start := time.Now()
 				if in.Risk == "ship" {
 					res, err := d.gate.Check("dispatch:"+in.CLI, in.ConfirmToken)
 					if err != nil {
@@ -236,7 +238,8 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					if err != nil {
 						return nil, fmt.Errorf("ollama dispatch: %w", err)
 					}
-					return map[string]any{"cli": "ollama", "text": resp.Text}, nil
+					return map[string]any{"cli": "ollama", "text": resp.Text,
+						"model": model, "duration_s": math.Round(time.Since(start).Seconds()*10) / 10}, nil
 				}
 				m, err := d.managerFor(in.Project)
 				if err != nil {
@@ -246,11 +249,35 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				if resolved, ok := d.a.routing.Tiers[model]; ok {
 					model = resolved
 				}
+				notify, hasNotify := mcpserver.ProgressFn(ctx)
+				var events int
+				onEvent := func(ev agent.Event) {
+					events++
+					var msg string
+					switch ev.Type {
+					case agent.EventInit:
+						msg = in.CLI + ": session started"
+					case agent.EventText:
+						if events%5 != 0 { // throttle streaming chatter
+							return
+						}
+						msg = fmt.Sprintf("%s: streaming (%d events)", in.CLI, events)
+					case agent.EventResult:
+						msg = in.CLI + ": finishing"
+					}
+					if msg == "" {
+						return
+					}
+					logStatus("dispatch %s", msg)
+					if hasNotify {
+						notify(float64(events), msg)
+					}
+				}
 				res, err := m.mgr.Dispatch(ctx, agent.DispatchSpec{
 					Thread: in.Thread, CLI: in.CLI, Model: model,
 					Message: in.Message, ExtraRoots: in.ExtraRoots,
 					ReadOnly: in.Risk == "read",
-				}, nil)
+				}, onEvent)
 				if err != nil {
 					return nil, fmt.Errorf("dispatch %s: %w", in.CLI, err)
 				}
@@ -261,6 +288,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				return map[string]any{
 					"thread": thread, "cli": in.CLI, "text": res.Text,
 					"tokens_in": res.InputTokens, "tokens_out": res.OutputTokens,
+					"model": model, "duration_s": math.Round(time.Since(start).Seconds()*10) / 10,
 				}, nil
 			},
 		},
