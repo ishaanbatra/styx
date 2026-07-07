@@ -197,6 +197,7 @@ func defaultBrainForTest() BrainConfig {
 func defaultConductorForTest() Conductor {
 	return Conductor{
 		ShipGate:           "handshake",
+		RouteGate:          "block",
 		MaxBackgroundTasks: 4,
 	}
 }
@@ -239,5 +240,18 @@ func TestConductorTaskCapDefault(t *testing.T) {
 	applyConductorDefaults(&r2)
 	if r2.Conductor.MaxBackgroundTasks != 2 {
 		t.Errorf("explicit knob must be preserved, got %d", r2.Conductor.MaxBackgroundTasks)
+	}
+}
+
+func TestConductorRouteGateDefault(t *testing.T) {
+	var r Routing
+	applyConductorDefaults(&r)
+	if r.Conductor.RouteGate != "block" {
+		t.Errorf("default route_gate = %q, want block", r.Conductor.RouteGate)
+	}
+	r2 := Routing{Conductor: Conductor{RouteGate: "audit"}}
+	applyConductorDefaults(&r2)
+	if r2.Conductor.RouteGate != "audit" {
+		t.Errorf("explicit route_gate must be preserved, got %q", r2.Conductor.RouteGate)
 	}
 }

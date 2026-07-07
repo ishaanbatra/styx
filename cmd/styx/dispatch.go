@@ -285,6 +285,10 @@ func dispatch(verb string, args []string) error {
 		return cmdExecuteVerb(args)
 	case "runs":
 		return cmdRuns(args)
+	case "hook":
+		// Claude Code hook installed into conductor sessions by the launcher.
+		// Runs per matched tool call, so it stays OFF the loadApp/SQLite path.
+		return cmdHook(args)
 	}
 
 	a, err := loadApp()

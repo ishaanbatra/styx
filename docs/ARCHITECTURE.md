@@ -295,7 +295,9 @@ subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
 wiring. `Brain` configures the planned local ollama routing brain and memory
 embedding model; `Conductor` configures the frontier-brain launcher and MCP
 toolbelt (e.g. `ship_gate`: handshake | tty | off, default handshake, controlling
-ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`; and
+ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`;
+`route_gate`: block | audit | off, default block, controlling the host-hook
+enforcement of dispatch-over-inline routing — see the `styx hook` section below; and
 `max_background_tasks`, the concurrent background-dispatch cap for the task
 registry, default 4, seeded in `default_routing.go` and injected into
 pre-B1 configs by `config.EnsureConductorTaskCap` — idempotent, respects an
@@ -773,6 +775,49 @@ claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 
 Server-side confirmation for ship-risk MCP actions — commit/push/PR — before the MCP server executes them. The gate is isolated from styx business logic (stdlib only) so it holds for any MCP host. Supports three modes: `handshake` (default) relays a single-use token through the brain for user confirmation; `tty` prompts on `/dev/tty` directly, bypassing the brain; `off` allows all actions (scripting). Tokens expire after 10 minutes and are bound to their action — reuse is denied, and a token for one action does not unlock another. See conductor spec §6.
 
+## Route gate — `styx hook` (cmd/styx/hook.go)
+
+Shipgate's sibling for the *routing* decision. The problem: the conductor
+(Claude Code) keeps doing substantive/research work **inline** with its own
+built-in tools (WebSearch, WebFetch, Task subagents, Bash-curl) instead of
+dispatching, silently burning claude quota and forfeiting cross-CLI arbitrage.
+The MCP server cannot gate this — it only sees tool calls the host routes to
+it, and inline self-handling never crosses the MCP boundary (this is why
+`ship`, a styx tool call, *can* be gated but inline research cannot from the
+MCP side). The one seam that observes the host's native tools is Claude Code's
+hook system, and since styx launches Claude Code, the launcher installs
+`styx hook` as a hook (scoped to conductor sessions only — the settings file
+lives in styx's state dir, never the user's `~/.claude`).
+
+`styx hook <event>` is dispatched **before `loadApp()`** (no SQLite/config load)
+so it stays fast on the per-tool-call hot path. It reads Claude Code's hook JSON
+from stdin and is **fail-open**: anything not explicitly denied is allowed, so a
+hook bug or malformed payload can never brick a session (which always has
+`dispatch` as the recorded escape hatch). Two events:
+
+- **`pretooluse`** — denies the crisp "substantive work I'm doing myself"
+  markers with a redirect to `pipeline_run research` / `dispatch`: `WebSearch`,
+  `WebFetch`, `Task`; `Bash` **only** when it shells out to fetch a remote
+  http(s) host (curl/wget to non-localhost — a chain like `curl URL | sed`);
+  and `mcp__*` tools whose name matches `(web|search|fetch|research|scrape|crawl)`
+  (catches `mcp__exa__web_search_exa` while preserving Gmail/Calendar/Drive/
+  context7). Emits `{permissionDecision:"deny", permissionDecisionReason:...}`.
+- **`posttooluse`** — appends one JSONL record (`ts, session_id, tool, cwd`) to
+  `<stateDir>/inline-activity.jsonl` so the previously-invisible inline burn is
+  auditable by the self-improvement loop, plus a soft `additionalContext` nudge
+  for high-signal tools. Deliberately **not** the budget ledger: one ledger row
+  == one subscription *message* against the 5h/weekly windows, and a tool call
+  is not a message.
+
+Controlled by `[conductor] route_gate` (block | audit | off, default block):
+`block` installs both hooks; `audit` installs only the PostToolUse recorder
+(never blocks); `off` writes no settings file. The launcher's
+`buildConductorSettings` is fail-closed on an unrecognized mode — anything but
+`audit`/`off` installs the full block gate. The gate flips the model's default
+(inline now costs more than dispatch for high-signal cases) but cannot make a
+determined `Read`+`curl`+`Grep` chain impossible — the `Bash` matcher narrows
+the curl case, the audit tier and guidance prose cover the fuzzy remainder.
+
 ## Launcher (internal/launcher)
 
 The conductor front door: opens a frontier-brain host session (Claude Code
@@ -781,12 +826,17 @@ first) with styx attached as an MCP toolbelt. `Host` (`Name() string`,
 string}` (empty `Bin` means `"claude"` on `PATH`) is the only host-specific
 code in the conductor — everything else downstream is portable MCP surface
 (`internal/mcpserver` + the conductor tools). `Opts{ProjectPath, StyxBin,
-Guidance, ExtraRepos, ExtraArgs}` is everything a host needs.
+Guidance, RouteGate, ExtraRepos, ExtraArgs}` is everything a host needs.
 `ClaudeHost.Launch`:
 1. resolves `paths.StateDir()` and `paths.EnsureDir`s it;
 2. writes `{"mcpServers": {"styx": {"command": StyxBin, "args": ["mcp"]}}}`
    to `<stateDir>/conductor-mcp.json` via atomic tmp+rename;
-3. execs `claude --mcp-config <path> --append-system-prompt <Guidance>`
+2b. unless `RouteGate == "off"`, writes `<stateDir>/conductor-settings.json`
+   (the routing-gate hooks — see the `styx hook` section) via atomic tmp+rename
+   and passes it as `--settings`. We deliberately do NOT pass
+   `--strict-mcp-config`: the user's other MCP servers stay available and the
+   hook's matcher catches MCP web tools by name instead;
+3. execs `claude --mcp-config <path> [--settings <path>] --append-system-prompt <Guidance>`
    (plus `--add-dir <repo>` per `ExtraRepos`, then any `ExtraArgs` verbatim —
    `styx resume` uses this for `--resume <id>` / `--continue`) via
    `exec.CommandContext` with
