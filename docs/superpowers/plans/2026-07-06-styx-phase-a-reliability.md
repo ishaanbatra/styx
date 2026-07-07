@@ -1571,7 +1571,7 @@ The regression net: drives a real `styx mcp` subprocess over JSON-RPC exactly as
 - Consumes: `./bin/styx` (built by the target), `testdata/fakeagent` (both protocols from Task 8), Tasks 1-10 behaviors.
 - Produces: `make e2e`.
 
-- [ ] **Step 1: Makefile target**
+- [x] **Step 1: Makefile target**
 
 ```makefile
 e2e: build
@@ -1580,7 +1580,7 @@ e2e: build
 
 Add `e2e` to `.PHONY`.
 
-- [ ] **Step 2: Write the harness**
+- [x] **Step 2: Write the harness**
 
 `e2e/doc.go`:
 
@@ -1873,7 +1873,7 @@ func TestLiveSmoke(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run** — satisfied hermetically (`make e2e`: `TestFirstContact` + `TestVersionVerb` PASS, `TestLiveSmoke` SKIP); live run (`STYX_E2E_LIVE=1 make e2e`) deferred to post-plan whole-phase verification (quota discipline — one live run, not one per task).
 
 Run: `make e2e`
 Expected: `TestFirstContact` + `TestVersionVerb` PASS, `TestLiveSmoke` SKIP.
@@ -1881,7 +1881,7 @@ Debug tips: server stderr is passed through — `[styx]` lines show what the ser
 
 Run once live on this machine: `STYX_E2E_LIVE=1 make e2e` → all PASS (needs ollama up).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 `docs/ARCHITECTURE.md` "Testing conventions": add the e2e harness paragraph (hermetic fakeagent-on-PATH design, live mode, why no Docker). `README.md`: `make e2e` in the build/test section. Bump `last_verified`.
 

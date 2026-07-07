@@ -18,6 +18,7 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 
     make build       # produces ./bin/styx
     make test        # runs all tests
+    make e2e         # hermetic JSON-RPC regression net against `styx mcp` (fake CLIs, no quota)
     make install     # same as install.sh
 
 ## Verbs

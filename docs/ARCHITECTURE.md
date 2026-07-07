@@ -4,7 +4,8 @@ owns:
   - "internal/**"
   - "testdata/**"
   - "eval/**"
-last_verified: 2026-07-06
+  - "e2e/**"
+last_verified: 2026-07-07
 ---
 
 # Styx Architecture
@@ -990,6 +991,21 @@ gate's match logic and generates its tests from the same `utterances.json` — s
 it can't disagree with the gate. `eval/promptfoo/braindump` regenerates the
 harness's code-mirrored artifacts from `cards.go`/`action.go`/`prompt.go`; rerun
 it after editing those so the eval never drifts.
+
+`e2e/` (build tag `e2e`, run via `make e2e`) is the regression net: it builds
+`./bin/styx`, then drives a real `styx mcp` subprocess over stdio JSON-RPC
+exactly as a conductor would — `initialize`, `tools/list`, `tools/call` for
+`route`/`budget_status`/`dispatch`/`thread_status` — with `testdata/fakeagent`
+installed as both `claude` and `codex` on an isolated `PATH`, and `HOME`/
+`XDG_CONFIG_HOME` pointed at a fresh `t.TempDir()` so no real config or
+subscription quota is touched. The launch project is a throwaway git repo
+created per test run. This is hermetic by default: no Docker (a plain
+subprocess + fake-CLIs-on-PATH gives the same isolation for a single-binary
+CLI without the image/build overhead), no network beyond a possibly-absent
+local ollama, and no real AI-CLI calls. `TestLiveSmoke` is skipped unless
+`STYX_E2E_LIVE=1`, in which case it runs `styx doctor` and a live ollama
+one-shot dispatch through the real routing brain model — meant to be run
+manually and rarely, since it consumes real quota/local resources.
 
 ## Planned work
 

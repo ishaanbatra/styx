@@ -1,4 +1,4 @@
-.PHONY: build test install clean fmt vet
+.PHONY: build test e2e install clean fmt vet
 
 BIN_DIR := $(HOME)/bin
 BIN     := styx
@@ -8,6 +8,9 @@ build:
 
 test:
 	go test ./...
+
+e2e: build
+	go test -tags e2e ./e2e/ -v -count=1
 
 vet:
 	go vet ./...
