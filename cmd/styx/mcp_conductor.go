@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/pipeline"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/shipgate"
+	"github.com/ishaanbatra/styx/internal/signals"
 	"github.com/ishaanbatra/styx/internal/target"
 )
 
@@ -41,21 +43,56 @@ type conductorDeps struct {
 	a    *app
 	gate *shipgate.Gate
 	emb  memory.Embedder
+	reg  *taskRegistry // background dispatch registry (nil-safe on read paths)
 
 	mu       sync.Mutex
 	managers map[string]*managed
 }
 
 // newConductorDeps wires conductorDeps the same way cmdMCP wires the rest of
-// the app: real ollama embedder, ship gate from routing.toml's
-// [conductor] section (default "handshake").
-func newConductorDeps(a *app) *conductorDeps {
+// the app: real ollama embedder, ship gate + background-task cap from
+// routing.toml's [conductor] section, task registry rooted on the server's
+// context (background work dies with the server — no daemons).
+func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 	return &conductorDeps{
 		a:        a,
 		gate:     shipgate.New(shipgate.Mode(a.routing.Conductor.ShipGate)),
 		emb:      memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel),
+		reg:      newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks),
 		managers: map[string]*managed{},
 	}
+}
+
+// capPctFor returns the routing.toml cap_pct for a channel (0 = no cap).
+func capPctFor(r config.Routing, cli string) float64 {
+	switch cli {
+	case "claude":
+		return r.Budget.Claude.CapPct
+	case "codex":
+		return r.Budget.Codex.CapPct
+	case "agy":
+		return r.Budget.Agy.CapPct
+	}
+	return 0
+}
+
+// spawnBudgetCheck refuses a background spawn when the target channel is
+// circuit-open or over its budget cap — spawn-time failures must be
+// synchronous errors, never background losses discovered at collect time.
+func (d *conductorDeps) spawnBudgetCheck(ctx context.Context, cli string) error {
+	if broken, err := d.a.tracker.ShouldCircuitBreak(ctx, cli, budget.BreakerThreshold, budget.BreakerWindow); err != nil {
+		return fmt.Errorf("spawn budget check: %w", err)
+	} else if broken {
+		return fmt.Errorf("channel %s circuit is open (recent failures) — check channel_health before dispatching", cli)
+	}
+	pct, err := d.a.tracker.UsedPct(ctx, cli)
+	if err != nil {
+		return fmt.Errorf("spawn budget check: %w", err)
+	}
+	if cap := capPctFor(d.a.routing, cli); cap > 0 && pct >= cap {
+		return fmt.Errorf("channel %s is over budget (%.0f%% used, cap %.0f%%) — pick another channel or wait", cli, pct, cap)
+	}
+	return nil
 }
 
 // managerFor lazily binds a project. An empty alias resolves to the server's
@@ -90,6 +127,64 @@ func registeredProjectNames() string {
 		names[i] = p.Name
 	}
 	return strings.Join(names, ", ")
+}
+
+// dispatchSignals tags the dispatch message with routing signals for the
+// outcome row (comma-joined). The conductor picks the cli explicitly, so the
+// signals are recorded for learning, not for routing.
+func dispatchSignals(message string) string {
+	return strings.Join(signals.Extract("dispatch", []string{message}, config.Project{}), ",")
+}
+
+// outcomeErrKind classifies a dispatch error for the outcome row: the
+// channel's classified kind when available, else "other". "" on success.
+func outcomeErrKind(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ce *channel.ClassifiedError
+	if errors.As(err, &ce) {
+		return string(ce.Kind)
+	}
+	return "other"
+}
+
+// dispatchMeta carries what finishDispatch needs to append an outcome row
+// and shape the result map — the post-dispatch bookkeeping shared by the
+// synchronous handler and background task completions.
+type dispatchMeta struct {
+	ProjectID  string
+	Thread     string
+	CLI        string
+	Model      string
+	Risk       string
+	Signals    string
+	TaskID     string // "" for sync dispatches
+	Background bool
+	Start      time.Time
+}
+
+// finishDispatch appends the outcome row (success and failure alike; record
+// errors are narrated, never fail the dispatch — budget events are already
+// recorded inside Manager.Dispatch) and shapes the dispatch result map.
+func (d *conductorDeps) finishDispatch(ctx context.Context, meta dispatchMeta, res agent.TurnResult, dispatchErr error) (map[string]any, error) {
+	durS := math.Round(time.Since(meta.Start).Seconds()*10) / 10
+	if rerr := d.a.tracker.RecordOutcome(ctx, budget.Outcome{
+		Project: meta.ProjectID, Thread: meta.Thread, TaskID: meta.TaskID,
+		CLI: meta.CLI, Model: meta.Model, Signals: meta.Signals, Risk: meta.Risk,
+		DurationS: durS, TokensIn: res.InputTokens, TokensOut: res.OutputTokens,
+		ErrorKind: outcomeErrKind(dispatchErr), Background: meta.Background,
+	}); rerr != nil {
+		logStatus("outcome record (%s) failed: %v", meta.CLI, rerr)
+	}
+	if dispatchErr != nil {
+		return nil, fmt.Errorf("dispatch %s: %w", meta.CLI, dispatchErr)
+	}
+	return map[string]any{
+		"thread": meta.Thread, "cli": meta.CLI, "text": res.Text,
+		"tokens_in": res.InputTokens, "tokens_out": res.OutputTokens,
+		"model": meta.Model, "duration_s": durS,
+	}, nil
 }
 
 // managerForProject binds an already-resolved project (cached by project ID).
@@ -150,6 +245,35 @@ func (d *conductorDeps) managerForProject(p project.Project) (*managed, error) {
 	return m, nil
 }
 
+// collectOne shapes one task's collect payload. Finished tasks (done, error,
+// orphaned) are claimed by being collected; live tasks report status only.
+func collectOne(reg *taskRegistry, tk bgTask) map[string]any {
+	switch tk.State {
+	case taskQueued, taskRunning:
+		out := map[string]any{
+			"task_id": tk.ID, "status": tk.State,
+			"elapsed_s": math.Round(time.Since(tk.Created).Seconds()*10) / 10,
+		}
+		if tk.QueuedBehind != "" {
+			out["queued_behind"] = tk.QueuedBehind
+		}
+		return out
+	case taskDone:
+		out := map[string]any{"task_id": tk.ID, "status": taskDone}
+		for k, v := range tk.Result {
+			out[k] = v
+		}
+		reg.Claim(tk.ID)
+		return out
+	default: // error, orphaned
+		reg.Claim(tk.ID)
+		return map[string]any{
+			"task_id": tk.ID, "status": tk.State, "error": tk.Err,
+			"thread": tk.Spec.Thread, "cli": tk.Spec.CLI,
+		}
+	}
+}
+
 type dispatchArgs struct {
 	Project      string   `json:"project"`
 	Thread       string   `json:"thread"`
@@ -159,6 +283,7 @@ type dispatchArgs struct {
 	Risk         string   `json:"risk"`
 	ExtraRoots   []string `json:"extra_roots"`
 	ConfirmToken string   `json:"confirm_token"`
+	Background   bool     `json:"background"`
 }
 
 // conductorTools builds the dispatch + thread_status tool set bound to d.
@@ -180,6 +305,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					"risk":          map[string]any{"type": "string", "enum": []string{"read", "edit", "ship"}},
 					"extra_roots":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 					"confirm_token": map[string]any{"type": "string"},
+					"background":    map[string]any{"type": "boolean", "description": "true = return a task_id immediately and run in the background; collect fetches the result"},
 				},
 				"required": []string{"cli", "message", "risk"},
 			},
@@ -198,6 +324,20 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				}
 				if in.Risk != "read" && in.Risk != "edit" && in.Risk != "ship" {
 					return nil, fmt.Errorf("risk must be read|edit|ship, got %q", in.Risk)
+				}
+				if in.Background {
+					if in.Risk == "ship" {
+						return nil, fmt.Errorf("ship-risk dispatch cannot run in background — the confirmation handshake is interactive; dispatch it synchronously")
+					}
+					if in.CLI == "ollama" {
+						return nil, fmt.Errorf("ollama one-shots are synchronous (local and fast) — drop background")
+					}
+					if d.reg == nil {
+						return nil, fmt.Errorf("background dispatch unavailable (no task registry)")
+					}
+					if err := d.spawnBudgetCheck(ctx, in.CLI); err != nil {
+						return nil, err
+					}
 				}
 				start := time.Now()
 				if in.Risk == "ship" {
@@ -235,6 +375,14 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}); rerr != nil {
 						logStatus("budget record (ollama one-shot) failed: %v", rerr)
 					}
+					if rerr := d.a.tracker.RecordOutcome(ctx, budget.Outcome{
+						CLI: "ollama", Model: model, Signals: dispatchSignals(in.Message),
+						Risk: in.Risk, DurationS: math.Round(time.Since(start).Seconds()*10) / 10,
+						TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
+						ErrorKind: outcomeErrKind(err),
+					}); rerr != nil {
+						logStatus("outcome record (ollama one-shot) failed: %v", rerr)
+					}
 					if err != nil {
 						return nil, fmt.Errorf("ollama dispatch: %w", err)
 					}
@@ -248,6 +396,42 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				model := in.Model
 				if resolved, ok := d.a.routing.Tiers[model]; ok {
 					model = resolved
+				}
+				thread := in.Thread
+				if thread == "" {
+					thread = in.CLI
+				}
+				meta := dispatchMeta{
+					ProjectID: m.mgr.ProjectID, Thread: thread, CLI: in.CLI,
+					Model: model, Risk: in.Risk, Signals: dispatchSignals(in.Message),
+					Start: start,
+				}
+				if in.Background {
+					spec := agent.DispatchSpec{
+						Thread: in.Thread, CLI: in.CLI, Model: model,
+						Message: in.Message, ExtraRoots: in.ExtraRoots,
+						ReadOnly: in.Risk == "read",
+					}
+					runFn := func(bctx context.Context, id string) (map[string]any, error) {
+						// bctx is the server's root context: the task survives
+						// this tool call returning and dies with the server.
+						// No progress notifications mid-flight (this call's
+						// JSON-RPC exchange is long gone); completion
+						// bookkeeping is the same finishDispatch as sync.
+						bmeta := meta
+						bmeta.Background = true
+						bmeta.TaskID = id
+						res, derr := m.mgr.Dispatch(bctx, spec, nil)
+						return d.finishDispatch(bctx, bmeta, res, derr)
+					}
+					id, state := d.reg.Spawn(taskSpec{
+						Project: in.Project, ProjectID: m.mgr.ProjectID, Thread: thread,
+						CLI: in.CLI, Model: model, Risk: in.Risk,
+					}, runFn)
+					return map[string]any{"task_id": id, "thread": thread, "cli": in.CLI, "status": state}, nil
+				}
+				if blocker, busy := d.reg.Busy(m.mgr.ProjectID, thread, in.Risk); busy {
+					return nil, fmt.Errorf("thread %q is busy with background task %s — collect it, wait, or use another thread", thread, blocker)
 				}
 				notify, hasNotify := mcpserver.ProgressFn(ctx)
 				var events int
@@ -278,18 +462,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					Message: in.Message, ExtraRoots: in.ExtraRoots,
 					ReadOnly: in.Risk == "read",
 				}, onEvent)
-				if err != nil {
-					return nil, fmt.Errorf("dispatch %s: %w", in.CLI, err)
-				}
-				thread := in.Thread
-				if thread == "" {
-					thread = in.CLI
-				}
-				return map[string]any{
-					"thread": thread, "cli": in.CLI, "text": res.Text,
-					"tokens_in": res.InputTokens, "tokens_out": res.OutputTokens,
-					"model": model, "duration_s": math.Round(time.Since(start).Seconds()*10) / 10,
-				}, nil
+				return d.finishDispatch(ctx, meta, res, err)
 			},
 		},
 		{
@@ -308,7 +481,13 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				if err != nil {
 					return nil, err
 				}
-				return map[string]any{"threads": m.mgr.StatusLines()}, nil
+				tasks := []string{}
+				for _, tk := range d.reg.Snapshot() {
+					if tk.State == taskQueued || tk.State == taskRunning || !tk.Claimed {
+						tasks = append(tasks, taskLine(tk))
+					}
+				}
+				return map[string]any{"threads": m.mgr.StatusLines(), "tasks": tasks}, nil
 			},
 		},
 		{
@@ -422,6 +601,71 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				}
 				return map[string]any{"pipeline": in.Pipeline, "done": true,
 					"note": "artifacts under styx/research/ and styx/plans/; runs ls for pipeline state"}, nil
+			},
+		},
+		{
+			Name: "rate_dispatch",
+			Description: "Rate a recent dispatch outcome as notably good or bad (feeds styx learn). " +
+				"Rate only notable outcomes — not every dispatch.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
+				"thread_or_task": map[string]any{"type": "string", "description": "thread name or background task id; the most recent matching outcome is rated"},
+				"ok":             map[string]any{"type": "boolean", "description": "true = notably good, false = notably bad"},
+				"note":           map[string]any{"type": "string", "description": "one line on why (optional)"},
+			}, "required": []string{"thread_or_task", "ok"}},
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in struct {
+					ThreadOrTask string `json:"thread_or_task"`
+					OK           bool   `json:"ok"`
+					Note         string `json:"note"`
+				}
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("rate_dispatch args: %w", err)
+				}
+				if in.ThreadOrTask == "" {
+					return nil, fmt.Errorf("thread_or_task is required")
+				}
+				id, err := d.a.tracker.RateOutcome(ctx, in.ThreadOrTask, in.OK, in.Note)
+				if err != nil {
+					return nil, err
+				}
+				return map[string]any{"rated": true, "outcome_id": id, "target": in.ThreadOrTask}, nil
+			},
+		},
+		{
+			Name: "collect",
+			Description: "Fetch background dispatch results. With task_id: that task's result " +
+				"(or its live status). Without: every finished-unclaimed result plus one-line " +
+				"summaries of running/queued tasks.",
+			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
+				"task_id": map[string]any{"type": "string", "description": "task id from dispatch background:true; omit to collect everything finished"},
+			}},
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in struct {
+					TaskID string `json:"task_id"`
+				}
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("collect args: %w", err)
+				}
+				if in.TaskID != "" {
+					tk, ok := d.reg.Get(in.TaskID)
+					if !ok {
+						return nil, fmt.Errorf("unknown task %q — thread_status lists live and unclaimed tasks", in.TaskID)
+					}
+					return collectOne(d.reg, tk), nil
+				}
+				results := []map[string]any{}
+				pending := []string{}
+				for _, tk := range d.reg.Snapshot() {
+					switch tk.State {
+					case taskQueued, taskRunning:
+						pending = append(pending, taskLine(tk))
+					default:
+						if !tk.Claimed {
+							results = append(results, collectOne(d.reg, tk))
+						}
+					}
+				}
+				return map[string]any{"results": results, "pending": pending}, nil
 			},
 		},
 	}

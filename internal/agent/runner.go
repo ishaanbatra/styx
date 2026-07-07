@@ -35,7 +35,10 @@ func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, re
 		ctx, cancel = context.WithTimeout(ctx, r.Timeout)
 		defer cancel()
 	}
-	args := r.Adapter.BuildArgs(msg, r.Thread.SessionID, model, extra, readOnly)
+	r.Thread.mu.Lock()
+	sid := r.Thread.SessionID
+	r.Thread.mu.Unlock()
+	args := r.Adapter.BuildArgs(msg, sid, model, extra, readOnly)
 	cmd := exec.CommandContext(ctx, r.Adapter.Bin(), args...)
 	if r.WorkDir != "" {
 		cmd.Dir = r.WorkDir
@@ -77,7 +80,9 @@ func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, re
 		}
 		switch ev.Type {
 		case EventInit:
+			r.Thread.mu.Lock()
 			r.Thread.SessionID = ev.SessionID
+			r.Thread.mu.Unlock()
 		case EventText:
 			lastText = ev.Text
 		case EventResult:
@@ -86,7 +91,9 @@ func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, re
 			res.OutputTokens = ev.OutputTokens
 			resultErr = ev.IsError
 			if ev.SessionID != "" {
+				r.Thread.mu.Lock()
 				r.Thread.SessionID = ev.SessionID
+				r.Thread.mu.Unlock()
 			}
 		}
 	}
@@ -109,6 +116,8 @@ func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, re
 }
 
 func (r *Runner) finish(res TurnResult) {
+	r.Thread.mu.Lock()
+	defer r.Thread.mu.Unlock()
 	r.Thread.ContextTokens = res.InputTokens + res.OutputTokens
 	r.Thread.Turns++
 	r.Thread.UpdatedAt = time.Now()

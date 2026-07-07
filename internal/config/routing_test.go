@@ -196,7 +196,8 @@ func defaultBrainForTest() BrainConfig {
 
 func defaultConductorForTest() Conductor {
 	return Conductor{
-		ShipGate: "handshake",
+		ShipGate:           "handshake",
+		MaxBackgroundTasks: 4,
 	}
 }
 
@@ -225,5 +226,18 @@ func TestConductorDefaults(t *testing.T) {
 	}
 	if r.Conductor.ShipGate != "handshake" {
 		t.Fatalf("ShipGate default = %q, want handshake", r.Conductor.ShipGate)
+	}
+}
+
+func TestConductorTaskCapDefault(t *testing.T) {
+	var r Routing
+	applyConductorDefaults(&r)
+	if r.Conductor.MaxBackgroundTasks != 4 {
+		t.Errorf("default max_background_tasks = %d, want 4", r.Conductor.MaxBackgroundTasks)
+	}
+	r2 := Routing{Conductor: Conductor{MaxBackgroundTasks: 2}}
+	applyConductorDefaults(&r2)
+	if r2.Conductor.MaxBackgroundTasks != 2 {
+		t.Errorf("explicit knob must be preserved, got %d", r2.Conductor.MaxBackgroundTasks)
 	}
 }

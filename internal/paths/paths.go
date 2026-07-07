@@ -127,6 +127,16 @@ func ThreadsDir() (string, error) {
 	return filepath.Join(s, "threads"), nil
 }
 
+// TasksDir returns the directory holding background-task state mirrors
+// (crash honesty for the conductor's task registry).
+func TasksDir() (string, error) {
+	s, err := StateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(s, "tasks"), nil
+}
+
 // EnsureDir creates dir (and parents) with 0755.
 func EnsureDir(dir string) error {
 	return os.MkdirAll(dir, 0o755)

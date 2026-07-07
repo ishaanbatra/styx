@@ -101,3 +101,29 @@ func TestLoad(t *testing.T) {
 		}
 	})
 }
+
+func TestSeedV3UpgradesToCurrent(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	p, err := guidanceFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(seedV3), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != Seed {
+		t.Fatal("an unmodified v3 seed must upgrade to the current Seed")
+	}
+	for _, want := range []string{"background: true", "collect", "rate_dispatch"} {
+		if !strings.Contains(Seed, want) {
+			t.Fatalf("current Seed must teach %q", want)
+		}
+	}
+}

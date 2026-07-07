@@ -107,7 +107,7 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, _, _, err := UpgradeRoutingFile(routingPath)
+	n, _, _, _, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,5 +213,33 @@ func TestEnsureFableTier(t *testing.T) {
 	_, changed3 := EnsureFableTier(custom)
 	if changed3 {
 		t.Fatal("user-customized fable mapping must be left alone")
+	}
+}
+
+func TestEnsureConductorTaskCap(t *testing.T) {
+	// Seeded-shape config: knob injected inside the existing [conductor] section.
+	seeded := "[tiers]\nfable  = \"fable\"\n\n[conductor]\nship_gate = \"handshake\"\n"
+	got, changed := EnsureConductorTaskCap(seeded)
+	if !changed || !strings.Contains(got, "max_background_tasks = 4") {
+		t.Fatalf("must inject the cap knob, got changed=%v:\n%s", changed, got)
+	}
+	if strings.Index(got, "[conductor]") > strings.Index(got, "max_background_tasks") {
+		t.Fatalf("knob must land inside the [conductor] section:\n%s", got)
+	}
+	// Idempotent.
+	again, changed2 := EnsureConductorTaskCap(got)
+	if changed2 || again != got {
+		t.Fatal("second run must be a no-op")
+	}
+	// User customization is respected.
+	custom := "[conductor]\nship_gate = \"off\"\nmax_background_tasks = 2\n"
+	if _, changed3 := EnsureConductorTaskCap(custom); changed3 {
+		t.Fatal("a config already carrying the knob must be left alone")
+	}
+	// Config with no [conductor] section at all: whole section appended.
+	bare := "[tiers]\nfable  = \"fable\"\n"
+	got4, changed4 := EnsureConductorTaskCap(bare)
+	if !changed4 || !strings.Contains(got4, "[conductor]") || !strings.Contains(got4, "max_background_tasks = 4") {
+		t.Fatalf("missing section must be appended whole:\n%s", got4)
 	}
 }

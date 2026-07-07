@@ -370,7 +370,7 @@ func ensureFirstRun() error {
 	}
 	// Auto-upgrade: v0.2 rewrites gemini:* -> agy:default; v0.3 injects the
 	// `implement` verb rules. Both back up to routing.v0.1.toml.bak.
-	if n, injected, fableRestored, err := config.UpgradeRoutingFile(routingPath); err != nil {
+	if n, injected, fableRestored, taskCapInjected, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
 	} else {
 		if n > 0 {
@@ -381,6 +381,9 @@ func ensureFirstRun() error {
 		}
 		if fableRestored {
 			logStatus("auto-upgraded routing.toml: restored the fable tier (suspension lifted)")
+		}
+		if taskCapInjected {
+			logStatus("auto-upgraded routing.toml: seeded [conductor] max_background_tasks = 4")
 		}
 	}
 	if projs, err := config.LoadProjects(); err == nil {

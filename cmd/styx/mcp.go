@@ -625,13 +625,28 @@ func mcpTools(a *app) []mcpserver.Tool {
 
 // cmdMCP runs styx as an MCP stdio server. stdout carries the JSON-RPC
 // protocol; status goes to stderr via logStatus. The server runs until the
-// host closes stdin (EOF).
+// host closes stdin (EOF); cancel then reaps background dispatch goroutines —
+// background work lives and dies with this process.
 func cmdMCP(a *app, args []string) error {
-	tools := append(mcpTools(a), conductorTools(newConductorDeps(a))...)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := newConductorDeps(a, ctx)
+	if dir, err := paths.TasksDir(); err != nil {
+		logStatus("task state dir unavailable: %v", err)
+	} else if err := paths.EnsureDir(dir); err != nil {
+		logStatus("task state dir unavailable: %v", err)
+	} else {
+		d.reg.dir = dir
+		if orphans := adoptOrphanedTaskFiles(dir, 7*24*time.Hour); len(orphans) > 0 {
+			d.reg.adoptOrphans(orphans)
+			logStatus("%d background task(s) from a previous session were lost — collect reports them", len(orphans))
+		}
+	}
+	tools := append(mcpTools(a), withBackgroundStatus(conductorTools(d), d.reg)...)
 	srv := mcpserver.New("styx", mcpServerVersion, tools)
-	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, thread_status, memory_save, pipeline_run)")
+	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, thread_status, memory_save, pipeline_run, rate_dispatch, collect)")
 	go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake
-	return srv.Serve(context.Background(), os.Stdin, os.Stdout)
+	return srv.Serve(ctx, os.Stdin, os.Stdout)
 }
 
 // preloadOllamaModels warms the brain + embedding models with keep_alive so

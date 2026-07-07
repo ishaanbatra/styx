@@ -140,6 +140,10 @@ func New(path string) (*Tracker, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if _, err := db.ExecContext(context.Background(), outcomesSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("apply outcomes schema: %w", err)
+	}
 	// v0.3 migration: per-model message counters for tier-aware degradation.
 	if _, err := db.ExecContext(context.Background(),
 		`ALTER TABLE usage ADD COLUMN model TEXT NOT NULL DEFAULT ''`); err != nil {
