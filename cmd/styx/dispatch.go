@@ -370,7 +370,7 @@ func ensureFirstRun() error {
 	}
 	// Auto-upgrade: v0.2 rewrites gemini:* -> agy:default; v0.3 injects the
 	// `implement` verb rules. Both back up to routing.v0.1.toml.bak.
-	if n, injected, err := config.UpgradeRoutingFile(routingPath); err != nil {
+	if n, injected, fableRestored, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
 	} else {
 		if n > 0 {
@@ -378,6 +378,9 @@ func ensureFirstRun() error {
 		}
 		if injected {
 			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")
+		}
+		if fableRestored {
+			logStatus("auto-upgraded routing.toml: restored the fable tier (suspension lifted)")
 		}
 	}
 	if projs, err := config.LoadProjects(); err == nil {

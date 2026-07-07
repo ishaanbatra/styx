@@ -82,9 +82,10 @@ func applyBrainDefaults(r *Routing) {
 		r.Tiers = map[string]string{}
 	}
 	for tier, model := range map[string]string{
-		// fable -> opus: Fable 5 is suspended worldwide (2026-06-12 US export
-		// directive). Opus 4.8 is the top callable model. Restore "fable" if it returns.
-		"fable": "opus", "opus": "opus", "sonnet": "sonnet", "haiku": "haiku",
+		// fable = Claude Fable 5, the top tier, callable again since mid-2026
+		// (was mapped to opus during the 2026-06-12 suspension). Safety
+		// classifiers may transparently serve opus for flagged requests.
+		"fable": "fable", "opus": "opus", "sonnet": "sonnet", "haiku": "haiku",
 	} {
 		if r.Tiers[tier] == "" {
 			r.Tiers[tier] = model

@@ -161,6 +161,19 @@ func EnsureImplementRules(content string) (string, bool) {
 // implementVerbRE matches a routing rule whose verb is "implement".
 var implementVerbRE = regexp.MustCompile(`(?m)^\s*verb\s*=\s*"implement"`)
 
+// EnsureFableTier upgrades the exact seeded suspension-era mapping
+// `fable  = "opus"` to `fable  = "fable"`. Only the seeded spelling is
+// rewritten — any user-customized mapping is preserved. Returns the new
+// content and whether a rewrite happened.
+func EnsureFableTier(content string) (string, bool) {
+	const old = `fable  = "opus"`
+	const new_ = `fable  = "fable"`
+	if !strings.Contains(content, old) {
+		return content, false
+	}
+	return strings.Replace(content, old, new_, 1), true
+}
+
 // RewriteRoutingGeminiToAgy substitutes gemini:flash and gemini:pro with
 // agy:default in the input. It also cleans up [budget] blocks (drops stale
 // gemini_free/gemini_paid cap_pct keys, injects agy.cap_pct = 80 if absent)
@@ -239,34 +252,36 @@ func RewriteRoutingGeminiToAgy(content string) (string, int) {
 }
 
 // UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
-// injects the `implement` verb rules if missing (v0.3), cleans stale budget keys,
-// dedupes fallback arrays, backs up the original to routing.v0.1.toml.bak, and
-// atomically writes the new content. Returns the gemini-rule substitution count
-// and whether implement rules were injected. Missing-file is not an error.
-func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected bool, err error) {
+// injects the `implement` verb rules if missing (v0.3), restores the seeded fable
+// tier mapping (v0.4), cleans stale budget keys, dedupes fallback arrays, backs up
+// the original to routing.v0.1.toml.bak, and atomically writes the new content.
+// Returns the gemini-rule substitution count, whether implement rules were
+// injected, and whether the fable tier was restored. Missing-file is not an error.
+func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fableRestored bool, err error) {
 	b, err := os.ReadFile(routingPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, false, nil
+			return 0, false, false, nil
 		}
-		return 0, false, fmt.Errorf("read routing: %w", err)
+		return 0, false, false, fmt.Errorf("read routing: %w", err)
 	}
 	newContent, n := RewriteRoutingGeminiToAgy(string(b))
 	newContent, injected := EnsureImplementRules(newContent)
+	newContent, fable := EnsureFableTier(newContent)
 	// Use content comparison: skip write if nothing changed at all
 	if newContent == string(b) {
-		return 0, false, nil
+		return 0, false, false, nil
 	}
 	backup := filepath.Join(filepath.Dir(routingPath), "routing.v0.1.toml.bak")
 	if err := os.WriteFile(backup, b, 0o644); err != nil {
-		return 0, false, fmt.Errorf("write backup %s: %w", backup, err)
+		return 0, false, false, fmt.Errorf("write backup %s: %w", backup, err)
 	}
 	tmp := routingPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
-		return 0, false, fmt.Errorf("write tmp: %w", err)
+		return 0, false, false, fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, routingPath); err != nil {
-		return 0, false, fmt.Errorf("atomic rename: %w", err)
+		return 0, false, false, fmt.Errorf("atomic rename: %w", err)
 	}
-	return n, injected, nil
+	return n, injected, fable, nil
 }

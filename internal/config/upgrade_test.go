@@ -107,7 +107,7 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, _, err := UpgradeRoutingFile(routingPath)
+	n, _, _, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,5 +194,24 @@ use  = "claude:sonnet-4-6"
 		if count != 1 {
 			t.Errorf("idempotency: %q appears %d times after second pass (want 1):\n%s", key, count, got2)
 		}
+	}
+}
+
+func TestEnsureFableTier(t *testing.T) {
+	seeded := "[tiers]\nfable  = \"opus\"\nopus   = \"opus\"\n"
+	got, changed := EnsureFableTier(seeded)
+	if !changed || !strings.Contains(got, `fable  = "fable"`) {
+		t.Fatalf("seeded fable mapping must upgrade, got changed=%v:\n%s", changed, got)
+	}
+	// Idempotent.
+	again, changed2 := EnsureFableTier(got)
+	if changed2 || again != got {
+		t.Fatal("second run must be a no-op")
+	}
+	// User customization is respected.
+	custom := "[tiers]\nfable  = \"sonnet\"\n"
+	_, changed3 := EnsureFableTier(custom)
+	if changed3 {
+		t.Fatal("user-customized fable mapping must be left alone")
 	}
 }

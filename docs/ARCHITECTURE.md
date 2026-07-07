@@ -290,8 +290,10 @@ wiring. `Brain` configures the planned local ollama routing brain and memory
 embedding model; `Conductor` configures the frontier-brain launcher and MCP
 toolbelt (e.g. `ship_gate`: handshake | tty | off, default handshake, controlling
 ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`);
-`Tiers` maps brain tier names to claude CLI model aliases, with `fable` currently
-mapped to `opus` while the fable tier is suspended.
+`Tiers` maps brain tier names to claude CLI model aliases; `fable` maps to `fable`
+again (the top tier, callable since mid-2026 after the 2026-06-12 suspension —
+`config.EnsureFableTier` migrates suspension-era configs that still pin the seeded
+`fable = "opus"`, leaving user-customized mappings alone).
 
 **Capability floor (v2).** `internal/signals/floor.go` defines `Tier`
 (`TierLocal < TierHaiku < TierSonnet < TierOpus`), `TierOf(channel, model)`

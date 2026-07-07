@@ -1466,7 +1466,7 @@ git commit -m "feat(mcp): progress notifications during dispatch + duration/mode
 **Interfaces:**
 - Produces: `Tiers["fable"] == "fable"` by default; `EnsureFableTier(content string) (string, bool)` idempotent migration for existing user configs (only rewrites the exact seeded `fable  = "opus"` line — a user-customized mapping is left alone).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `internal/config/routing_test.go` — find the existing tier-default assertion (grep `"fable"`) and flip it:
 
@@ -1499,12 +1499,12 @@ func TestEnsureFableTier(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `go test ./internal/config/ -run 'TestEnsureFableTier|TestRouting' -v`
 Expected: FAIL — `undefined: EnsureFableTier` + old default assertion.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `internal/config/routing.go` tier defaults (~line 85):
 
@@ -1540,12 +1540,12 @@ Wire into `UpgradeRoutingFile` alongside `EnsureImplementRules` (same read-modif
 
 `internal/guidance/guidance.go`: if the `Seed` model-tier guidance line enumerates tiers, add fable as the top tier. **Note:** changing `Seed` requires the seed-upgrade mechanic — retain the previous seed content as the next `seedVN` constant so unmodified guidance files upgrade transparently (see the "Guidance" section of ARCHITECTURE.md; follow the existing `seedV1` pattern).
 
-- [ ] **Step 4: Run tests + doctor**
+- [x] **Step 4: Run tests + doctor**
 
 Run: `go test ./internal/config/ ./internal/brain/ ./internal/guidance/ -v` → PASS
 Run: `make build && ./bin/styx doctor` → expect `tier fable -> claude --model fable - callable`. If NOT callable on this machine, STOP: revert the default flip to a routing.toml-comment-only change and flag to the user — the migration must not ship pointing at an uncallable model.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md`: "Routing" section `Tiers` sentence (fable no longer suspended); "Brain" card description note. Bump `last_verified`. Also update the README if it mentions the fable suspension.
 

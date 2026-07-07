@@ -12,12 +12,12 @@ func cmdUpgrade() error {
 	if err != nil {
 		return err
 	}
-	n, injected, err := config.UpgradeRoutingFile(p)
+	n, injected, fableRestored, err := config.UpgradeRoutingFile(p)
 	if err != nil {
 		return err
 	}
-	if n == 0 && !injected {
-		fmt.Println("routing.toml already up to date (agy + implement verb present).")
+	if n == 0 && !injected && !fableRestored {
+		fmt.Println("routing.toml already up to date (agy + implement verb + fable tier present).")
 		return nil
 	}
 	if n > 0 {
@@ -25,6 +25,9 @@ func cmdUpgrade() error {
 	}
 	if injected {
 		fmt.Println("Added the implement verb (codex implements from a plan, claude fallback).")
+	}
+	if fableRestored {
+		fmt.Println("Restored the fable tier (suspension lifted; fable now maps to fable).")
 	}
 	fmt.Printf("Backup saved to %s/routing.v0.1.toml.bak\n", "~/.config/styx")
 	return nil

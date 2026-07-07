@@ -24,6 +24,7 @@ fallback = ["ollama:qwen2.5-coder:14b"]
 [[rule]]
 verb = "research.critic"
 use  = "codex"
+# effort: low|medium|high|xhigh|max (claude); codex maps to model_reasoning_effort
 effort = "high"
 fallback = ["ollama:qwen2.5-coder:14b"]
 
@@ -117,15 +118,14 @@ model                 = "qwen2.5-coder:7b"
 embed_model           = "nomic-embed-text"
 confidence_threshold  = 0.5
 context_threshold_pct = 70
-fable_weekly_cap      = 80   # vestigial while fable maps to opus (see [tiers] note); kept for easy restore
+fable_weekly_cap      = 80   # caps fable messages before the tier degrades to opus
 
 # Tier -> claude CLI model alias. The brain emits tiers; the REPL maps them here.
-# NOTE (2026-06-12): Claude Fable 5 and Mythos 5 are suspended worldwide under a
-# US export-control directive, so the "fable" tier maps to opus until access is
-# restored. Opus 4.8 is the most capable model currently callable. Flip fable
-# back to "fable" if/when Anthropic restores it.
+# NOTE: the "fable" tier mapped to opus during the 2026-06-12 suspension; Fable 5
+# is callable again since mid-2026 and now maps to "fable" (safety classifiers may
+# transparently serve opus for flagged requests).
 [tiers]
-fable  = "opus"
+fable  = "fable"
 opus   = "opus"
 sonnet = "sonnet"
 haiku  = "haiku"

@@ -68,6 +68,27 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("unmodified v2 seed upgrades to current", func(t *testing.T) {
+		Load(t.TempDir()) // ensure seeded
+		p, _ := guidanceFile()
+		if err := os.WriteFile(p, []byte(seedV2), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := Load(t.TempDir())
+		if err != nil {
+			t.Fatalf("Load over v2 seed: %v", err)
+		}
+		if got != Seed {
+			t.Fatalf("v2 unmodified seed must upgrade to current Seed, got:\n%s", got)
+		}
+	})
+
+	t.Run("seed names the fable tier", func(t *testing.T) {
+		if !strings.Contains(Seed, "fable = the most demanding") {
+			t.Errorf("seed model-tier line must name fable, got:\n%s", Seed)
+		}
+	})
+
 	t.Run("per-repo override appended", func(t *testing.T) {
 		repo := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(repo, "styx"), 0o755); err != nil {

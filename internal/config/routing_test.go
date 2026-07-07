@@ -176,7 +176,10 @@ func TestBrainDefaultsAppliedWhenSectionMissing(t *testing.T) {
 	if r.Brain.FableWeeklyCap != 80 {
 		t.Errorf("default fable cap = %d, want 80", r.Brain.FableWeeklyCap)
 	}
-	if r.Tiers["fable"] != "opus" || r.Tiers["haiku"] != "haiku" {
+	if r.Tiers["fable"] != "fable" {
+		t.Errorf(`default fable tier = %q, want "fable" (suspension lifted)`, r.Tiers["fable"])
+	}
+	if r.Tiers["haiku"] != "haiku" {
 		t.Errorf("default tiers = %v", r.Tiers)
 	}
 }
@@ -203,7 +206,7 @@ func defaultModelsForTest() ModelsConfig {
 
 func defaultTiersForTest() map[string]string {
 	return map[string]string{
-		"fable":  "opus",
+		"fable":  "fable",
 		"opus":   "opus",
 		"sonnet": "sonnet",
 		"haiku":  "haiku",

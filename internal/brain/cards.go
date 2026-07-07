@@ -16,7 +16,7 @@ var Cards = []Card{
 	{
 		CLI:           "claude",
 		Bin:           "claude",
-		Condensed:     "claude - Claude Code CLI. Models by tier: opus (deep planning, architecture, hard debugging, complex/ambiguous implementation - the top callable tier), sonnet (reviews and claude-side implementation/refactors), haiku (cheap classify/distill). Best for: planning, architecture, debugging with repo context, ambiguous or multi-file work, and code review. Hand well-scoped implementation from a clear plan to codex (it is faster to a first diff); keep ambiguous/architectural implementation here. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work. (A 'fable' tier exists for the most demanding work but is currently suspended and maps to opus - prefer opus.)",
+		Condensed:     "claude - Claude Code CLI. Models by tier: fable (the most demanding judgment work), opus (deep planning, architecture, hard debugging, complex/ambiguous implementation), sonnet (reviews and claude-side implementation/refactors), haiku (cheap classify/distill). Best for: planning, architecture, debugging with repo context, ambiguous or multi-file work, and code review. Hand well-scoped implementation from a clear plan to codex (it is faster to a first diff); keep ambiguous/architectural implementation here. Supports per-thread persistent sessions and interactive handoff. Extra option --add-dir <path> for cross-repo work.",
 		ExpectedFlags: []string{"--resume", "--output-format", "--model", "--add-dir", "--dangerously-skip-permissions"},
 		ResumeProbe:   "--resume",
 	},
