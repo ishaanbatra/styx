@@ -9,7 +9,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -281,15 +284,144 @@ func elapsedShort(d time.Duration) string {
 	}
 }
 
-// persistLocked mirrors task state to disk. No-op until Task 6 wires the
-// mirror dir; callers hold r.mu.
+// persistLocked mirrors task state to disk. No-op when r.dir is unset
+// (disabled in unit tests that don't need persistence). Callers hold r.mu.
 func (r *taskRegistry) persistLocked(t *bgTask) {
 	if r.dir == "" {
 		return
 	}
-	// Implemented in Task 6 (writeTaskFile).
 	writeTaskFile(r.dir, t)
 }
 
-// writeTaskFile is implemented in Task 6 (state-file mirror).
-func writeTaskFile(dir string, t *bgTask) {}
+// taskFile is the JSON state mirror of one task. It exists for crash honesty
+// — orphan reporting after a dead server — never for resumption: results are
+// in-memory only, so an uncollected finish is a reported loss.
+type taskFile struct {
+	RunID     string    `json:"run_id"`
+	ID        string    `json:"id"`
+	State     string    `json:"state"`
+	Project   string    `json:"project"`
+	ProjectID string    `json:"project_id"`
+	Thread    string    `json:"thread"`
+	CLI       string    `json:"cli"`
+	Model     string    `json:"model"`
+	Risk      string    `json:"risk"`
+	Created   time.Time `json:"created"`
+	Started   time.Time `json:"started,omitempty"`
+	Finished  time.Time `json:"finished,omitempty"`
+	Err       string    `json:"error,omitempty"`
+	Claimed   bool      `json:"claimed"`
+}
+
+// writeTaskFile mirrors one task to <dir>/<run-id>.json (atomic tmp+rename).
+// Best-effort: a mirror failure is narrated, never fails the task.
+func writeTaskFile(dir string, t *bgTask) {
+	tf := taskFile{
+		RunID: t.RunID, ID: t.ID, State: t.State,
+		Project: t.Spec.Project, ProjectID: t.Spec.ProjectID, Thread: t.Spec.Thread,
+		CLI: t.Spec.CLI, Model: t.Spec.Model, Risk: t.Spec.Risk,
+		Created: t.Created, Started: t.Started, Finished: t.Finished,
+		Err: t.Err, Claimed: t.Claimed,
+	}
+	b, err := json.MarshalIndent(tf, "", "  ")
+	if err != nil {
+		logStatus("task mirror %s: %v", t.ID, err)
+		return
+	}
+	path := filepath.Join(dir, tf.RunID+".json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		logStatus("task mirror %s: %v", t.ID, err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		logStatus("task mirror %s: %v", t.ID, err)
+	}
+}
+
+// adoptOrphanedTaskFiles scans dir at server start: every UNCLAIMED file from
+// a previous lifetime — whatever its state — is a loss (queued/running died
+// with the server; done/error results lived only in that server's memory).
+// Each is flipped to orphaned on disk and returned for adoption. Claimed
+// files finished more than maxClaimedAge ago are pruned. Best-effort
+// throughout: unreadable files are narrated and skipped.
+//
+// Deviation from the task brief: the brief's on-disk orphan-flip write
+// (MarshalIndent/WriteFile/Rename) swallowed its errors. That violates the
+// project's never-swallow-errors invariant, so both failure paths are
+// narrated via logStatus below, matching writeTaskFile's convention. A
+// MarshalIndent failure skips the write but still returns the in-memory
+// orphan — the loss is real and must be reported this session even if the
+// on-disk flip couldn't be persisted; the next scan will retry the flip.
+func adoptOrphanedTaskFiles(dir string, maxClaimedAge time.Duration) []taskFile {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logStatus("task scan: %v", err)
+		}
+		return nil
+	}
+	var orphans []taskFile
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		b, err := os.ReadFile(path)
+		if err != nil {
+			logStatus("task scan %s: %v", e.Name(), err)
+			continue
+		}
+		var tf taskFile
+		if err := json.Unmarshal(b, &tf); err != nil {
+			logStatus("task scan %s: %v", e.Name(), err)
+			continue
+		}
+		if tf.Claimed {
+			if !tf.Finished.IsZero() && time.Since(tf.Finished) > maxClaimedAge {
+				if err := os.Remove(path); err != nil {
+					logStatus("task prune %s: %v", e.Name(), err)
+				}
+			}
+			continue
+		}
+		prior := tf.State
+		tf.State = taskOrphaned
+		if tf.Err == "" || prior == taskQueued || prior == taskRunning || prior == taskDone {
+			tf.Err = fmt.Sprintf("lost when styx mcp exited (state was %q); no result — re-dispatch if still needed", prior)
+		}
+		nb, err := json.MarshalIndent(tf, "", "  ")
+		if err != nil {
+			logStatus("task orphan-flip %s: %v", e.Name(), err)
+		} else {
+			tmp := path + ".tmp"
+			if err := os.WriteFile(tmp, nb, 0o644); err != nil {
+				logStatus("task orphan-flip %s: %v", e.Name(), err)
+			} else if err := os.Rename(tmp, path); err != nil {
+				logStatus("task orphan-flip %s: %v", e.Name(), err)
+			}
+		}
+		orphans = append(orphans, tf)
+	}
+	return orphans
+}
+
+// adoptOrphans inserts prior-lifetime orphans as o1, o2, … entries so
+// collect and the piggyback line report them. Claiming persists to their
+// original run-id file.
+func (r *taskRegistry) adoptOrphans(files []taskFile) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, tf := range files {
+		id := fmt.Sprintf("o%d", i+1)
+		t := &bgTask{
+			ID: id, RunID: tf.RunID,
+			Spec: taskSpec{Project: tf.Project, ProjectID: tf.ProjectID, Thread: tf.Thread,
+				CLI: tf.CLI, Model: tf.Model, Risk: tf.Risk},
+			State: taskOrphaned, Created: tf.Created, Started: tf.Started,
+			Finished: tf.Finished, Err: tf.Err,
+		}
+		r.tasks[id] = t
+		r.order = append(r.order, id)
+	}
+}

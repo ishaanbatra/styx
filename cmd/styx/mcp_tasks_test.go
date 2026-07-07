@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -164,4 +167,80 @@ func TestRegistryBusyAndNilSafety(t *testing.T) {
 		t.Fatal("another project must not be busy")
 	}
 	close(release1)
+}
+
+func TestTaskStateMirrorAndOrphanScan(t *testing.T) {
+	dir := t.TempDir()
+	r := newTaskRegistry(context.Background(), 4)
+	r.dir = dir
+	run1, started1, release1 := blockingRun(map[string]any{"text": "hi"})
+	id, _ := r.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "edit"}, run1)
+	<-started1
+
+	// Spawn mirrored the running task to disk.
+	files, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	if len(files) != 1 {
+		t.Fatalf("want 1 state file after spawn, got %d", len(files))
+	}
+	var tf taskFile
+	b, _ := os.ReadFile(files[0])
+	if err := json.Unmarshal(b, &tf); err != nil {
+		t.Fatalf("state file must be JSON: %v", err)
+	}
+	if tf.State != taskRunning || tf.ID != id || tf.CLI != "codex" {
+		t.Fatalf("state file mismatch: %+v", tf)
+	}
+
+	close(release1)
+	waitFor(t, "done mirrored", func() bool {
+		b, _ := os.ReadFile(files[0])
+		json.Unmarshal(b, &tf)
+		return tf.State == taskDone
+	})
+
+	// A NEW server adopting this dir treats the unclaimed done file as an
+	// orphan (results are in-memory only — losses are loud, never silent).
+	orphans := adoptOrphanedTaskFiles(dir, 7*24*time.Hour)
+	if len(orphans) != 1 {
+		t.Fatalf("want 1 orphan, got %d", len(orphans))
+	}
+	r2 := newTaskRegistry(context.Background(), 4)
+	r2.dir = dir
+	r2.adoptOrphans(orphans)
+	snap := r2.Snapshot()
+	if len(snap) != 1 || snap[0].State != taskOrphaned || snap[0].ID != "o1" {
+		t.Fatalf("adopted orphan mismatch: %+v", snap)
+	}
+	if !strings.Contains(snap[0].Err, "styx mcp exited") {
+		t.Fatalf("orphan must explain the loss, got %q", snap[0].Err)
+	}
+	if line := r2.StatusLine(); !strings.Contains(line, "o1 orphaned") {
+		t.Fatalf("orphans must be reported in the status line, got %q", line)
+	}
+
+	// The on-disk file was flipped to orphaned; a third scan adopts it again
+	// (still unclaimed), and claiming persists.
+	if again := adoptOrphanedTaskFiles(dir, 7*24*time.Hour); len(again) != 1 || again[0].State != taskOrphaned {
+		t.Fatalf("unclaimed orphan file must keep resurfacing, got %+v", again)
+	}
+	r2.Claim("o1")
+	if left := adoptOrphanedTaskFiles(dir, 7*24*time.Hour); len(left) != 0 {
+		t.Fatalf("claimed orphan must not resurface, got %+v", left)
+	}
+}
+
+func TestOrphanPruneOldClaimedFiles(t *testing.T) {
+	dir := t.TempDir()
+	old := taskFile{RunID: "run-old", ID: "t9", State: taskDone, Claimed: true,
+		Finished: time.Now().Add(-8 * 24 * time.Hour)}
+	b, _ := json.Marshal(old)
+	if err := os.WriteFile(filepath.Join(dir, "run-old.json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if orphans := adoptOrphanedTaskFiles(dir, 7*24*time.Hour); len(orphans) != 0 {
+		t.Fatalf("claimed files are never orphans, got %+v", orphans)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "run-old.json")); !os.IsNotExist(err) {
+		t.Fatal("claimed file older than 7 days must be pruned")
+	}
 }

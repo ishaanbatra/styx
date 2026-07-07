@@ -1009,9 +1009,10 @@ REPL loop.
 it owns every background task of one `styx mcp` process and enforces the cap
 and ordering rules that keep background work from racing a project's own
 stateful sessions. Task 5 lands the registry itself (cap, ordering,
-collect/claim); Task 6 wires the state-file mirror (`writeTaskFile`, a no-op
-stub in Task 5); Task 7+ wire the `dispatch(background: true)` / `collect`
-tool surface on top.
+collect/claim); Task 6 wires the state-file mirror (`writeTaskFile`) and
+startup orphan adoption; Task 7+ wire the `dispatch(background: true)` /
+`collect` tool surface on top, including registering `r.dir` and calling
+`adoptOrphanedTaskFiles`/`adoptOrphans` at `styx mcp` startup.
 
 - **States** — `taskQueued` ("queued"), `taskRunning` ("running"),
   `taskDone` ("done"), `taskError` ("error"), `taskOrphaned` ("orphaned").
@@ -1019,10 +1020,12 @@ tool surface on top.
   visible (in `Snapshot` and `StatusLine`) until claimed.
 - **Monotonic ids** — `newTaskRegistry(rootCtx, limit)` builds an empty
   registry; `Spawn` assigns ids `t1`, `t2`, … in a mutex-guarded `r.seq`
-  counter, monotonic within one server lifetime (adopted orphans from a
-  crashed process get `o<n>` ids once Task 6 lands recovery). `Spawn`
-  returns `(id, state)` immediately — `state` is `taskRunning` if the task
-  started inline or `taskQueued` if capacity/ordering deferred it.
+  counter, monotonic within one server lifetime. Orphans adopted from a
+  prior (crashed or exited) `styx mcp` lifetime get `o1`, `o2`, … ids instead
+  (assigned by adoption order, not `r.seq`) — see the mirror/orphan-adoption
+  paragraph below. `Spawn` returns `(id, state)` immediately — `state` is
+  `taskRunning` if the task started inline or `taskQueued` if
+  capacity/ordering deferred it.
 - **Global concurrency cap** — `limit` (defaulting to 4 if `<= 0`), sourced
   from `[conductor] max_background_tasks` (`internal/config/routing.go`
   `Conductor.MaxBackgroundTasks`, default 4, seeded by
@@ -1065,10 +1068,35 @@ tool surface on top.
   all safe to call on a nil `*taskRegistry` (not-busy / zero-value+false /
   no-op / nil slice / `""` respectively), so callers don't need a separate
   "is async enabled" check.
-- Persistence: `persistLocked` mirrors task state to `r.dir` via
-  `writeTaskFile` when `r.dir != ""`; in Task 5 `r.dir` is always `""`
-  (unit tests never set it) so the mirror is a no-op stub — Task 6 wires
-  the real state-file writer under `~/.config/styx/state/tasks/`.
+- **State-file mirror (crash honesty, never resumption)** —
+  `persistLocked` mirrors task state to `r.dir` via `writeTaskFile` on every
+  `Spawn`/completion/`Claim` when `r.dir != ""` (`""` in most unit tests, so
+  persistence is skipped there). `writeTaskFile` writes
+  `<dir>/<run-id>.json` atomically (tmp + rename under `os.Rename`) and is
+  best-effort: a marshal/write/rename failure is narrated via `logStatus`
+  and never fails the task — the in-memory task is always authoritative
+  during a live process. Results themselves are never persisted to disk,
+  only status metadata; a finished-but-uncollected task surviving a crash is
+  a reported loss, not something to resume.
+- **Startup orphan adoption** — `adoptOrphanedTaskFiles(dir, maxClaimedAge)`
+  scans `dir` once at `styx mcp` startup (wired in Task 7's `cmdMCP`, using
+  `paths.TasksDir()`). Every UNCLAIMED file, regardless of the state it
+  recorded (`queued`/`running`/`done`/`error`/already-`orphaned`), is a loss:
+  the process that owned it is gone and its result — if any — lived only in
+  that process's memory. Each such file is flipped to `taskOrphaned` on disk
+  (best-effort tmp+rename, narrated via `logStatus` on failure — the orphan
+  is still returned in-memory even if the on-disk flip can't be persisted,
+  so the next scan simply retries the flip) and returned to the caller.
+  `(*taskRegistry).adoptOrphans(files)` inserts the returned orphans into a
+  fresh registry as `o1`, `o2`, … entries so `collect` (Task 8) and the
+  status-line piggyback report them; an orphan's `Err` explains the loss
+  (`"lost when styx mcp exited (state was ...); no result — re-dispatch if
+  still needed"`) so the caller knows to re-run the work, never that it will
+  silently resume. An unclaimed orphan file keeps resurfacing on every scan
+  until something calls `Claim` on it; claiming re-persists the file so it
+  stops. Claimed files whose `Finished` timestamp is older than
+  `maxClaimedAge` (7 days, wired in Task 7) are pruned (`os.Remove`) during
+  the same scan — claimed files are never orphans, only prune candidates.
 
 ## Progress (internal/progress)
 
@@ -1101,6 +1129,7 @@ should rotate the migrated keys.
 ~/.config/styx/state/memory/global.db       shared cross-project memory
 ~/.config/styx/state/audit/<id>/*.jsonl     per-session REPL audit trails
 ~/.config/styx/state/threads/<id>.json      agent-thread state
+~/.config/styx/state/tasks/<run-id>.json    background-task state mirrors (crash honesty)
 ~/.config/styx/state/intel/<id>/index.json  per-project codebase intel
 <project>/.claude/context.md                rendered intel (Claude Code loads it)
 <project>/.styx/runs/<run-id>/state.json    pipeline state
