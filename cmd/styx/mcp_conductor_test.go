@@ -629,6 +629,93 @@ func TestCollectSingleTaskLifecycle(t *testing.T) {
 	}
 }
 
+func TestBackgroundDispatchRoundtrip(t *testing.T) {
+	// Full conductor-level lifecycle against a real (fake) CLI subprocess:
+	// dispatch background → immediate task handle → piggyback on thread_status
+	// → collect the finished result → outcome row carries the task id.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "bg-done")
+	t.Setenv("FAKEAGENT_SLEEP", "1")
+	fakeSrc, err := filepath.Abs("../../testdata/fakeagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	copyExecutable(t, fakeSrc, filepath.Join(binDir, "claude"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	projDir := t.TempDir()
+	if err := config.SaveProjects([]config.Project{{ID: "proj1", Name: "proj1", Path: projDir}}); err != nil {
+		t.Fatal(err)
+	}
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	d := &conductorDeps{
+		a: &app{
+			routing: config.Routing{
+				Brain: config.BrainConfig{ContextThresholdPct: 70},
+				Tiers: map[string]string{},
+			},
+			tracker:  bud,
+			channels: map[string]channel.Channel{},
+		},
+		gate: shipgate.New(shipgate.ModeOff), emb: replEmbedder{},
+		managers: map[string]*managed{},
+		reg:      newTaskRegistry(context.Background(), 4),
+	}
+
+	res, err := callTool(t, d, "dispatch", map[string]any{
+		"project": "proj1", "cli": "claude", "message": "long job", "risk": "read",
+		"background": true,
+	})
+	if err != nil {
+		t.Fatalf("background dispatch: %v", err)
+	}
+	taskID, _ := res["task_id"].(string)
+	if taskID == "" || res["status"] != "running" {
+		t.Fatalf("want immediate task handle, got %v", res)
+	}
+
+	// While running: thread_status carries the task row (piggyback is
+	// covered by TestWithBackgroundStatusPiggyback; here we assert the
+	// conductor-level surface).
+	ts, err := callTool(t, d, "thread_status", map[string]any{"project": "proj1"})
+	if err != nil {
+		t.Fatalf("thread_status: %v", err)
+	}
+	tasks, _ := ts["tasks"].([]any)
+	if len(tasks) != 1 || !strings.Contains(tasks[0].(string), taskID) {
+		t.Fatalf("running task must appear in thread_status tasks, got %v", ts["tasks"])
+	}
+
+	// Poll collect until done (fakeagent sleeps 1s).
+	waitFor(t, "task done", func() bool {
+		got, err := callTool(t, d, "collect", map[string]any{"task_id": taskID})
+		return err == nil && got["status"] == "done"
+	})
+	// The done collect above claimed it — re-collect by id shows the claimed
+	// result again (Get still knows it), but collect({}) has nothing pending.
+	all, err := callTool(t, d, "collect", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results, _ := all["results"].([]any); len(results) != 0 {
+		t.Fatalf("claimed task must not resurface in collect all, got %v", all["results"])
+	}
+
+	// Outcome row: background flag + task id.
+	rows, err := bud.OutcomesSince(context.Background(), time.Time{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("want 1 outcome row, got %d (%v)", len(rows), err)
+	}
+	if !rows[0].Background || rows[0].TaskID != taskID || rows[0].CLI != "claude" {
+		t.Fatalf("background outcome row mismatch: %+v", rows[0])
+	}
+}
+
 func TestCollectAllAndThreadStatusTasks(t *testing.T) {
 	reg := newTaskRegistry(context.Background(), 4)
 	runA, startedA, releaseA := blockingRun(map[string]any{"text": "A"})

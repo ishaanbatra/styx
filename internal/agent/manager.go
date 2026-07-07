@@ -64,10 +64,15 @@ func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(
 	extra := append(append([]string{}, spec.Extra...), addDirArgs(spec.ExtraRoots)...)
 	msg := m.seedMessage(th, ad, spec.Message)
 	res, err := run.Send(ctx, msg, spec.Model, extra, spec.ReadOnly)
-	if err != nil && th.SessionID != "" && ad.SupportsResume() {
+	th.mu.Lock()
+	sid := th.SessionID
+	th.mu.Unlock()
+	if err != nil && sid != "" && ad.SupportsResume() {
 		// Crash recovery: the CLI's session may be gone. Roll back to the last
 		// checkpoint and rebuild from distillation + rolling summary.
+		th.mu.Lock()
 		th.SessionID = ""
+		th.mu.Unlock()
 		msg = m.seedMessage(th, ad, spec.Message)
 		res, err = run.Send(ctx, msg, spec.Model, extra, spec.ReadOnly)
 	}
@@ -90,6 +95,8 @@ func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(
 // fresh threads get a role line, restarted threads get the last distillation,
 // non-resume threads get the rolling summary.
 func (m *Manager) seedMessage(th *Thread, ad Adapter, msg string) string {
+	th.mu.Lock()
+	defer th.mu.Unlock()
 	if ad.SupportsResume() {
 		if th.SessionID != "" {
 			return msg
@@ -142,10 +149,14 @@ func (m *Manager) record(ctx context.Context, spec DispatchSpec, res TurnResult,
 // threshold: ask the session itself for a handoff (cheap tier), save it to
 // memory, and clear the session so the next turn seeds fresh.
 func (m *Manager) maybeDistill(ctx context.Context, th *Thread, ad Adapter) {
-	if !ad.SupportsResume() || th.SessionID == "" || ad.ContextWindow() <= 0 || m.ThresholdPct <= 0 {
+	th.mu.Lock()
+	sid := th.SessionID
+	ctxTokens := th.ContextTokens
+	th.mu.Unlock()
+	if !ad.SupportsResume() || sid == "" || ad.ContextWindow() <= 0 || m.ThresholdPct <= 0 {
 		return
 	}
-	pct := float64(th.ContextTokens) / float64(ad.ContextWindow()) * 100
+	pct := float64(ctxTokens) / float64(ad.ContextWindow()) * 100
 	if pct < m.ThresholdPct {
 		return
 	}
@@ -154,9 +165,11 @@ func (m *Manager) maybeDistill(ctx context.Context, th *Thread, ad Adapter) {
 	if err != nil || res.Text == "" {
 		return // best-effort; the next turn will retry
 	}
+	th.mu.Lock()
 	th.LastDistillation = res.Text
 	th.SessionID = ""
 	th.ContextTokens = 0
+	th.mu.Unlock()
 	if m.OnCompact != nil {
 		m.OnCompact(th.Name)
 	}
@@ -168,9 +181,13 @@ func (m *Manager) updateRollingSummary(ctx context.Context, th *Thread, userMsg,
 	if m.Summarize == nil {
 		return
 	}
+	th.mu.Lock()
 	convo := th.Summary + "\nUser: " + userMsg + "\nAgent: " + reply
+	th.mu.Unlock()
 	if sum, err := m.Summarize(ctx, convo); err == nil && sum != "" {
+		th.mu.Lock()
 		th.Summary = sum
+		th.mu.Unlock()
 	}
 }
 
@@ -202,22 +219,40 @@ func addDirArgs(roots []string) []string {
 	return out
 }
 
-// StatusLines renders one line per thread for the brain and /status.
+// StatusLines renders one line per thread for the brain and /status. Takes
+// a field snapshot under lock (m.Threads.mu for the map, th.mu per thread)
+// before formatting, since a background dispatch can be mutating the same
+// *Thread on another goroutine concurrently (piggyback status, B1).
 func (m *Manager) StatusLines() []string {
+	type row struct {
+		cli   string
+		turns int
+		ctx   int
+	}
+	m.Threads.mu.Lock()
 	names := make([]string, 0, len(m.Threads.Threads))
 	for n := range m.Threads.Threads {
 		names = append(names, n)
 	}
 	sort.Strings(names)
-	out := []string{}
+	rows := make(map[string]row, len(names))
 	for _, n := range names {
 		th := m.Threads.Threads[n]
+		th.mu.Lock()
+		rows[n] = row{cli: th.CLI, turns: th.Turns, ctx: th.ContextTokens}
+		th.mu.Unlock()
+	}
+	m.Threads.mu.Unlock()
+
+	out := []string{}
+	for _, n := range names {
+		r := rows[n]
 		win := 200000
-		if ad, ok := m.Adapters[th.CLI]; ok && ad.ContextWindow() > 0 {
+		if ad, ok := m.Adapters[r.cli]; ok && ad.ContextWindow() > 0 {
 			win = ad.ContextWindow()
 		}
-		pct := float64(th.ContextTokens) / float64(win) * 100
-		out = append(out, fmt.Sprintf("%s (%s): %d turns, context %.0f%%", n, th.CLI, th.Turns, pct))
+		pct := float64(r.ctx) / float64(win) * 100
+		out = append(out, fmt.Sprintf("%s (%s): %d turns, context %.0f%%", n, r.cli, r.turns, pct))
 	}
 	return out
 }
@@ -228,14 +263,23 @@ func (m *Manager) StatusLines() []string {
 // Note: claude's interactive --resume forks the session, so the post-handoff
 // summary turn sees the pre-handoff context; the ingest is best-effort.
 func (m *Manager) Handoff(ctx context.Context, threadName string) error {
+	m.Threads.mu.Lock()
 	th, ok := m.Threads.Threads[threadName]
-	if !ok || th.CLI != "claude" {
+	m.Threads.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("handoff requires an existing claude thread (got %q)", threadName)
+	}
+	th.mu.Lock()
+	cli := th.CLI
+	sid := th.SessionID
+	th.mu.Unlock()
+	if cli != "claude" {
 		return fmt.Errorf("handoff requires an existing claude thread (got %q)", threadName)
 	}
 	ad := m.Adapters["claude"]
 	args := []string{}
-	if th.SessionID != "" {
-		args = append(args, "--resume", th.SessionID)
+	if sid != "" {
+		args = append(args, "--resume", sid)
 	}
 	cmd := exec.CommandContext(ctx, ad.Bin(), args...)
 	cmd.Dir = m.Project.Path
@@ -248,7 +292,9 @@ func (m *Manager) Handoff(ctx context.Context, threadName string) error {
 		"An interactive working session on this thread just ended. Summarize what was likely accomplished and what follow-ups remain, based on this conversation so far.",
 		m.DistillModel, nil, false)
 	if err == nil && res.Text != "" {
+		th.mu.Lock()
 		th.Summary = res.Text
+		th.mu.Unlock()
 		m.saveMemory(ctx, memory.KindDistillation, res.Text, "handoff/"+threadName)
 	}
 	return m.Threads.Save()

@@ -496,7 +496,30 @@ estimates until those CLIs expose structured usage. Every successful turn
 updates the thread's context meter, turn count, and timestamp in memory; callers
 persist the store after lifecycle decisions. `testdata/fakeagent` is an
 executable stream-json fixture for runner and manager lifecycle tests, including
-resume argument assertions and dead-session simulation.
+resume argument assertions and dead-session simulation; its `FAKEAGENT_SLEEP`
+knob (seconds) sleeps once, before either protocol block emits, so tests can
+hold a dispatch "running" long enough to observe it mid-flight (e.g. the B1
+background-dispatch roundtrip in `cmd/styx/mcp_conductor_test.go`).
+
+`Thread` and `ThreadStore` guard against the concurrency B1 background
+dispatch introduces: a background task's goroutine can call `Manager.Dispatch`
+on a thread while a synchronous `thread_status` call, or a second background
+dispatch on a *different* thread of the same project, concurrently reads or
+persists the same `*Manager`/`*ThreadStore` (they share one cached instance
+per project — see "Conductor MCP tools" `managed`/`managerFor`; `Busy` only
+guards same-thread reentrancy, so two different-thread dispatches on one
+project can run at once). `Thread.mu` guards its own mutable fields (every
+read/write outside construction takes it, including a `MarshalJSON` override
+so `ThreadStore.Save` never reads a torn thread) and `ThreadStore.mu` guards
+the `Threads` map structure (`Get`, `Save`, `StatusLines`, `Handoff`).
+`ThreadStore.Save` holds `ts.mu` across its entire body — the marshal, the
+`os.WriteFile` to its fixed `path+".tmp"`, and the `os.Rename` — so that
+concurrent background-dispatch `Save` calls on one project's store serialize
+their disk writes instead of interleaving on the same tmp path (which could
+corrupt the tmp file or race the final rename). Locks are always released
+before an external CLI subprocess call (`Runner.Send`) — never held across
+it; the file write in `Save` is a local, millisecond-scale operation, not a
+subprocess call, so holding `ts.mu` across it does not violate that rule.
 
 `Manager` owns a project's thread lifecycle. `DispatchSpec` carries an
 `ExtraRoots []string` field (absolute repo roots for cross-repo dispatch);
