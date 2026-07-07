@@ -21,7 +21,9 @@ type Spec struct {
 }
 
 // Resolve returns the project for the spec. Alias resolution is exact Name
-// match, then unique prefix match, then existing directory path.
+// match, then unique prefix match, then an existing on-disk path (a directory
+// via its git root, or a file/subpath under a registered project's tree). A
+// non-existent alias errors — it never falls back to the cwd project.
 func Resolve(spec Spec) (project.Project, error) {
 	switch {
 	case spec.Alias != "":
@@ -63,12 +65,20 @@ func resolveAlias(alias string) (project.Project, error) {
 	}
 
 	if abs, absErr := filepath.Abs(alias); absErr == nil {
-		if fi, statErr := os.Stat(abs); statErr == nil && fi.IsDir() {
-			return project.CurrentFrom(abs)
-		}
-		for _, p := range regs {
-			if isUnder(abs, p.Path) {
-				return p, nil
+		// Only treat the alias as a path if it actually exists on disk. An
+		// existing directory resolves via its git root; an existing file (or
+		// other non-dir) resolves to the registered project whose tree contains
+		// it. A non-existent alias must NOT resolve via isUnder — otherwise a
+		// typo'd name, when cwd is inside a registered project, would silently
+		// resolve to that project instead of erroring.
+		if fi, statErr := os.Stat(abs); statErr == nil {
+			if fi.IsDir() {
+				return project.CurrentFrom(abs)
+			}
+			for _, p := range regs {
+				if isUnder(abs, p.Path) {
+					return p, nil
+				}
 			}
 		}
 	}

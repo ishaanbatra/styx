@@ -22,6 +22,24 @@ func gitInit(t *testing.T, dir string) {
 	}
 }
 
+// chdir switches the process cwd to dir and restores the original on cleanup.
+// Equivalent to t.Chdir but works under the module's go1.22 directive.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(orig); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+}
+
 func seedRegistry(t *testing.T, projs ...config.Project) {
 	t.Helper()
 	if err := config.SaveProjects(projs); err != nil {
@@ -60,6 +78,68 @@ func TestResolve(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := Resolve(tc.spec)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got.Name != tc.wantName {
+				t.Errorf("got %q, want %q", got.Name, tc.wantName)
+			}
+		})
+	}
+}
+
+// TestResolveAliasExistenceGate guards the existence-gated isUnder fallback:
+// when the process cwd is inside a registered project (the common `styx mcp`
+// setup), a relative alias that matches no registered project name and does not
+// exist on disk must produce the loud "unknown project" error — NOT silently
+// resolve to the cwd project via filepath.Abs + isUnder. Existing paths (dir or
+// file) under a registered project's tree must still resolve to that project.
+func TestResolveAliasExistenceGate(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	t.Setenv("HOME", t.TempDir())
+
+	proj := filepath.Join(t.TempDir(), "demo-proj")
+	gitInit(t, proj)
+	// Canonicalize so the registered path matches the physical cwd that
+	// os.Getwd (hence filepath.Abs of a relative alias) reports after chdir —
+	// on macOS t.TempDir lives under a /var -> /private/var symlink.
+	proj, err := filepath.EvalSymlinks(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(proj, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	seedRegistry(t, config.Project{Name: "demo-proj", Path: proj, Language: "go"})
+
+	// Run with the process cwd inside the registered project — this is what
+	// makes filepath.Abs(alias) land under the project's tree. (Manual chdir +
+	// restore rather than t.Chdir, which requires go1.24; module is go1.22.)
+	chdir(t, proj)
+
+	cases := []struct {
+		name     string
+		alias    string
+		wantName string
+		wantErr  string
+	}{
+		{"unknown relative alias errors, no cwd fallback", "nope-not-real", "", "unknown project"},
+		{"existing subdir resolves to project", "sub", "demo-proj", ""},
+		{"existing file resolves to project", "file.txt", "demo-proj", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Resolve(Spec{Alias: tc.alias})
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)

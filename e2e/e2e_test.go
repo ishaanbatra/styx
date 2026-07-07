@@ -213,22 +213,12 @@ func TestFirstContact(t *testing.T) {
 		t.Fatalf("want the claude thread listed, got %v", threads)
 	}
 
-	// unknown project: loud error listing the registry (Task 4).
-	//
-	// Adaptation: a plain relative alias like "nope-not-real" does NOT hit
-	// the error path here. The server's cwd is the registered demo-proj
-	// directory, and internal/target.resolveAlias's directory-lookup
-	// fallback (isUnder) matches any alias that is lexically nested under a
-	// registered project's path WITHOUT checking that the path actually
-	// exists on disk — so "nope-not-real" resolves as if it were
-	// demo-proj/nope-not-real and silently returns demo-proj instead of
-	// erroring. That contradicts resolveAlias's own doc comment ("existing
-	// directory path") and is a latent bug this harness surfaced, but fixing
-	// internal/target/target.go is out of scope for the Task 12 harness
-	// commit — flagged for follow-up. Using an absolute, clearly-foreign
-	// path here keeps this assertion honest about the Task 4 registry-error
-	// contract without depending on that bug.
-	errRes, isErr := c.toolCall("thread_status", map[string]any{"project": "/definitely-not-a-registered-project"})
+	// unknown project: loud error listing the registry (Task 4). "nope-not-real"
+	// is a relative bogus alias, and the server's cwd is the registered
+	// demo-proj directory — so this also regression-guards Task 12b: the
+	// existence-gated isUnder fallback in internal/target must NOT let a typo'd
+	// relative alias silently resolve to the cwd project.
+	errRes, isErr := c.toolCall("thread_status", map[string]any{"project": "nope-not-real"})
 	if !isErr {
 		t.Fatalf("unknown project must error, got %v", errRes)
 	}

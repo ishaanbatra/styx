@@ -586,8 +586,14 @@ rather than deleting user data.
 `target.Resolve(Spec{Alias, Dir, Cwd})` is the single seam every verb and the
 REPL use to turn a `--project alias` / `--dir path` / cwd into a `Project`.
 Precedence is Alias -> Dir -> Cwd; alias resolution is exact-name -> unique
-prefix -> existing-path -> error listing candidates. It never silently falls
-back to the cwd when an explicit target was given and failed. `cmd/styx` wraps
+prefix -> existing-path -> error listing candidates. The existing-path step is
+existence-gated: only an alias that resolves to a real on-disk path (a directory
+via its git root, or a file/subpath under a registered project's tree) matches;
+a non-existent alias errors rather than resolving via lexical containment. This
+matters for `styx mcp` launched inside a registered project, where a typo'd
+relative alias would otherwise silently resolve to the cwd project. It never
+silently falls back to the cwd when an explicit target was given and failed.
+`cmd/styx` wraps
 it as `resolveGlobalTarget(arg)`, combining a verb's positional target with the
 global flags.
 
