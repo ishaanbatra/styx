@@ -135,4 +135,6 @@ haiku  = "haiku"
 # ship confirmation for dispatch(risk=ship) / pipeline_run auto:
 # handshake (token relay, default) | tty (prompt on /dev/tty) | off
 ship_gate = "handshake"
+# max concurrent background dispatches; over-cap tasks queue (collect shows position)
+max_background_tasks = 4
 `

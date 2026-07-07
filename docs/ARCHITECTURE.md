@@ -290,7 +290,12 @@ subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
 wiring. `Brain` configures the planned local ollama routing brain and memory
 embedding model; `Conductor` configures the frontier-brain launcher and MCP
 toolbelt (e.g. `ship_gate`: handshake | tty | off, default handshake, controlling
-ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`);
+ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`; and
+`max_background_tasks`, the concurrent background-dispatch cap for the task
+registry, default 4, seeded in `default_routing.go` and injected into
+pre-B1 configs by `config.EnsureConductorTaskCap` — idempotent, respects an
+already-customized `max_background_tasks` at any value, and appends a whole
+`[conductor]` section when none exists);
 `Tiers` maps brain tier names to claude CLI model aliases; `fable` maps to `fable`
 again (the top tier, callable since mid-2026 after the 2026-06-12 suspension —
 `config.EnsureFableTier` migrates suspension-era configs that still pin the seeded

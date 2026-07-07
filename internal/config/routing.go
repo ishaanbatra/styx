@@ -46,7 +46,8 @@ type BrainConfig struct {
 
 // Conductor configures the frontier-brain launcher + MCP toolbelt.
 type Conductor struct {
-	ShipGate string `toml:"ship_gate"` // handshake | tty | off
+	ShipGate           string `toml:"ship_gate"`            // handshake | tty | off
+	MaxBackgroundTasks int    `toml:"max_background_tasks"` // concurrent background dispatch cap (task registry)
 }
 
 // ModelsConfig controls model auto-discovery / staleness refresh.
@@ -98,6 +99,9 @@ func applyBrainDefaults(r *Routing) {
 func applyConductorDefaults(r *Routing) {
 	if r.Conductor.ShipGate == "" {
 		r.Conductor.ShipGate = "handshake"
+	}
+	if r.Conductor.MaxBackgroundTasks == 0 {
+		r.Conductor.MaxBackgroundTasks = 4
 	}
 }
 
