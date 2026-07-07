@@ -1003,6 +1003,73 @@ REPL loop.
   Guidance baked into the tool description: rate only notable outcomes, not
   every dispatch. Returns `{rated: true, outcome_id, target}`.
 
+### Background task registry (cmd/styx/mcp_tasks.go)
+
+`taskRegistry` is the in-memory, mutex-guarded heart of async dispatch (B1):
+it owns every background task of one `styx mcp` process and enforces the cap
+and ordering rules that keep background work from racing a project's own
+stateful sessions. Task 5 lands the registry itself (cap, ordering,
+collect/claim); Task 6 wires the state-file mirror (`writeTaskFile`, a no-op
+stub in Task 5); Task 7+ wire the `dispatch(background: true)` / `collect`
+tool surface on top.
+
+- **States** — `taskQueued` ("queued"), `taskRunning` ("running"),
+  `taskDone` ("done"), `taskError` ("error"), `taskOrphaned` ("orphaned").
+  Queued/running are "live"; done/error/orphaned are terminal and stay
+  visible (in `Snapshot` and `StatusLine`) until claimed.
+- **Monotonic ids** — `newTaskRegistry(rootCtx, limit)` builds an empty
+  registry; `Spawn` assigns ids `t1`, `t2`, … in a mutex-guarded `r.seq`
+  counter, monotonic within one server lifetime (adopted orphans from a
+  crashed process get `o<n>` ids once Task 6 lands recovery). `Spawn`
+  returns `(id, state)` immediately — `state` is `taskRunning` if the task
+  started inline or `taskQueued` if capacity/ordering deferred it.
+- **Global concurrency cap** — `limit` (defaulting to 4 if `<= 0`), sourced
+  from `[conductor] max_background_tasks` (`internal/config/routing.go`
+  `Conductor.MaxBackgroundTasks`, default 4, seeded by
+  `EnsureConductorTaskCap`). `startEligibleLocked` counts running tasks and
+  promotes queued tasks in creation order while `running < limit` and no
+  ordering rule blocks them.
+- **Ordering rules** — both enforced by `conflictLocked`, checked in
+  creation order against every currently-running task:
+  1. **Per-thread serialization**: a task on the same `(ProjectID, Thread)`
+     as a running task never runs concurrently with it — session resume is
+     stateful, so two turns on one thread would corrupt each other's state.
+  2. **Per-project write queue**: an edit-risk task (`Spec.Risk != "read"`)
+     waits for any running edit-risk task on the same `ProjectID`; read-risk
+     tasks run freely in parallel with each other and with edit-risk tasks
+     on other threads. A queued task's `QueuedBehind` field names the
+     blocking task id, or `""` when it is waiting on capacity alone (all
+     slots full, no specific blocker).
+- **Root-context lifetime (no daemons)** — every task's `run` goroutine
+  (`go r.execute(t)`, spawned from `startEligibleLocked`) is invoked with
+  `r.rootCtx`, the context passed into `newTaskRegistry` at server startup —
+  never a per-call context from the tool invocation that spawned it. This
+  means background tasks survive the `dispatch` tool call returning (the
+  whole point of async dispatch) but are canceled the instant the `styx mcp`
+  process's root context ends; there is no separate daemon or supervisor
+  process, matching the project's "no daemons" rule.
+- **Claim semantics** — a finished task (done/error/orphaned) stays
+  unclaimed until `Claim(id)` sets `Claimed = true`; `StatusLine` only lists
+  unclaimed terminal tasks (as `"<id> <state> unclaimed — call collect"`),
+  so once the caller has read a result via `collect` (Task 7+) it stops
+  resurfacing on every status line. `run` errors are never swallowed: a
+  failed task's `Err` field carries `err.Error()`, surfaced through `Get`/
+  `Snapshot`/`StatusLine`, not dropped.
+- **`Busy` guard for sync dispatches** — `Busy(projectID, thread, risk)`
+  applies the same two ordering rules against live (queued or running)
+  background tasks, so a *synchronous* `dispatch` call can check before
+  running whether a background task already owns that thread or that
+  project's write lock, and returns the blocking task id instead of
+  interleaving with it.
+- **Nil-safety** — `Busy`, `Get`, `Claim`, `Snapshot`, and `StatusLine` are
+  all safe to call on a nil `*taskRegistry` (not-busy / zero-value+false /
+  no-op / nil slice / `""` respectively), so callers don't need a separate
+  "is async enabled" check.
+- Persistence: `persistLocked` mirrors task state to `r.dir` via
+  `writeTaskFile` when `r.dir != ""`; in Task 5 `r.dir` is always `""`
+  (unit tests never set it) so the mirror is a no-op stub — Task 6 wires
+  the real state-file writer under `~/.config/styx/state/tasks/`.
+
 ## Progress (internal/progress)
 
 TTY-aware narrator: animated braille spinner on a terminal, plain lines
