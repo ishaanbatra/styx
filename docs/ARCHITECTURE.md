@@ -1608,7 +1608,15 @@ transition to `status:"done"` with the fakeagent's text once its
 and no `bg` line once the result is claimed. This is hermetic by default: no
 Docker (a plain subprocess + fake-CLIs-on-PATH gives the same isolation for a
 single-binary CLI without the image/build overhead), no network beyond a
-possibly-absent local ollama, and no real AI-CLI calls. `TestLiveSmoke` is
+possibly-absent local ollama, and no real AI-CLI calls. `TestLearnScorecardSeesDispatchOutcomes` closes the
+learning loop across two separate processes sharing one isolated config: a
+`dispatch` call over the `styx mcp` subprocess writes an outcome row to the
+isolated `usage.db`, then a second, independently-spawned `styx learn
+--scorecard` process — with `HOME`/`XDG_CONFIG_HOME`/`PATH` reconstructed from
+`filepath.Dir(proj)` to match the server's env — reads that same db and
+renders the aggregated `claude × trivial: 1/1 clean` cell (a message ≤50
+chars tags the `trivial` signal); no ollama is involved since `--scorecard`
+is the deterministic aggregation layer. `TestLiveSmoke` is
 skipped unless `STYX_E2E_LIVE=1`, in which case it runs `styx doctor` and a
 live ollama one-shot dispatch through the real routing brain model — meant to
 be run manually and rarely, since it consumes real quota/local resources.
