@@ -78,12 +78,131 @@ func cmdLearn(a *app, args []string) error {
 		fmt.Print(out)
 		return nil
 	}
-	return runLearn(ctx, a, store, dryRun) // Task 6 implements the digest
+	return runLearn(ctx, a, store, dryRun)
 }
 
-// runLearn is the digest entry point; replaced by Task 6.
+// dedupeSimilarity is the same-kind cosine threshold above which a candidate
+// refreshes an existing memory instead of adding a new row.
+const dedupeSimilarity = 0.9
+
+// runLearn wires the production digester (local ollama brain model) and
+// embedder into runLearnDigest.
 func runLearn(ctx context.Context, a *app, store *memory.Store, dryRun bool) error {
-	return fmt.Errorf("styx learn digest not implemented yet — use --scorecard, --list, or --forget")
+	emb := memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel)
+	dig := &learn.Digester{BaseURL: "http://localhost:11434", Model: a.routing.Brain.Model}
+	out, err := runLearnDigest(ctx, a, store, emb, dig, dryRun)
+	if err != nil {
+		return err
+	}
+	fmt.Print(out)
+	return nil
+}
+
+// runLearnDigest is one digest pass: scorecard → gather → propose → evidence
+// guard → dedupe → write with provenance → mark retrospectives consumed.
+// All embeds and dedupe decisions happen BEFORE any write, so an ollama
+// failure mid-pass writes nothing partial. Dry-run stops after planning.
+func runLearnDigest(ctx context.Context, a *app, store *memory.Store, emb memory.Embedder, dig *learn.Digester, dryRun bool) (string, error) {
+	rows, err := a.tracker.OutcomesSince(ctx, time.Now().Add(-scorecardWindow))
+	if err != nil {
+		return "", fmt.Errorf("read outcomes: %w", err)
+	}
+	sc := learn.Build(rows, 30)
+	retroItems, err := store.UnconsumedByKind(ctx, memory.KindRetrospective)
+	if err != nil {
+		return "", fmt.Errorf("gather retrospectives: %w", err)
+	}
+	retros := make([]learn.RetroNote, len(retroItems))
+	for i, it := range retroItems {
+		retros[i] = learn.RetroNote{ID: it.ID, Text: it.Text}
+	}
+	var notes []string
+	for _, o := range rows {
+		if o.Rating != "" && o.Note != "" {
+			notes = append(notes, fmt.Sprintf("%s (%s): %s", o.Rating, o.CLI, o.Note))
+		}
+	}
+
+	cands, err := dig.Propose(ctx, sc.Render(), retros, notes)
+	if err != nil {
+		return "", err // loud; nothing written
+	}
+	kept, dropped := learn.FilterByEvidence(cands, sc, retros)
+
+	var b strings.Builder
+	for _, d := range dropped {
+		fmt.Fprintf(&b, "dropped: %s\n", d)
+	}
+	if len(kept) == 0 {
+		b.WriteString("nothing to learn this round (no candidates survived the evidence guard)\n")
+		return b.String(), nil
+	}
+
+	// Plan phase: embed + dedupe-check every survivor before writing anything.
+	type plannedWrite struct {
+		cand   learn.Candidate
+		text   string
+		vec    []float32
+		dupeID int64 // >0: refresh this row instead of adding
+	}
+	date := time.Now().Format("2006-01-02")
+	var plans []plannedWrite
+	for _, c := range kept {
+		vec, err := emb.Embed(ctx, c.Text)
+		if err != nil {
+			return "", fmt.Errorf("embed candidate (is ollama up?): %w", err)
+		}
+		p := plannedWrite{
+			cand: c,
+			text: fmt.Sprintf("%s [learned-by styx-learn %s; evidence: %s]", c.Text, date, c.Evidence),
+			vec:  vec,
+		}
+		if it, sim, err := store.MostSimilar(ctx, memory.Kind(c.Kind), vec); err != nil {
+			return "", fmt.Errorf("dedupe scan: %w", err)
+		} else if sim >= dedupeSimilarity {
+			p.dupeID = it.ID
+		}
+		plans = append(plans, p)
+	}
+
+	if dryRun {
+		for _, p := range plans {
+			verb := "would learn"
+			if p.dupeID > 0 {
+				verb = fmt.Sprintf("would refresh memory %d", p.dupeID)
+			}
+			fmt.Fprintf(&b, "%s [%s, conf %.2f]: %s\n", verb, p.cand.Kind, p.cand.Confidence, p.text)
+		}
+		b.WriteString("dry run: nothing written, retrospectives left unconsumed\n")
+		return b.String(), nil
+	}
+
+	// Write phase.
+	for _, p := range plans {
+		if p.dupeID > 0 {
+			if err := store.UpdateEvidence(ctx, p.dupeID, p.text); err != nil {
+				return "", fmt.Errorf("refresh memory %d: %w", p.dupeID, err)
+			}
+			fmt.Fprintf(&b, "refreshed %d [%s]: %s\n", p.dupeID, p.cand.Kind, p.text)
+			continue
+		}
+		id, err := store.Add(ctx, memory.Item{
+			Kind: memory.Kind(p.cand.Kind), Text: p.text, Source: "styx-learn",
+			Scope: "global", Confidence: p.cand.Confidence, Embedding: p.vec,
+		})
+		if err != nil {
+			return "", fmt.Errorf("write memory: %w", err)
+		}
+		fmt.Fprintf(&b, "learned %d [%s]: %s\n", id, p.cand.Kind, p.text)
+	}
+	retroIDs := make([]int64, len(retros))
+	for i, r := range retros {
+		retroIDs[i] = r.ID
+	}
+	if err := store.MarkConsumed(ctx, retroIDs); err != nil {
+		return "", fmt.Errorf("mark retrospectives consumed: %w", err)
+	}
+	return b.String(), nil
 }
 
 // openGlobalMemory opens ~/.config/styx/state/memory/global.db — where

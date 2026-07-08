@@ -793,14 +793,80 @@ human-readable, one per dropped candidate.
 **Verb surface** (`cmd/styx/learn.go`, see above): `styx learn --scorecard`
 renders the table above with no memory store touched; `styx learn --list`
 and `styx learn --forget <id>` inspect/reverse the learned
-`routing-preference`/`user-preference` memories the digest will eventually
-write; bare `styx learn` (the digest itself — ollama-backed summarization
-into new memories) remains a deliberate not-implemented stub — `runLearn`
-still returns `"styx learn digest not implemented yet — use --scorecard,
---list, or --forget"` — pending Task 6, which will wire it up. Task 5 lands
-only the digest's building blocks: the `Digester.Propose` client and the
-`FilterByEvidence` guard now exist in `internal/learn`, but `runLearn` does
-not call them yet. Manual only, by design: no daemon runs the digest automatically.
+`routing-preference`/`user-preference` memories the digest writes; bare
+`styx learn` (with an optional `--dry-run`) now runs the full digest —
+implemented as of Task 6. Manual only, by design: no daemon runs the digest
+automatically.
+
+**The digest pass** (`runLearnDigest` in `cmd/styx/learn.go`, called by the
+thin production wrapper `runLearn` which wires a real `memory.NewOllamaEmbedder`
+against `a.routing.Brain.EmbedModel` and a `learn.Digester` against
+`a.routing.Brain.Model`, both pointed at `http://localhost:11434` — the same
+literal every other ollama caller in `cmd/styx` uses; there is no shared
+base-URL constant/helper in this codebase). One digest pass is six steps:
+
+1. **Scorecard** — `learn.Build` over `a.tracker.OutcomesSince(now -
+   scorecardWindow)`, same as `--scorecard`.
+2. **Gather** — `store.UnconsumedByKind(KindRetrospective)` plus rated
+   dispatch notes (`Rating`+`Note` on outcome rows) from the same window.
+3. **Propose** — `dig.Propose(ctx, scorecard.Render(), retros, notes)`
+   against the local ollama brain model; an unreachable/erroring ollama
+   returns here and the whole pass aborts with a wrapped error — nothing
+   downstream runs.
+4. **Evidence guard** — `learn.FilterByEvidence` drops any candidate whose
+   citation doesn't name a real scorecard cell or gathered retrospective;
+   every drop is printed (`dropped: "<text>" — <reason>`), never silent.
+5. **Dedupe** — see below.
+6. **Write + consume** — see below.
+
+**Plan-before-write (partial-failure safety)**: after the evidence guard,
+*every* surviving candidate is embedded (`emb.Embed`) and dedupe-checked
+(`store.MostSimilar`) into an in-memory `plannedWrite` list *before any
+store write happens*. If ollama's embed call fails on any candidate midway
+through planning, `runLearnDigest` returns a wrapped error immediately —
+nothing has been written yet and no retrospective has been marked consumed,
+so a flaky/ollama-down run never leaves partial state. This is the same
+plan-then-commit discipline as `execute`'s apply step, applied to memory
+writes instead of file writes.
+
+**Dedupe**: for each planned candidate, `store.MostSimilar(ctx, candidate.Kind,
+vec)` finds the closest same-kind existing memory. Cosine similarity ≥
+`dedupeSimilarity` (`0.9`, `cmd/styx/learn.go`) means "refresh, don't
+duplicate": the plan records the existing row's id instead of a new write.
+Below threshold, the candidate becomes a new memory row.
+
+**Write phase**: runs only after planning completes successfully (and is
+skipped entirely in `--dry-run`, see below). For each planned write:
+- **Dedupe hit** (`dupeID > 0`): `store.UpdateEvidence(ctx, dupeID, text)`
+  overwrites the existing row's text with the refreshed provenance string —
+  same row id, no new memory. Narrated as `refreshed <id> [<kind>]: <text>`.
+- **New row**: `store.Add` with `Source: "styx-learn"`, `Scope: "global"`,
+  `Confidence` carried verbatim from the candidate, and the embedding vector
+  computed during planning. Narrated as `learned <id> [<kind>]: <text>`.
+
+Written/refreshed text always has the provenance suffix appended to the
+candidate's raw sentence: `<sentence> [learned-by styx-learn <YYYY-MM-DD>;
+evidence: <citation>]` — e.g. `codex handles complex specced work well
+[learned-by styx-learn 2026-07-07; evidence: scorecard:codex/complex]`. The
+date is `time.Now()` at write time; the citation is the candidate's raw
+`scorecard:<cli>/<signal>` or `retro:<id>` evidence string, preserved
+verbatim so `--list` and future digest passes can trace it back.
+
+**Consumed-marking timing**: retrospectives gathered in step 2 are marked
+consumed (`store.MarkConsumed`) only *after* every planned write in the write
+phase has succeeded — the very last step of a live (non-dry-run) pass. A
+retrospective is never marked consumed by a dry run, and never marked
+consumed if any write in the phase fails partway (the function returns the
+wrapped error before reaching `MarkConsumed`).
+
+**`--dry-run`**: stops immediately after the plan phase, before the write
+phase. Narrates each planned action without doing it — `would learn [<kind>,
+conf X.XX]: <text>` for new rows, `would refresh memory <id> [<kind>, conf
+X.XX]: <text>` for dedupe hits — followed by `dry run: nothing written,
+retrospectives left unconsumed`. Embeds and `MostSimilar` dedupe checks still
+run during planning (so a dry run still requires ollama to be reachable and
+still surfaces the same loud failure if it isn't), but the store is never
+mutated and retrospectives stay unconsumed for the next real pass.
 
 ## Audit (internal/audit)
 
