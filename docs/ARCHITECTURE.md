@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-09
+last_verified: 2026-07-08
 ---
 
 # Styx Architecture
@@ -1608,6 +1608,22 @@ untouched — callers can log the error for debugging but the session
 continues unaffected. This graceful degradation is tested via `httptest`
 mocks for ollama success and failure paths. Stall detection, disk mirror,
 and the TUI renderer are later tasks in the same plan (`docs/superpowers/plans/`).
+
+**Live renderer** (`LiveRenderer`): a TTY-aware refresh loop that repaints
+the board in place on a ticker. `NewLiveRenderer(w io.Writer, b *Board, stall
+time.Duration)` builds a renderer targeting writer `w`, reading from board
+`b` with stall timeout `stall`. On a TTY it uses ANSI cursor movement to
+clear previous frames in place (`\033[<n>A` to move up n lines, `\r\033[K` to
+clear each line); on a non-TTY (e.g., a buffer) it appends frames (quiet
+cadence for logging). `Start()` begins a repainting goroutine that calls
+`paint()` every second until `Stop()`. `paint()` is the single testable frame
+method: it snapshots the board, renders it via `Render`, acquires a mutex to
+serialize writes, and updates a counter tracking lines painted for next-frame
+cursor repositioning. `Stop()` closes the internal stop channel, waits for
+the goroutine to exit, and paints a final frame. Tests set `lr.now` to a
+fixed clock for deterministic rendering and call `paint()` directly against
+a buffer (non-TTY, so no ANSI codes), asserting the rendered output contains
+expected content.
 
 ## Progress (internal/progress)
 
