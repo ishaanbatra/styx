@@ -41,11 +41,12 @@ type managed struct {
 
 // conductorDeps carries shared state for the conductor tool handlers.
 type conductorDeps struct {
-	a     *app
-	gate  *shipgate.Gate
-	emb   memory.Embedder
-	reg   *taskRegistry   // background dispatch registry (nil-safe on read paths)
-	board *activity.Board // shared session liveness board (fed by every Manager)
+	a      *app
+	gate   *shipgate.Gate
+	emb    memory.Embedder
+	reg    *taskRegistry   // background dispatch registry (nil-safe on read paths)
+	board  *activity.Board // shared session liveness board (fed by every Manager)
+	mirror func() error    // Task 9: debounced disk mirror of board; nil if unavailable
 
 	mu       sync.Mutex
 	managers map[string]*managed
@@ -66,6 +67,27 @@ func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 		reg:      newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks, board),
 		managers: map[string]*managed{},
 	}
+	// Throttled disk mirror of the board (Task 9), keyed by the server's cwd
+	// project — the launcher starts `styx mcp` in the project directory
+	// (managerFor's comment), the same directory a `styx watch` process
+	// invoked alongside it runs in, and `styx watch` resolves its project the
+	// same way (resolveGlobalTarget("")). That shared resolution is what
+	// guarantees the writer and reader paths agree; best-effort — a
+	// resolution or state-dir failure logs and leaves d.mirror nil rather
+	// than blocking server startup.
+	if proj, perr := resolveGlobalTarget(""); perr != nil {
+		logStatus("watch mirror unavailable: %v", perr)
+	} else if stateDir, serr := paths.StateDir(); serr != nil {
+		logStatus("watch mirror unavailable: %v", serr)
+	} else {
+		mirrorDir := filepath.Join(stateDir, "watch")
+		if err := paths.EnsureDir(mirrorDir); err != nil {
+			logStatus("watch mirror dir: %v", err)
+		} else {
+			d.mirror = activity.MirrorThrottle(board, filepath.Join(mirrorDir, proj.ID+".json"), 2*time.Second)
+		}
+	}
+
 	// The ollama watcher summarizes cross-agent liveness into the board note,
 	// which the piggyback bg line and thread_status surface. Off the server's
 	// root context (dies with the server — no daemons); best-effort like the
@@ -80,6 +102,17 @@ func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 		go w.Run(rootCtx)
 	}
 	return d
+}
+
+// mirrorNow drives the disk mirror (Task 9), if wired. Debounced internally
+// (activity.MirrorThrottle); write failures are narrated, never swallowed.
+func (d *conductorDeps) mirrorNow() {
+	if d.mirror == nil {
+		return
+	}
+	if err := d.mirror(); err != nil {
+		logStatus("watch mirror: %v", err)
+	}
 }
 
 // capPctFor returns the routing.toml cap_pct for a channel (0 = no cap).
@@ -461,11 +494,17 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 						// this tool call returning and dies with the server.
 						// No progress notifications mid-flight (this call's
 						// JSON-RPC exchange is long gone); completion
-						// bookkeeping is the same finishDispatch as sync.
+						// bookkeeping is the same finishDispatch as sync. There
+						// is no onEvent here (nil below) to drive the mirror
+						// mid-flight, so bracket the dispatch with explicit
+						// calls: one so `styx watch` shows the task starting,
+						// one to flush its Board.Done state on completion.
 						bmeta := meta
 						bmeta.Background = true
 						bmeta.TaskID = id
+						d.mirrorNow()
 						res, derr := m.mgr.Dispatch(bctx, spec, nil)
+						d.mirrorNow()
 						return d.finishDispatch(bctx, bmeta, res, derr)
 					}
 					id, state := d.reg.Spawn(taskSpec{
@@ -481,6 +520,11 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				var events int
 				onEvent := func(ev agent.Event) {
 					events++
+					// Drive the disk mirror (Task 9) on every event, ahead of
+					// the streaming-chatter throttle below — d.mirror is
+					// itself debounced, so this is cheap and keeps a second
+					// `styx watch` process current during the dispatch.
+					d.mirrorNow()
 					var msg string
 					switch ev.Type {
 					case agent.EventInit:
@@ -506,6 +550,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					Message: in.Message, ExtraRoots: in.ExtraRoots,
 					ReadOnly: in.Risk == "read",
 				}, onEvent)
+				d.mirrorNow() // final flush attempt: reflect Board.Done before returning
 				return d.finishDispatch(ctx, meta, res, err)
 			},
 		},

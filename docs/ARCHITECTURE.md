@@ -176,6 +176,16 @@ Shared pieces:
   helpers (`watchModel`/`watchInterval`/`watchStall`) read pre-extracted
   routing fields with defaults so test sessions (no routing) fall back to
   `activity.DefaultStall`/15s.
+  Disk mirror (Task 9): the session also holds `mirror func() error`, built in
+  `newREPLSession` via `activity.MirrorThrottle(s.board,
+  <StateDir>/watch/<seed.ID>.json, 2*time.Second)` — keyed by `seed.ID`, the
+  project resolved from cwd at session construction, not the mutable
+  `s.focus` (see the Activity section for why that's the path-consistency
+  guarantee `styx watch` relies on). `mirrorNow()` calls it and narrates any
+  write error via `logStatus`; it's called from `printEvent` (every streamed
+  event) and, during the quiet parallel span where `printEvent` never fires,
+  from a dedicated one-second `startMirrorTicker` goroutine bracketing the
+  `LiveRenderer` span in `runDispatches`.
 - `mcp.go` — MCP tool handlers, JSON schemas, tool assembly, and the `styx mcp`
   command entry point. Defines `routeArgs` (Task, Verb, Signals, Project),
   `routeResult` (Channel, Model, Effort, FallbackChain, Reasoning, Budget,
@@ -1249,10 +1259,12 @@ REPL loop.
   `reg *taskRegistry` — the background dispatch registry, nil-safe on every
   read path — `board *activity.Board` — one shared liveness board fed by every
   managed `Manager` (`Board: d.board`), so sync and background dispatches alike
-  record activity — a mutex-guarded `managers map[string]*managed` cache keyed
-  by project ID, and a mutex-guarded `gmem *memory.Store` — lazy handle on the
-  shared `global.db`, opened on first use via `globalMem()` and cached for
-  the life of the process) is built once per `styx mcp` invocation via
+  record activity — `mirror func() error` (Task 9) — a debounced disk-mirror
+  writer, nil if the state dir couldn't be prepared — a mutex-guarded
+  `managers map[string]*managed` cache keyed by project ID, and a
+  mutex-guarded `gmem *memory.Store` — lazy handle on the shared `global.db`,
+  opened on first use via `globalMem()` and cached for the life of the
+  process) is built once per `styx mcp` invocation via
   `newConductorDeps(a, rootCtx)`. The `rootCtx` parameter is `cmdMCP`'s
   cancellable root context (see "MCP server" above); it flows straight into
   `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks, board)` so
@@ -1260,7 +1272,16 @@ REPL loop.
   lifetime, not any single tool call's, and the registry can read each running
   task's last board action for its piggyback line. `newConductorDeps` also
   starts an `activity.Watcher` goroutine off `rootCtx` gated on
-  `routing.Watch.OllamaEnabled` (dies with the server; best-effort).
+  `routing.Watch.OllamaEnabled` (dies with the server; best-effort), and wires
+  `d.mirror` via `activity.MirrorThrottle(board, <StateDir>/watch/<projectID>.json,
+  2*time.Second)`, keyed by `resolveGlobalTarget("")`'s project ID — the same
+  cwd-based resolution `managerFor("")` and a `styx watch` process invoked
+  alongside the server both use, so the mirror path always agrees with what
+  `styx watch` reads (see the Activity section's disk-mirror write-up for the
+  full path-consistency argument). `d.mirrorNow()` narrates (never swallows)
+  a write failure via `logStatus` and is called from `dispatch`'s streaming
+  `onEvent` and, for background tasks (which pass `onEvent = nil`), explicitly
+  before and after the task's `Dispatch` call.
   `conductorTools(d)` returns six tools: `dispatch`, `thread_status`,
   `memory_save`, `pipeline_run`, `rate_dispatch`, and `collect`. (Deviation
   from the Task 8 brief, which put the board on the per-project `managed`
@@ -1652,8 +1673,7 @@ and stores the parsed response on success. On failure (unreachable ollama,
 parse error, etc.) it returns the error and leaves the existing note
 untouched — callers can log the error for debugging but the session
 continues unaffected. This graceful degradation is tested via `httptest`
-mocks for ollama success and failure paths. Stall detection, disk mirror,
-and the TUI renderer are later tasks in the same plan (`docs/superpowers/plans/`).
+mocks for ollama success and failure paths.
 
 **Live renderer** (`LiveRenderer`): a TTY-aware refresh loop that repaints
 the board in place on a ticker. `NewLiveRenderer(w io.Writer, b *Board, stall
@@ -1670,6 +1690,53 @@ the goroutine to exit, and paints a final frame. Tests set `lr.now` to a
 fixed clock for deterministic rendering and call `paint()` directly against
 a buffer (non-TTY, so no ANSI codes), asserting the rendered output contains
 expected content.
+
+**Disk mirror + `styx watch` (Task 9, `mirror.go`, `cmd/styx/watch.go`):** a
+throttled on-disk copy of the board so a *second, separate* `styx` process
+can render the same live activity without sharing memory with the session
+that's dispatching. `WriteMirror(path, states, note)` marshals a
+`[]AgentState` + note to JSON and writes it atomically (tmp file + rename) so
+a concurrent reader never observes a partial write. `ReadMirror(path)`
+reverses this; when `path` doesn't exist it wraps `os.ReadFile`'s error with
+`%w`, so callers detect absence with `errors.Is(err, fs.ErrNotExist)` (never a
+bespoke sentinel). `MirrorThrottle(b *Board, path string, min time.Duration)`
+returns a debounced writer closure: the first call always writes (leading
+edge), later calls within `min` of the last write are no-ops, and every write
+failure is returned to the caller — a mirror write is a best-effort side
+channel, so it is narrated (`logStatus`), never fails the dispatch it rides
+along with.
+
+Mirror files live at `~/.config/styx/state/watch/<projectID>.json`
+(`paths.StateDir()/watch/`, created with `paths.EnsureDir`), throttled to
+roughly one write per 2s. **Path-consistency is the whole design constraint:**
+the writer (a REPL session or the `styx mcp` conductor) and the reader (a
+`styx watch` process in another terminal) must independently compute the same
+path, with no message passed between them. Both sides key the filename off a
+project ID resolved from **the process's cwd at its own construction/launch
+time** — `newREPLSession` uses `seed.ID` (resolved once, before any later
+`/focus` can move `s.focus` to a different bound repo) and `newConductorDeps`
+uses `resolveGlobalTarget("")` (the server's launch-directory project,
+matching `managerFor`'s existing cwd convention); `cmdWatch` resolves its own
+project with the identical `resolveGlobalTarget("")` call. Because none of
+these depend on mutable in-session state, `styx watch` run from the same
+directory a session was started in always agrees with what that session
+writes, regardless of `/focus` changes made after the fact.
+
+Writers call the throttle from the dispatch event path: the REPL's
+`printEvent` (every streamed event) and, for the quiet parallel fan-out
+(where `onEvent` is `nil` and `printEvent` never fires), a dedicated
+one-second ticker (`startMirrorTicker`) bracketing the `LiveRenderer` span.
+The conductor calls it from its `dispatch` tool's `onEvent` (every streamed
+event, ahead of the existing progress-notification throttle) and explicitly
+before/after a background task's `Dispatch` call (which passes `onEvent =
+nil`, so there is no other hook mid-flight). `cmdWatch` (`cmd/styx/watch.go`)
+is a read-only loop: resolve the project, `ReadMirror` the mirror path, clear
+the screen, render via `activity.Render(states, note, activity.DefaultStall,
+time.Now())`, sleep ~1s, repeat; a missing mirror (`errors.Is(err,
+fs.ErrNotExist)`) prints `(no live activity …)` and returns nil rather than
+erroring. Because it never calls `loadApp()` (no routing/budget/sqlite
+wiring), `watch` is registered in `cmd/styx/dispatch.go`'s pre-`loadApp`
+switch, alongside `runs`.
 
 ## Progress (internal/progress)
 

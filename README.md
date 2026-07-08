@@ -89,6 +89,7 @@ restarting the session.
 | `context show` | Print rendered `.claude/context.md` for the current project |
 | `runs ls` | List pipeline runs for the current project |
 | `runs show <run-id>` | Show JSON state of a specific run |
+| `styx watch` | Live dispatch board for the current project — per-agent heartbeat + stall flags, refreshed from a running session or `styx mcp`, in a second terminal |
 
 ### One-shots + admin
 

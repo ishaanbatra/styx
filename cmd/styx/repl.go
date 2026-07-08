@@ -77,6 +77,17 @@ type replSession struct {
 	watchStallDur    time.Duration      // = a.routing.Watch.StallThreshold()
 	ctx              context.Context    // session-lifetime context (watcher goroutine)
 	cancel           context.CancelFunc // cancels s.ctx on session end
+
+	// mirror (Task 9) is a debounced writer of s.board to
+	// <StateDir>/watch/<seed-project-ID>.json, so a second `styx watch`
+	// process (run from the same cwd this session was launched from) can
+	// render the same board. nil when the state dir couldn't be prepared
+	// (best-effort — never blocks dispatch). Keyed by the project ID
+	// resolved at session construction (not the mutable s.focus): that ID is
+	// exactly what `styx watch`, invoked later from the same directory, will
+	// resolve via resolveGlobalTarget("") too, so the two paths always agree
+	// regardless of any /focus done mid-session.
+	mirror func() error
 }
 
 // watchModel is the ollama model the session's watcher summarizes with.
@@ -286,7 +297,13 @@ func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []
 		// corrupt state — see the report's deliverable-5 note.
 		lr := activity.NewLiveRenderer(s.out, s.board, s.watchStall())
 		lr.Start()
+		// printEvent (the mirror's usual call site) never fires during a quiet
+		// span (onEvent is nil below), so drive the disk mirror on its own
+		// ticker for the span's duration — otherwise a `styx watch` in a
+		// second terminal would go stale during every parallel fan-out.
+		stopMirror := s.startMirrorTicker()
 		wg.Wait()
+		stopMirror()
 		lr.Stop()
 		// Board span is over; nothing else is painting. Flush each agent's
 		// final text, labelled so the fan-out's results stay attributable.
@@ -412,6 +429,50 @@ func (s *replSession) printEvent(e agent.Event) {
 		s.println(e.Text)
 	case agent.EventResult:
 		// Final text already streamed as EventText for claude; print nothing.
+	}
+	s.mirrorNow()
+}
+
+// mirrorNow drives the disk mirror (Task 9) from a dispatch event, if wired.
+// s.mirror is itself debounced (activity.MirrorThrottle), so calling it on
+// every event is cheap; write failures are narrated, never swallowed.
+func (s *replSession) mirrorNow() {
+	if s.mirror == nil {
+		return
+	}
+	if err := s.mirror(); err != nil {
+		logStatus("watch mirror: %v", err)
+	}
+}
+
+// startMirrorTicker mirrors the board to disk once a second for the duration
+// of a quiet parallel dispatch span, where no onEvent callback (and so no
+// mirrorNow call) ever fires. s.mirror's own debounce still governs actual
+// write cadence; this only guarantees a call happens regularly. Returns a
+// stop func that halts the ticker and takes one final mirror pass.
+func (s *replSession) startMirrorTicker() func() {
+	if s.mirror == nil {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				s.mirrorNow()
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+		s.mirrorNow()
 	}
 }
 
@@ -704,6 +765,24 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 		watchStallDur:    a.routing.Watch.StallThreshold(),
 		ctx:              sctx,
 		cancel:           cancel,
+	}
+
+	// Throttled disk mirror of the board (Task 9): keyed by seed.ID, the
+	// project resolved from cwd at construction time — the same resolution
+	// `styx watch`, run later from this same directory, performs itself via
+	// resolveGlobalTarget(""). That shared resolution is what guarantees the
+	// writer and the styx-watch reader agree on a path; best-effort, like the
+	// ollama watcher below — a state-dir failure logs and leaves s.mirror nil
+	// rather than blocking the session.
+	if stateDir, serr := paths.StateDir(); serr != nil {
+		logStatus("watch mirror unavailable: %v", serr)
+	} else {
+		mirrorDir := filepath.Join(stateDir, "watch")
+		if err := paths.EnsureDir(mirrorDir); err != nil {
+			logStatus("watch mirror dir: %v", err)
+		} else {
+			s.mirror = activity.MirrorThrottle(s.board, filepath.Join(mirrorDir, seed.ID+".json"), 2*time.Second)
+		}
 	}
 
 	// The ollama watcher summarizes cross-agent liveness into the board's note.

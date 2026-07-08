@@ -285,6 +285,10 @@ func dispatch(verb string, args []string) error {
 		return cmdExecuteVerb(args)
 	case "runs":
 		return cmdRuns(args)
+	case "watch":
+		// Reads the on-disk board mirror only — no app/routing/budget wiring,
+		// so it stays in this pre-loadApp switch.
+		return cmdWatch(args)
 	case "hook":
 		// Claude Code hook installed into conductor sessions by the launcher.
 		// Runs per matched tool call, so it stays OFF the loadApp/SQLite path.
