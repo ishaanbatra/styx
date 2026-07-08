@@ -142,4 +142,9 @@ ship_gate = "handshake"
 route_gate = "block"
 # max concurrent background dispatches; over-cap tasks queue (collect shows position)
 max_background_tasks = 4
+
+[watch]
+stall_threshold_seconds = 90
+interval_seconds = 15
+ollama_enabled = true
 `

@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/ishaanbatra/styx/internal/activity"
 )
 
 // TurnResult is the outcome of one agent turn.
@@ -23,8 +25,10 @@ type Runner struct {
 	Adapter Adapter
 	Thread  *Thread
 	WorkDir string
-	Timeout time.Duration // 0 = no timeout
-	OnEvent func(Event)   // streaming callback (REPL prints); may be nil
+	Timeout time.Duration   // 0 = no timeout
+	OnEvent func(Event)     // streaming callback (REPL prints); may be nil
+	Board   *activity.Board // liveness sink; may be nil
+	Label   string          // board key (thread name); "" disables recording
 }
 
 // Send runs one turn. The thread's SessionID and context meter are updated
@@ -78,6 +82,9 @@ func (r *Runner) Send(ctx context.Context, msg, model string, extra []string, re
 		if r.OnEvent != nil {
 			r.OnEvent(ev)
 		}
+		if r.Board != nil && r.Label != "" {
+			r.Board.Record(r.Label, summarize(ev))
+		}
 		switch ev.Type {
 		case EventInit:
 			r.Thread.mu.Lock()
@@ -121,6 +128,24 @@ func (r *Runner) finish(res TurnResult) {
 	r.Thread.ContextTokens = res.InputTokens + res.OutputTokens
 	r.Thread.Turns++
 	r.Thread.UpdatedAt = time.Now()
+}
+
+// summarize renders one event as a board activity line.
+func summarize(ev Event) string {
+	switch ev.Type {
+	case EventInit:
+		return "session started"
+	case EventTool:
+		if ev.Text != "" {
+			return ev.Tool + ": " + ev.Text
+		}
+		return ev.Tool
+	case EventText:
+		return "thinking"
+	case EventResult:
+		return "finishing"
+	}
+	return ""
 }
 
 func classifyTurnError(cli string, err error) error {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/agent"
 	"github.com/ishaanbatra/styx/internal/audit"
 	"github.com/ishaanbatra/styx/internal/brain"
@@ -66,6 +68,47 @@ type replSession struct {
 	summary      string
 	recent       []string
 	lastAction   *brain.Action
+
+	// activity/observability (Task 8): a per-session liveness board fed by
+	// every agent turn (via Manager.Board), rendered by /watch and, on the
+	// parallel fan-out, an inline live heartbeat.
+	board            *activity.Board
+	watchModelName   string             // = a.routing.Brain.Model (ollama watcher summarizer)
+	watchIntervalDur time.Duration      // = a.routing.Watch.Interval()
+	watchStallDur    time.Duration      // = a.routing.Watch.StallThreshold()
+	ctx              context.Context    // session-lifetime context (watcher goroutine)
+	cancel           context.CancelFunc // cancels s.ctx on session end
+
+	// mirror (Task 9) is a debounced writer of s.board to
+	// <StateDir>/watch/<seed-project-ID>.json, so a second `styx watch`
+	// process (run from the same cwd this session was launched from) can
+	// render the same board. nil when the state dir couldn't be prepared
+	// (best-effort — never blocks dispatch). Keyed by the project ID
+	// resolved at session construction (not the mutable s.focus): that ID is
+	// exactly what `styx watch`, invoked later from the same directory, will
+	// resolve via resolveGlobalTarget("") too, so the two paths always agree
+	// regardless of any /focus done mid-session.
+	mirror func() error
+}
+
+// watchModel is the ollama model the session's watcher summarizes with.
+func (s *replSession) watchModel() string { return s.watchModelName }
+
+// watchInterval is the watcher poll cadence (15s default when unset in tests).
+func (s *replSession) watchInterval() time.Duration {
+	if s.watchIntervalDur > 0 {
+		return s.watchIntervalDur
+	}
+	return 15 * time.Second
+}
+
+// watchStall is the idle duration past which the board flags an agent
+// (activity.DefaultStall when routing is absent, e.g. tests).
+func (s *replSession) watchStall() time.Duration {
+	if s.watchStallDur > 0 {
+		return s.watchStallDur
+	}
+	return activity.DefaultStall
 }
 
 func (s *replSession) proj() config.Project { return s.bound[s.focus].proj }
@@ -111,6 +154,7 @@ func (s *replSession) bind(p config.Project) (*boundProject, error) {
 		ThresholdPct: s.thresholdPct,
 		DistillModel: s.distillModel,
 		Timeout:      s.timeout,
+		Board:        s.board,
 	}
 	mgr.OnCompact = func(name string) { s.println("↻ " + name + " thread compacted") }
 	bp := &boundProject{proj: p, mgr: mgr, mem: mem, closers: []func() error{mem.Close}}
@@ -213,14 +257,24 @@ func (s *replSession) execute(ctx context.Context, utterance string, act brain.A
 	}
 }
 
-// runDispatches executes one or more dispatches; multiple run concurrently
-// with output serialized through s.println.
+// runDispatches executes one or more dispatches; multiple run concurrently.
+//
+// A single dispatch streams its output inline via printEvent (unchanged). The
+// parallel fan-out is different: interleaving several agents' streaming text on
+// one terminal is unreadable, so it runs "quiet" (printEvent suppressed) under
+// an inline live heartbeat board — the board is the only thing painting the
+// terminal during the span, so a TTY's in-place repaint never collides with
+// streamed content. Each agent's final result text is printed after the board
+// stops. The board still captures every agent's liveness regardless (the
+// Manager records to it directly), so /watch reflects both paths.
 func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []brain.Dispatch) error {
 	if len(ds) == 0 {
 		return errors.New("brain returned a dispatch with no dispatches")
 	}
+	quiet := len(ds) > 1 && s.board != nil
 	var wg sync.WaitGroup
 	errs := make([]error, len(ds))
+	texts := make([]string, len(ds))
 	for i, d := range ds {
 		requestedModel := s.defaultModel(d)
 		model, degraded := s.resolveModel(requestedModel)
@@ -232,10 +286,37 @@ func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []
 		wg.Add(1)
 		go func(i int, d brain.Dispatch, model string) {
 			defer wg.Done()
-			errs[i] = s.runOneDispatch(ctx, d, model)
+			texts[i], errs[i] = s.runOneDispatch(ctx, d, model, quiet)
 		}(i, d, model)
 	}
-	wg.Wait()
+	if quiet {
+		// The LiveRenderer writes s.out directly, bypassing outMu. That is safe:
+		// during a quiet span it is intentionally the SOLE terminal writer (the
+		// dispatches run with onEvent=nil, so nothing streams), and OS-level
+		// stdout writes are atomic. The one exception is a rare Manager.OnCompact
+		// line, which may visually interleave with the live board but cannot
+		// corrupt state — see the report's deliverable-5 note.
+		lr := activity.NewLiveRenderer(s.out, s.board, s.watchStall())
+		lr.Start()
+		// printEvent (the mirror's usual call site) never fires during a quiet
+		// span (onEvent is nil below), so drive the disk mirror on its own
+		// ticker for the span's duration — otherwise a `styx watch` in a
+		// second terminal would go stale during every parallel fan-out.
+		stopMirror := s.startMirrorTicker()
+		wg.Wait()
+		stopMirror()
+		lr.Stop()
+		// Board span is over; nothing else is painting. Flush each agent's
+		// final text, labelled so the fan-out's results stay attributable.
+		for i, d := range ds {
+			if texts[i] != "" {
+				s.println("◆ " + d.Thread + " ›")
+				s.println(texts[i])
+			}
+		}
+	} else {
+		wg.Wait()
+	}
 	s.pushRecent(utterance, fmt.Sprintf("(dispatched to %d thread(s))", len(ds)))
 	return errors.Join(errs...)
 }
@@ -244,27 +325,32 @@ func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []
 // loop escalates to the user instead of guessing.
 var errUnresolvedRepo = errors.New("unresolved repo")
 
-func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, model string) error {
+// runOneDispatch resolves and runs a single dispatch. When quiet, streaming to
+// the terminal is suppressed (the inline board owns the terminal during a
+// parallel span) and the final result text is RETURNED for the caller to print
+// after the board stops; otherwise output streams inline as before and the
+// returned string is empty. Errors always return an empty string.
+func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, model string, quiet bool) (string, error) {
 	// 1. resolve target repo (default = focus) + extra roots
 	bp := s.bound[s.focus]
 	if d.Project != "" {
 		p, err := target.Resolve(target.Spec{Alias: d.Project})
 		if err != nil {
-			return fmt.Errorf("%w: dispatch target %q: %v", errUnresolvedRepo, d.Project, err)
+			return "", fmt.Errorf("%w: dispatch target %q: %v", errUnresolvedRepo, d.Project, err)
 		}
 		bp, err = s.bind(p)
 		if err != nil {
-			return err
+			return "", err
 		}
 	}
 	var roots []string
 	for _, name := range d.ExtraRoots {
 		rp, err := target.Resolve(target.Spec{Alias: name})
 		if err != nil {
-			return fmt.Errorf("%w: extra root %q: %v", errUnresolvedRepo, name, err)
+			return "", fmt.Errorf("%w: extra root %q: %v", errUnresolvedRepo, name, err)
 		}
 		if _, err := s.bind(rp); err != nil {
-			return err
+			return "", err
 		}
 		roots = append(roots, rp.Path)
 	}
@@ -273,16 +359,25 @@ func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, mode
 	// 3. ollama branch (unchanged)
 	if d.Thread == "ollama" {
 		if s.ollamaSend == nil {
-			return errors.New("ollama dispatch not wired")
+			return "", errors.New("ollama dispatch not wired")
 		}
 		text, err := s.ollamaSend(ctx, model, d.Message)
 		if err != nil {
-			return fmt.Errorf("ollama: %w", err)
+			return "", fmt.Errorf("ollama: %w", err)
+		}
+		if quiet {
+			return text, nil
 		}
 		s.println(text)
-		return nil
+		return "", nil
 	}
-	// 4. dispatch on the resolved project's manager with ExtraRoots
+	// 4. dispatch on the resolved project's manager with ExtraRoots. In quiet
+	// mode onEvent is nil (no streaming); the Manager still records liveness to
+	// s.board directly, so /watch and the inline board stay live.
+	onEvent := s.printEvent
+	if quiet {
+		onEvent = nil
+	}
 	res, err := bp.mgr.Dispatch(ctx, agent.DispatchSpec{
 		Thread:     d.Thread,
 		CLI:        d.Thread,
@@ -291,14 +386,17 @@ func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, mode
 		Extra:      d.CLIOptions,
 		ExtraRoots: roots,
 		ReadOnly:   d.Risk == brain.RiskRead,
-	}, s.printEvent)
+	}, onEvent)
 	if err != nil {
-		return fmt.Errorf("%s: %w", d.Thread, err)
+		return "", fmt.Errorf("%s: %w", d.Thread, err)
+	}
+	if quiet {
+		return res.Text, nil
 	}
 	if ad, ok := bp.mgr.Adapters[d.Thread]; ok && !ad.SupportsStream() {
 		s.println(res.Text)
 	}
-	return nil
+	return "", nil
 }
 
 func (s *replSession) confirmRisk(act brain.Action) bool {
@@ -332,6 +430,50 @@ func (s *replSession) printEvent(e agent.Event) {
 		s.println(e.Text)
 	case agent.EventResult:
 		// Final text already streamed as EventText for claude; print nothing.
+	}
+	s.mirrorNow()
+}
+
+// mirrorNow drives the disk mirror (Task 9) from a dispatch event, if wired.
+// s.mirror is itself debounced (activity.MirrorThrottle), so calling it on
+// every event is cheap; write failures are narrated, never swallowed.
+func (s *replSession) mirrorNow() {
+	if s.mirror == nil {
+		return
+	}
+	if err := s.mirror(); err != nil {
+		logStatus("watch mirror: %v", err)
+	}
+}
+
+// startMirrorTicker mirrors the board to disk once a second for the duration
+// of a quiet parallel dispatch span, where no onEvent callback (and so no
+// mirrorNow call) ever fires. s.mirror's own debounce still governs actual
+// write cadence; this only guarantees a call happens regularly. Returns a
+// stop func that halts the ticker and takes one final mirror pass.
+func (s *replSession) startMirrorTicker() func() {
+	if s.mirror == nil {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+				s.mirrorNow()
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+		s.mirrorNow()
 	}
 }
 
@@ -597,6 +739,7 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 		},
 	}
 
+	sctx, cancel := context.WithCancel(context.Background())
 	s := &replSession{
 		bound:        map[string]*boundProject{},
 		runID:        runID,
@@ -615,8 +758,47 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 			resp, err := a.channels["ollama"].Send(ctx, channel.Request{Model: model, Prompt: prompt})
 			return resp.Text, err
 		},
-		in:  bufio.NewReader(os.Stdin),
-		out: os.Stdout,
+		in:               bufio.NewReader(os.Stdin),
+		out:              os.Stdout,
+		board:            activity.NewBoard(),
+		watchModelName:   a.routing.Brain.Model,
+		watchIntervalDur: a.routing.Watch.Interval(),
+		watchStallDur:    a.routing.Watch.StallThreshold(),
+		ctx:              sctx,
+		cancel:           cancel,
+	}
+
+	// Throttled disk mirror of the board (Task 9): keyed by seed.ID, the
+	// project resolved from cwd at construction time — the same resolution
+	// `styx watch`, run later from this same directory, performs itself via
+	// resolveGlobalTarget(""). That shared resolution is what guarantees the
+	// writer and the styx-watch reader agree on a path; best-effort, like the
+	// ollama watcher below — a state-dir failure logs and leaves s.mirror nil
+	// rather than blocking the session.
+	var mirrorPath string
+	if stateDir, serr := paths.StateDir(); serr != nil {
+		logStatus("watch mirror unavailable: %v", serr)
+	} else {
+		mirrorDir := filepath.Join(stateDir, "watch")
+		if err := paths.EnsureDir(mirrorDir); err != nil {
+			logStatus("watch mirror dir: %v", err)
+		} else {
+			mirrorPath = filepath.Join(mirrorDir, seed.ID+".json")
+			s.mirror = activity.MirrorThrottle(s.board, mirrorPath, 2*time.Second)
+		}
+	}
+
+	// The ollama watcher summarizes cross-agent liveness into the board's note.
+	// Task 5 seeds ollama_enabled=true for new and existing users; strictly
+	// best-effort — a down ollama leaves the note stale, never blocks the REPL.
+	if a.routing.Watch.OllamaEnabled {
+		w := &activity.Watcher{
+			BaseURL:  "http://localhost:11434",
+			Model:    s.watchModel(),
+			Board:    s.board,
+			Interval: s.watchInterval(),
+		}
+		go w.Run(s.ctx)
 	}
 
 	// pipelines must be assigned after s is constructed because closures
@@ -634,11 +816,21 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 		"intel":  func(_ context.Context, _ string) error { return cmdIntel(a, []string{s.proj().Name}) },
 	}
 
-	// cleanup iterates all bound bundles then closes session-global stores.
+	// cleanup cancels the session context (stopping the watcher goroutine),
+	// iterates all bound bundles, removes the watch mirror file (so a later
+	// `styx watch` shows the "no live activity" nudge instead of this
+	// session's stale final frame — see the Activity section of
+	// docs/ARCHITECTURE.md), then closes session-global stores.
 	cleanup := func() {
+		cancel()
 		for _, bp := range s.bound {
 			for _, c := range bp.closers {
 				_ = c()
+			}
+		}
+		if mirrorPath != "" {
+			if err := os.Remove(mirrorPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				logStatus("watch mirror cleanup: %v", err)
 			}
 		}
 		glob.Close()
@@ -720,7 +912,7 @@ func cmdREPL(a *app, repos ...string) error {
 		return err
 	}
 	defer cleanup()
-	fmt.Printf("styx — %s (%d repo%s) · /status /repos /focus /budget /threads /why /audit /quit\n",
+	fmt.Printf("styx — %s (%d repo%s) · /status /repos /focus /budget /threads /watch /why /audit /quit\n",
 		s.proj().Name, len(s.bound), plural(len(s.bound)))
 	for {
 		fmt.Print("styx› ")
@@ -802,6 +994,19 @@ func (s *replSession) slash(line string) bool {
 		if err := cmdBudget(nil); err != nil {
 			s.println("budget: " + err.Error())
 		}
+	case "/watch":
+		if s.board == nil {
+			s.println("(watch unavailable)")
+			return false
+		}
+		lines := activity.Render(s.board.Snapshot(), s.board.WatcherNote(), s.watchStall(), time.Now())
+		if len(lines) == 0 {
+			s.println("(no agent activity yet — dispatch something)")
+			return false
+		}
+		for _, line := range lines {
+			s.println(line)
+		}
 	case "/why":
 		s.println(s.lastActionJSON())
 	case "/audit":
@@ -822,7 +1027,7 @@ func (s *replSession) slash(line string) bool {
 			s.println(fmt.Sprintf("%s  %-12s %-12s %s", r.At.Format("15:04:05"), tag, r.Kind, r.Detail))
 		}
 	default:
-		s.println("unknown command (try /status /repos /focus /budget /threads /why /audit /quit)")
+		s.println("unknown command (try /status /repos /focus /budget /threads /watch /why /audit /quit)")
 	}
 	return false
 }

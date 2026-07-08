@@ -44,9 +44,22 @@ func TestParseClaudeEvent(t *testing.T) {
 			ok:   false,
 		},
 		{
-			name: "assistant tool-use only (no text) ignored",
-			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"}]}}`,
-			ok:   false,
+			name: "claude tool_use surfaces EventTool with command target",
+			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"go test ./...\nsecond line"}}]}}`,
+			want: Event{Type: EventTool, Tool: "Bash", Text: "go test ./..."},
+			ok:   true,
+		},
+		{
+			name: "claude tool_use file target",
+			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/x/y.go"}}]}}`,
+			want: Event{Type: EventTool, Tool: "Read", Text: "/x/y.go"},
+			ok:   true,
+		},
+		{
+			name: "claude tool_use with no input surfaces target-less EventTool",
+			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite"}]}}`,
+			want: Event{Type: EventTool, Tool: "TodoWrite", Text: ""},
+			ok:   true,
 		},
 	}
 	for _, tt := range tests {
@@ -81,7 +94,9 @@ func TestParseCodexEvent(t *testing.T) {
 			Event{Type: EventResult, InputTokens: 140, OutputTokens: 9}, true},
 		{"turn failed", `{"type":"turn.failed","error":{"message":"boom"}}`,
 			Event{Type: EventResult, Text: "boom", IsError: true}, true},
-		{"ignored", `{"type":"item.completed","item":{"type":"command_execution"}}`, Event{}, false},
+		{"command_execution without command field surfaces as tool",
+			`{"type":"item.completed","item":{"type":"command_execution"}}`,
+			Event{Type: EventTool, Tool: "command_execution"}, true},
 		{"garbage", `not json`, Event{}, false},
 	}
 	for _, tc := range cases {
@@ -89,6 +104,39 @@ func TestParseCodexEvent(t *testing.T) {
 			got, ok := ParseCodexEvent([]byte(tc.line))
 			if ok != tc.ok || got != tc.want {
 				t.Fatalf("got %+v ok=%v, want %+v ok=%v", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestParseCodexToolEvent(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want Event
+		ok   bool
+	}{
+		{
+			name: "command_execution item surfaces EventTool",
+			line: `{"type":"item.completed","item":{"type":"command_execution","command":"go build ./..."}}`,
+			want: Event{Type: EventTool, Tool: "command_execution", Text: "go build ./..."},
+			ok:   true,
+		},
+		{
+			name: "agent_message still parses as text",
+			line: `{"type":"item.completed","item":{"type":"agent_message","text":"hello"}}`,
+			want: Event{Type: EventText, Text: "hello"},
+			ok:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := ParseCodexEvent([]byte(tt.line))
+			if ok != tt.ok {
+				t.Fatalf("ok = %v, want %v", ok, tt.ok)
+			}
+			if ok && got != tt.want {
+				t.Fatalf("got %+v, want %+v", got, tt.want)
 			}
 		})
 	}

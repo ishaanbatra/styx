@@ -596,7 +596,7 @@ func TestDispatchBackgroundSpawnBudgetCheck(t *testing.T) {
 	d := &conductorDeps{
 		gate: shipgate.New(shipgate.ModeOff),
 		a:    &app{tracker: bud, routing: config.Routing{}},
-		reg:  newTaskRegistry(context.Background(), 4),
+		reg:  newTaskRegistry(context.Background(), 4, nil),
 	}
 	_, err = callTool(t, d, "dispatch", map[string]any{
 		"cli": "codex", "message": "long task", "risk": "read", "background": true,
@@ -607,7 +607,7 @@ func TestDispatchBackgroundSpawnBudgetCheck(t *testing.T) {
 }
 
 func TestDispatchSyncBusyThreadGuard(t *testing.T) {
-	reg := newTaskRegistry(context.Background(), 4)
+	reg := newTaskRegistry(context.Background(), 4, nil)
 	run1, started1, release1 := blockingRun(nil)
 	reg.Spawn(taskSpec{ProjectID: "proj1", Thread: "codex", CLI: "codex", Risk: "edit"}, run1)
 	<-started1
@@ -642,7 +642,7 @@ func TestDispatchSyncBusyThreadGuard(t *testing.T) {
 }
 
 func TestCollectSingleTaskLifecycle(t *testing.T) {
-	reg := newTaskRegistry(context.Background(), 4)
+	reg := newTaskRegistry(context.Background(), 4, nil)
 	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff), reg: reg}
 	run1, started1, release1 := blockingRun(map[string]any{"text": "answer", "cli": "codex"})
 	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "read"}, run1)
@@ -716,7 +716,7 @@ func TestBackgroundDispatchRoundtrip(t *testing.T) {
 		},
 		gate: shipgate.New(shipgate.ModeOff), emb: replEmbedder{},
 		managers: map[string]*managed{},
-		reg:      newTaskRegistry(context.Background(), 4),
+		reg:      newTaskRegistry(context.Background(), 4, nil),
 	}
 
 	res, err := callTool(t, d, "dispatch", map[string]any{
@@ -769,7 +769,7 @@ func TestBackgroundDispatchRoundtrip(t *testing.T) {
 }
 
 func TestCollectAllAndThreadStatusTasks(t *testing.T) {
-	reg := newTaskRegistry(context.Background(), 4)
+	reg := newTaskRegistry(context.Background(), 4, nil)
 	runA, startedA, releaseA := blockingRun(map[string]any{"text": "A"})
 	idA, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "a", CLI: "codex", Risk: "read"}, runA)
 	<-startedA

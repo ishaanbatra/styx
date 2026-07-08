@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/activity"
+	"github.com/ishaanbatra/styx/internal/agent"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/pipeline"
 )
@@ -67,18 +69,21 @@ type taskRegistry struct {
 	seq     int
 	rootCtx context.Context
 	tasks   map[string]*bgTask
-	order   []string // creation order, stable listing
-	dir     string   // state-file mirror dir; "" disables persistence (unit tests)
+	order   []string        // creation order, stable listing
+	dir     string          // state-file mirror dir; "" disables persistence (unit tests)
+	board   *activity.Board // liveness source for the piggyback bg line; nil ok
 }
 
 // newTaskRegistry builds a registry. Goroutines derive from rootCtx — the
 // server's root context, NOT any tool call's — so tasks survive the spawning
-// call returning and die when the server dies.
-func newTaskRegistry(rootCtx context.Context, limit int) *taskRegistry {
+// call returning and die when the server dies. board (nil ok) is the shared
+// conductor liveness board the piggyback status line reads each task's last
+// action from.
+func newTaskRegistry(rootCtx context.Context, limit int, board *activity.Board) *taskRegistry {
 	if limit <= 0 {
 		limit = 4
 	}
-	return &taskRegistry{limit: limit, rootCtx: rootCtx, tasks: map[string]*bgTask{}}
+	return &taskRegistry{limit: limit, rootCtx: rootCtx, tasks: map[string]*bgTask{}, board: board}
 }
 
 // Spawn registers a task and starts it immediately when the cap and ordering
@@ -256,7 +261,21 @@ func (r *taskRegistry) StatusLine() string {
 		t := r.tasks[id]
 		switch t.State {
 		case taskRunning:
-			parts = append(parts, fmt.Sprintf("%s running (%s, %s)", t.ID, t.Spec.CLI, elapsedShort(time.Since(t.Started))))
+			line := fmt.Sprintf("%s running (%s, %s)", t.ID, t.Spec.CLI, elapsedShort(time.Since(t.Started)))
+			if r.board != nil {
+				// Match the project-qualified board key, not the bare thread:
+				// the board is shared across every project, so two projects each
+				// running a "codex" task would otherwise cross-attribute (the
+				// Manager keys entries as agent.BoardLabel(projectID, thread)).
+				key := agent.BoardLabel(t.Spec.ProjectID, t.Spec.Thread)
+				for _, st := range r.board.Snapshot() {
+					if st.Label == key && st.Last != "" {
+						line += " — " + st.Last
+						break
+					}
+				}
+			}
+			parts = append(parts, line)
 		case taskQueued:
 			if t.QueuedBehind != "" {
 				parts = append(parts, fmt.Sprintf("%s queued behind %s (%s)", t.ID, t.QueuedBehind, elapsedShort(time.Since(t.Created))))

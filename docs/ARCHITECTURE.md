@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-07
+last_verified: 2026-07-08
 ---
 
 # Styx Architecture
@@ -149,7 +149,7 @@ Shared pieces:
   the bad flag/id.
 - `repl.go` — the conversational frontend and session core, now reached via
   `styx repl` rather than bare `styx`. `cmdREPL` runs the persistent loop with
-  `/status`, `/budget`, `/threads`, `/why`,
+  `/status`, `/budget`, `/threads`, `/watch`, `/why`,
   `/audit`, `/repos`, `/focus`, and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
   recalls project/global memory, asks the local brain for an action, then
   replies, dispatches to persistent agent threads, runs a wired pipeline,
@@ -160,6 +160,32 @@ Shared pieces:
   session also opens a per-project audit log and `/audit` tails the last 20
   records. Session cleanup stores a best-effort distillation back to project
   memory and closes open stores/logs.
+  Dispatch observability (Task 8): the session holds a `board *activity.Board`
+  wired into every bound `Manager` (`Board: s.board`) so every agent turn —
+  sync or background — records liveness. `/watch` renders
+  `activity.Render(board.Snapshot(), board.WatcherNote(), watchStall(), now)`.
+  On construction the session starts an `activity.Watcher` goroutine (off a
+  session-lifetime `ctx`/`cancel`, cancelled in cleanup) gated on
+  `routing.Watch.OllamaEnabled`, summarizing cross-agent liveness into the
+  board note. `runDispatches` streams a single dispatch inline as before, but
+  the parallel fan-out (>1 dispatch, board present) runs "quiet" — `printEvent`
+  suppressed — under an inline `activity.LiveRenderer` so a TTY's in-place
+  repaint never collides with streamed text; each agent's final `res.Text` is
+  printed after `LiveRenderer.Stop()`. `runOneDispatch` gained a `quiet` param
+  and returns that final text (empty when streaming inline). Watch config
+  helpers (`watchModel`/`watchInterval`/`watchStall`) read pre-extracted
+  routing fields with defaults so test sessions (no routing) fall back to
+  `activity.DefaultStall`/15s.
+  Disk mirror (Task 9): the session also holds `mirror func() error`, built in
+  `newREPLSession` via `activity.MirrorThrottle(s.board,
+  <StateDir>/watch/<seed.ID>.json, 2*time.Second)` — keyed by `seed.ID`, the
+  project resolved from cwd at session construction, not the mutable
+  `s.focus` (see the Activity section for why that's the path-consistency
+  guarantee `styx watch` relies on). `mirrorNow()` calls it and narrates any
+  write error via `logStatus`; it's called from `printEvent` (every streamed
+  event) and, during the quiet parallel span where `printEvent` never fires,
+  from a dedicated one-second `startMirrorTicker` goroutine bracketing the
+  `LiveRenderer` span in `runDispatches`.
 - `mcp.go` — MCP tool handlers, JSON schemas, tool assembly, and the `styx mcp`
   command entry point. Defines `routeArgs` (Task, Verb, Signals, Project),
   `routeResult` (Channel, Model, Effort, FallbackChain, Reasoning, Budget,
@@ -280,7 +306,7 @@ counts in `Response` are `len/4` estimates.
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
 `routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules,
-Models, Brain, Conductor, Tiers}`. Rules match on `verb` + required `signals`; **first match
+Models, Brain, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
 No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
@@ -323,6 +349,19 @@ already-customized `max_background_tasks` at any value, and appends a whole
 again (the top tier, callable since mid-2026 after the 2026-06-12 suspension —
 `config.EnsureFableTier` migrates suspension-era configs that still pin the seeded
 `fable = "opus"`, leaving user-customized mappings alone).
+
+`[watch]` (`config.WatchCap{StallThresholdSeconds, IntervalSeconds,
+OllamaEnabled}`) configures live dispatch observability for `styx watch`
+(`internal/activity`, see below): `StallThreshold()` returns the idle
+duration past which an agent is flagged stalled (default 90s when
+`StallThresholdSeconds <= 0`), `Interval()` returns the ollama-watcher poll
+cadence (default 15s when `IntervalSeconds <= 0`), and `OllamaEnabled` gates
+whether the watcher starts at all. Seeded into new installs by
+`default_routing.go` (`stall_threshold_seconds = 90`, `interval_seconds =
+15`, `ollama_enabled = true`) and injected into pre-C5 configs by
+`config.EnsureWatchSection` — idempotent, appends the whole `[watch]` block
+only when no `[watch]` section exists yet, leaving any existing section
+(default or user-customized) untouched.
 
 **Capability floor (v2).** `internal/signals/floor.go` defines `Tier`
 (`TierLocal < TierHaiku < TierSonnet < TierOpus`), `TierOf(channel, model)`
@@ -509,16 +548,24 @@ continuity is maintained by styx summaries (agy exposes `--continue`/
 so headless resume stays impossible).
 
 The package defines the shared event shape and parses both Claude's and Codex's
-stream protocols. For claude: `system/init` captures session IDs, assistant
-text chunks stream intermediate output, and final `result` events carry the
-answer plus real usage (normal input, cache creation input, and cache-read
-input tokens). For codex (`ParseCodexEvent`): `thread.started` captures the
-resumable `thread_id`, `item.completed` `agent_message` items stream assistant
-text, `turn.completed` carries exact usage (`input_tokens` +
+stream protocols. Events carry a `Type` (`EventInit`/`EventText`/`EventTool`/
+`EventResult`) plus a `Tool` field set only for `EventTool`. For claude:
+`system/init` captures session IDs, assistant text chunks stream intermediate
+output, `assistant` messages whose content is a `tool_use` block surface as
+`EventTool` (`Tool` = the tool name, e.g. `Bash`/`Read`; `Text` = a best-effort
+target pulled from the tool's `input` — command first line, file path, path,
+URL, or search pattern, via `claudeToolTarget`/`firstLine`), and final `result`
+events carry the answer plus real usage (normal input, cache creation input,
+and cache-read input tokens). For codex (`ParseCodexEvent`): `thread.started`
+captures the resumable `thread_id`, `item.completed` `agent_message` items
+stream assistant text, any other non-empty `item.completed` type (e.g.
+`command_execution`, `file_change`, `mcp_tool_call`) surfaces as `EventTool`
+(`Tool` = the item type; `Text` = the item's `command` field, first line only,
+when present), `turn.completed` carries exact usage (`input_tokens` +
 `cached_input_tokens`, and `output_tokens`) but no text, and `turn.failed`
 surfaces an error result. Context size is metered against each adapter's real
-context window rather than rough character estimates. Hook, tool-use-only,
-command-execution, and malformed stream lines are ignored.
+context window rather than rough character estimates. Hook and malformed
+stream lines are still ignored.
 
 Each project has a JSON thread store under
 `~/.config/styx/state/threads/<id>.json`, keyed by the stable project ID rather
@@ -537,7 +584,17 @@ it as the result text when the final event's text is empty. For plain adapters
 (agy) it treats full stdout as the result and falls back to len/4 token
 estimates until those CLIs expose structured usage. Every successful turn
 updates the thread's context meter, turn count, and timestamp in memory; callers
-persist the store after lifecycle decisions. `testdata/fakeagent` is an
+persist the store after lifecycle decisions. `Runner.Board *activity.Board` and
+`Runner.Label string` (both optional; `Label == ""` disables recording) let the
+streaming loop write every parsed event to the shared liveness board via
+`summarize(ev)` — a small switch rendering `EventInit` as "session started",
+`EventTool` as `"<tool>: <target>"` (or just the tool name if there's no
+target), `EventText` as "thinking", and `EventResult` as "finishing". This call
+sits right after the existing `OnEvent` callback in the loop but does not
+depend on it: `OnEvent` is nil on background dispatch (the conductor's async
+path), so recording liveness in the Runner rather than in callers' `OnEvent`
+handlers is what makes both sync and background dispatch observable through
+one code path. `testdata/fakeagent` is an
 executable stream-json fixture for runner and manager lifecycle tests, including
 resume argument assertions and dead-session simulation; its `FAKEAGENT_SLEEP`
 knob (seconds) sleeps once, before either protocol block emits, so tests can
@@ -577,7 +634,19 @@ exposes `exec`, `resume`, `--json`, `--sandbox`, `--model`, and `--add-dir`).
 creates the thread on first use, seeds fresh/restarted sessions with a project
 role line or last distillation, runs the turn, records real token usage and the
 routed model to the budget log under verb `thread`, maintains rolling summaries
-for plain adapters, and saves the thread store. A codex thread that predates
+for plain adapters, and saves the thread store. `Manager.Board *activity.Board`
+(nil ok) is threaded into the per-dispatch `Runner` as `Board: m.Board, Label:
+BoardLabel(m.ProjectID, name)` so every turn's events land on the shared
+liveness board regardless of whether the caller passed an `onEvent` callback.
+`BoardLabel(projectID, thread)` (exported) namespaces the board key as
+`"<projectID>/<thread>"` so the single board a conductor server or REPL session
+shares across every bound project never cross-attributes two projects' like-named
+threads (e.g. both running a `codex` task); renderers strip the `"<projectID>/"`
+prefix for display (`activity.Render`). `Dispatch` stamps `start :=
+time.Now()` on entry and, immediately after `m.record(...)` and before the
+`err != nil` branch, calls `m.Board.Done(label, time.Since(start))` — one
+placement that covers both the error and success return paths, so a failed
+turn still clears the agent's "in flight" state on the board. A codex thread that predates
 native resume (rolling `Summary`, no `SessionID`) seeds that summary into its
 first resume-capable turn as a one-time transition. If a resume-capable CLI
 reports a dead session, the manager clears the session ID and retries once using
@@ -1188,17 +1257,38 @@ REPL loop.
 
 - `conductorDeps` (`a *app`, `gate *shipgate.Gate`, `emb memory.Embedder`,
   `reg *taskRegistry` — the background dispatch registry, nil-safe on every
-  read path — a mutex-guarded `managers map[string]*managed` cache keyed by
-  project ID, and a mutex-guarded `gmem *memory.Store` — lazy handle on the
-  shared `global.db`, opened on first use via `globalMem()` and cached for
-  the life of the process) is built once per `styx mcp` invocation via
+  read path — `board *activity.Board` — one shared liveness board fed by every
+  managed `Manager` (`Board: d.board`), so sync and background dispatches alike
+  record activity — `mirror func() error` (Task 9) — a debounced disk-mirror
+  writer, nil if the state dir couldn't be prepared — a mutex-guarded
+  `managers map[string]*managed` cache keyed by project ID, and a
+  mutex-guarded `gmem *memory.Store` — lazy handle on the shared `global.db`,
+  opened on first use via `globalMem()` and cached for the life of the
+  process) is built once per `styx mcp` invocation via
   `newConductorDeps(a, rootCtx)`. The `rootCtx` parameter is `cmdMCP`'s
   cancellable root context (see "MCP server" above); it flows straight into
-  `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks)` so every
-  background task this server ever spawns is rooted on the server's own
-  lifetime, not any single tool call's. `conductorTools(d)` returns six
-  tools: `dispatch`, `thread_status`, `memory_save`, `pipeline_run`,
-  `rate_dispatch`, and `collect`.
+  `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks, board)` so
+  every background task this server ever spawns is rooted on the server's own
+  lifetime, not any single tool call's, and the registry can read each running
+  task's last board action for its piggyback line. `newConductorDeps` also
+  starts an `activity.Watcher` goroutine off `rootCtx` gated on
+  `routing.Watch.OllamaEnabled` (dies with the server; best-effort), and wires
+  `d.mirror` via `activity.MirrorThrottle(board, <StateDir>/watch/<projectID>.json,
+  2*time.Second)`, keyed by `resolveGlobalTarget("")`'s project ID — the same
+  cwd-based resolution `managerFor("")` and a `styx watch` process invoked
+  alongside the server both use, so the mirror path always agrees with what
+  `styx watch` reads (see the Activity section's disk-mirror write-up for the
+  full path-consistency argument). `d.mirrorNow()` narrates (never swallows)
+  a write failure via `logStatus` and is called from `dispatch`'s streaming
+  `onEvent` and, for background tasks (which pass `onEvent = nil`), explicitly
+  before and after the task's `Dispatch` call.
+  `conductorTools(d)` returns six tools: `dispatch`, `thread_status`,
+  `memory_save`, `pipeline_run`, `rate_dispatch`, and `collect`. (Deviation
+  from the Task 8 brief, which put the board on the per-project `managed`
+  struct: the board must exist at `newConductorDeps` time to thread into the
+  registry, which is created before any `managed` — so it lives on
+  `conductorDeps` and is shared into every Manager, mirroring how the REPL
+  session owns one board across bound projects.)
 - `conductorDeps.managerFor(alias)` lazily binds a project exactly the way
   `replSession.bind` does (`cmd/styx/repl.go`): opens `<memDir>/<projectID>.db`
   via `memory.Open`, loads `agent.LoadThreads(projectID)`, wires the
@@ -1420,7 +1510,14 @@ REPL loop.
   every conductor tool's `Handler`, runs the inner handler unchanged, and on
   success — only when `reg.StatusLine()` is non-empty (live or unclaimed
   tasks exist) AND the result is a `map[string]any` — sets `m["bg"]` to that
-  status line before returning. Errors pass straight through untouched
+  status line before returning. `StatusLine`'s running-task entries are
+  enriched (Task 8) with the task's last board action: when `reg.board` is set
+  (nil-safe), it matches `board.Snapshot()` state by the project-qualified key
+  `agent.BoardLabel(Spec.ProjectID, Spec.Thread)` (NOT the bare thread — the
+  board is shared across projects, so matching on thread alone would
+  cross-attribute two projects' like-named tasks) and appends `— <last>` so the
+  piggyback line carries what each agent is *doing*,
+  not just its elapsed clock. Errors pass straight through untouched
   (never decorated); non-map results (e.g. the raw `shipgate.Result` token
   relay from a denied `risk: ship`/`pipeline_run` gate) also pass through
   untouched, since there's no map to add a key to. An idle registry
@@ -1532,6 +1629,156 @@ results to the caller.
   stops. Claimed files whose `Finished` timestamp is older than
   `maxClaimedAge` (7 days, wired in Task 7) are pruned (`os.Remove`) during
   the same scan — claimed files are never orphans, only prune candidates.
+
+## Activity (internal/activity)
+
+- **Activity** (`internal/activity/`): live dispatch-observability board —
+  per-agent heartbeat, stall detection, ollama watcher, and the cross-process
+  disk mirror behind `styx watch`.
+
+`Board` is the in-process, thread-safe (single `sync.Mutex`) liveness
+substrate every later surface (TUI renderer, ollama watcher, disk mirror)
+reads from. It holds only strings and timestamps — never `agent.Event` — so
+`internal/activity` imports nothing from `internal/agent`; the dependency
+runs one way, agent → activity. `NewBoard()` starts empty on the wall clock
+(`SetClock` overrides it for tests). `Record(label, summary)` stamps a
+one-line activity string for an agent label, marking it live and appending to
+a per-agent ring buffer capped at `recentCap` (20) entries so the ollama
+watcher's prompt stays small. `Done(label, elapsed)` marks an agent finished
+with its total elapsed time. `Snapshot()` returns an `[]AgentState` (`Label`,
+`Last`, `LastAt`, `Done`, `Elapsed`, `Recent`) in first-seen order; `Recent
+(label)` returns just that agent's ring buffer. Labels are opaque keys: the
+`agent.Manager` writes project-namespaced ones (`agent.BoardLabel` →
+`"<projectID>/<thread>"`) so the single board shared across projects never
+collides; `activity.Render` strips the `"<projectID>/"` prefix (via
+`displayLabel`) so `/watch` and the live renderer show the bare thread name. `SetWatcherNote`/
+`WatcherNote` hold the ollama watcher's latest health read as a single
+string. **Wiring (Task 8):** both the REPL session and the conductor own one
+`Board`, injected into every `agent.Manager` (`Manager.Board`) so every turn
+records liveness; the REPL exposes it via `/watch` and an inline parallel-
+dispatch heartbeat, the conductor via the piggyback bg line and its own
+watcher goroutine (see the `repl.go` and "Conductor MCP tools" sections).
+
+**Ollama watcher** (`Watcher`): a best-effort background goroutine that
+periodically feeds cross-agent activity to local ollama `/api/chat` and
+writes health observations back to the board via `SetWatcherNote`.
+`Watcher{BaseURL, Model, Board, Interval}` configures the endpoint, chat
+model, target board, and poll cadence (0 defaults to 15s). `Run(ctx)` fires
+a goroutine that polls until context cancellation; poll errors are
+deliberately swallowed — a down ollama must not spam or crash the session.
+`pollOnce(ctx)` runs one watch cycle: it snapshots live (non-`Done`) agents,
+builds a structured prompt listing each agent's recent activity lines,
+sends it to ollama with a system prompt tuned for agent-health assessment,
+and stores the parsed response on success. On failure (unreachable ollama,
+parse error, etc.) it returns the error and leaves the existing note
+untouched — callers can log the error for debugging but the session
+continues unaffected. This graceful degradation is tested via `httptest`
+mocks for ollama success and failure paths.
+
+**Live renderer** (`LiveRenderer`): a TTY-aware refresh loop that repaints
+the board in place on a ticker. `NewLiveRenderer(w io.Writer, b *Board, stall
+time.Duration)` builds a renderer targeting writer `w`, reading from board
+`b` with stall timeout `stall`. On a TTY it uses ANSI cursor movement to
+clear previous frames in place (`\033[<n>A` to move up n lines, `\r\033[K` to
+clear each line); on a non-TTY (e.g., a buffer) it appends frames (quiet
+cadence for logging). `Start()` begins a repainting goroutine that calls
+`paint()` every second until `Stop()`. `paint()` is the single testable frame
+method: it snapshots the board, renders it via `Render`, acquires a mutex to
+serialize writes, and updates a counter tracking lines painted for next-frame
+cursor repositioning. `Stop()` closes the internal stop channel, waits for
+the goroutine to exit, and paints a final frame; a `sync.Once` (`stopOnce`)
+guards the close so a second `Stop()` call — or a `Stop()` before `Start()`,
+where `l.stop` is still nil — is a safe no-op instead of a
+close-of-closed-channel panic (`TestLiveRendererStopTwiceDoesNotPanic`).
+Tests set `lr.now` to a fixed clock for deterministic rendering and call
+`paint()` directly against a buffer (non-TTY, so no ANSI codes), asserting
+the rendered output contains expected content.
+
+**Disk mirror + `styx watch` (Task 9, `mirror.go`, `cmd/styx/watch.go`):** a
+throttled on-disk copy of the board so a *second, separate* `styx` process
+can render the same live activity without sharing memory with the session
+that's dispatching. `WriteMirror(path, states, note)` marshals a
+`[]AgentState` + note to JSON and writes it atomically (tmp file + rename) so
+a concurrent reader never observes a partial write. `ReadMirror(path)`
+reverses this; when `path` doesn't exist it wraps `os.ReadFile`'s error with
+`%w`, so callers detect absence with `errors.Is(err, fs.ErrNotExist)` (never a
+bespoke sentinel). `MirrorThrottle(b *Board, path string, min time.Duration)`
+returns a debounced writer closure: the first call always writes (leading
+edge), later calls within `min` of the last write are no-ops, and every write
+failure is returned to the caller — a mirror write is a best-effort side
+channel, so it is narrated (`logStatus`), never fails the dispatch it rides
+along with.
+
+Mirror files live at `~/.config/styx/state/watch/<projectID>.json`
+(`paths.StateDir()/watch/`, created with `paths.EnsureDir`), throttled to
+roughly one write per 2s. **Path-consistency is the whole design constraint:**
+the writer (a REPL session or the `styx mcp` conductor) and the reader (a
+`styx watch` process in another terminal) must independently compute the same
+path, with no message passed between them. `newREPLSession(a, repos...)` has
+*two* seed-resolution paths and both must be matched:
+
+- With an explicit repo arg (`styx repl otherRepo`), `seed` resolves via
+  `target.Resolve(target.Spec{Alias: repos[0]})` — by registered name/prefix/
+  path, **not** the process's cwd — and the mirror is keyed on `seed.ID`.
+- With no repo arg (bare `styx repl`), `seed` resolves via
+  `resolveGlobalTarget("")` (the process's cwd), matching `newConductorDeps`'s
+  identical `resolveGlobalTarget("")` call (the server's launch-directory
+  project, per `managerFor`'s existing cwd convention).
+
+Either way `seed` (not the mutable `s.focus`, which `/focus` can move to a
+different bound repo mid-session) is resolved once, before the session
+struct exists, so the mirror path never drifts under a running session.
+
+`cmdWatch` (`cmd/styx/watch.go`) mirrors both branches via a small helper,
+`watchProjectID(args []string)`: a non-empty first positional arg resolves
+through the identical `target.Resolve(target.Spec{Alias: args[0]})` call the
+REPL's explicit-repo path uses, so `styx watch otherRepo` agrees with a
+`styx repl otherRepo` session launched from *any* directory; with no args it
+falls back to the same `resolveGlobalTarget("")` cwd resolution as the bare
+REPL and the conductor. `watchMirrorPath(args)` joins that ID onto
+`paths.StateDir()/watch/<id>.json`. (An earlier version of `cmdWatch` always
+called `resolveGlobalTarget("")` regardless of arguments — silently
+mismatching a `styx watch otherRepo` invocation against an explicit-repo REPL
+session; `watchProjectID` closes that gap and is covered by
+`TestWatchProjectIDMatchesREPLAliasResolution` /
+`TestWatchProjectIDNoArgsMatchesCwdResolution` in `cmd/styx/watch_test.go`.)
+
+Writers call the throttle from the dispatch event path: the REPL's
+`printEvent` (every streamed event) and, for the quiet parallel fan-out
+(where `onEvent` is `nil` and `printEvent` never fires), a dedicated
+one-second ticker (`startMirrorTicker`) bracketing the `LiveRenderer` span.
+The conductor calls it from its `dispatch` tool's `onEvent` (every streamed
+event, ahead of the existing progress-notification throttle) and explicitly
+before/after a background task's `Dispatch` call (which passes `onEvent =
+nil`, so there is no other hook mid-flight). `cmdWatch` is a read-only loop:
+resolve the project via `watchMirrorPath(args)`, `ReadMirror` it, clear the
+screen, render via `activity.Render(states, note, stall, time.Now())`, sleep
+~1s, repeat; a missing mirror (`errors.Is(err, fs.ErrNotExist)`) prints `(no
+live activity …)` and returns nil rather than erroring. `stall` comes from
+`watchStallThreshold()`, a pure `config.LoadRouting()` TOML parse (no
+`loadApp()`/sqlite wiring) that returns `routing.Watch.StallThreshold()`, so
+a cross-process `styx watch` flags stalls at the same configured threshold
+as the in-process REPL `/watch` and inline `LiveRenderer` (both of which read
+`routing.Watch.StallThreshold()` too) instead of always using
+`activity.DefaultStall` (90s); a missing or unparsable routing.toml falls
+back to `activity.DefaultStall` silently, since `watch` is a read-only viewer
+that must keep working without a config. Because `cmdWatch` never calls
+`loadApp()` (no routing/budget/sqlite wiring beyond that one pure TOML
+parse), `watch` is registered in `cmd/styx/dispatch.go`'s pre-`loadApp`
+switch, alongside `runs`.
+
+**Mirror cleanup on session end:** both writers remove their mirror file when
+they stop, so a later `styx watch` shows the `(no live activity …)` nudge
+instead of replaying the last session's final frame. The REPL's `cleanup()`
+(`cmd/styx/repl.go`, run via `defer` in both the interactive and one-shot
+dispatch paths) does `os.Remove(mirrorPath)` after closing bound bundles,
+using the exact path captured when `s.mirror` was built; `fs.ErrNotExist` is
+ignored (nothing to clean up), any other error is narrated via `logStatus`
+and never fails cleanup. The conductor mirrors this: `conductorDeps` carries
+`mirrorPath` alongside `mirror`, and `cmdMCP` (`cmd/styx/mcp.go`) calls
+`d.removeMirror()` right after `srv.Serve(...)` returns, before propagating
+its error — so the file is gone whether the server exits cleanly or the host
+closes stdin.
 
 ## Progress (internal/progress)
 

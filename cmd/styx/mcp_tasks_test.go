@@ -45,7 +45,7 @@ func state(r *taskRegistry, id string) string {
 }
 
 func TestRegistryCapQueuesExcessTasks(t *testing.T) {
-	r := newTaskRegistry(context.Background(), 1)
+	r := newTaskRegistry(context.Background(), 1, nil)
 	run1, started1, release1 := blockingRun(map[string]any{"text": "one"})
 	run2, started2, release2 := blockingRun(map[string]any{"text": "two"})
 
@@ -71,7 +71,7 @@ func TestRegistryCapQueuesExcessTasks(t *testing.T) {
 }
 
 func TestRegistryThreadSerialization(t *testing.T) {
-	r := newTaskRegistry(context.Background(), 4)
+	r := newTaskRegistry(context.Background(), 4, nil)
 	run1, started1, release1 := blockingRun(nil)
 	run2, _, release2 := blockingRun(nil)
 	id1, _ := r.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "read"}, run1)
@@ -97,7 +97,7 @@ func TestRegistryThreadSerialization(t *testing.T) {
 }
 
 func TestRegistryProjectWriteQueue(t *testing.T) {
-	r := newTaskRegistry(context.Background(), 4)
+	r := newTaskRegistry(context.Background(), 4, nil)
 	run1, started1, release1 := blockingRun(nil)
 	id1, _ := r.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "edit"}, run1)
 	<-started1
@@ -125,7 +125,7 @@ func TestRegistryProjectWriteQueue(t *testing.T) {
 }
 
 func TestRegistryErrorsCollectAndClaim(t *testing.T) {
-	r := newTaskRegistry(context.Background(), 4)
+	r := newTaskRegistry(context.Background(), 4, nil)
 	id, _ := r.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "read"},
 		func(context.Context, string) (map[string]any, error) {
 			return nil, context.DeadlineExceeded
@@ -153,7 +153,7 @@ func TestRegistryBusyAndNilSafety(t *testing.T) {
 		t.Fatal("nil registry reads must be safe no-ops")
 	}
 
-	r := newTaskRegistry(context.Background(), 4)
+	r := newTaskRegistry(context.Background(), 4, nil)
 	run1, started1, release1 := blockingRun(nil)
 	id1, _ := r.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "edit"}, run1)
 	<-started1
@@ -174,7 +174,7 @@ func TestRegistryBusyAndNilSafety(t *testing.T) {
 
 func TestTaskStateMirrorAndOrphanScan(t *testing.T) {
 	dir := t.TempDir()
-	r := newTaskRegistry(context.Background(), 4)
+	r := newTaskRegistry(context.Background(), 4, nil)
 	r.dir = dir
 	run1, started1, release1 := blockingRun(map[string]any{"text": "hi"})
 	id, _ := r.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "edit"}, run1)
@@ -207,7 +207,7 @@ func TestTaskStateMirrorAndOrphanScan(t *testing.T) {
 	if len(orphans) != 1 {
 		t.Fatalf("want 1 orphan, got %d", len(orphans))
 	}
-	r2 := newTaskRegistry(context.Background(), 4)
+	r2 := newTaskRegistry(context.Background(), 4, nil)
 	r2.dir = dir
 	r2.adoptOrphans(orphans)
 	snap := r2.Snapshot()
@@ -233,7 +233,7 @@ func TestTaskStateMirrorAndOrphanScan(t *testing.T) {
 }
 
 func TestWithBackgroundStatusPiggyback(t *testing.T) {
-	reg := newTaskRegistry(context.Background(), 4)
+	reg := newTaskRegistry(context.Background(), 4, nil)
 	tools := withBackgroundStatus([]mcpserver.Tool{
 		{Name: "mapper", Handler: func(context.Context, json.RawMessage) (any, error) {
 			return map[string]any{"ok": true}, nil

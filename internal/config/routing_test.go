@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -253,5 +254,19 @@ func TestConductorRouteGateDefault(t *testing.T) {
 	applyConductorDefaults(&r2)
 	if r2.Conductor.RouteGate != "audit" {
 		t.Errorf("explicit route_gate must be preserved, got %q", r2.Conductor.RouteGate)
+	}
+}
+
+func TestWatchDefaults(t *testing.T) {
+	var w WatchCap // zero value
+	if w.StallThreshold() != 90*time.Second {
+		t.Errorf("stall default = %v, want 90s", w.StallThreshold())
+	}
+	if w.Interval() != 15*time.Second {
+		t.Errorf("interval default = %v, want 15s", w.Interval())
+	}
+	w2 := WatchCap{StallThresholdSeconds: 30, IntervalSeconds: 5}
+	if w2.StallThreshold() != 30*time.Second || w2.Interval() != 5*time.Second {
+		t.Errorf("explicit values not honored: %+v", w2)
 	}
 }

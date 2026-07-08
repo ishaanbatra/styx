@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -47,12 +48,13 @@ func newManagerFixture(t *testing.T, window int) *managerFixture {
 
 	return &managerFixture{
 		m: &Manager{
-			Project:  config.Project{Name: "testproj", Path: dir},
-			Threads:  ts,
-			Adapters: map[string]Adapter{"claude": &ClaudeAdapter{BinPath: fakeBin(t), Window: window}},
-			Budget:   bud,
-			Mem:      mem,
-			Emb:      fixedEmbedder{},
+			Project:   config.Project{Name: "testproj", Path: dir},
+			ProjectID: "proj-test",
+			Threads:   ts,
+			Adapters:  map[string]Adapter{"claude": &ClaudeAdapter{BinPath: fakeBin(t), Window: window}},
+			Budget:    bud,
+			Mem:       mem,
+			Emb:       fixedEmbedder{},
 			Summarize: func(_ context.Context, text string) (string, error) {
 				return "summary: " + text[:min13(20, len(text))], nil
 			},
@@ -99,6 +101,31 @@ func TestDispatchRecordsRealUsage(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("sonnet budget rows = %d, want 1", n)
+	}
+}
+
+// TestDispatchMarksBoardDone proves Manager.Dispatch marks the board's agent
+// entry Done (with elapsed) on a successful turn — the other half of the
+// wiring the Runner test can't reach (Manager owns start/elapsed, not Runner).
+func TestDispatchMarksBoardDone(t *testing.T) {
+	f := newManagerFixture(t, 200000)
+	f.m.Board = activity.NewBoard()
+	t.Setenv("FAKEAGENT_TEXT", "ok")
+
+	if _, err := f.m.Dispatch(context.Background(), DispatchSpec{
+		CLI: "claude", Model: "sonnet", Message: "hi",
+	}, nil); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	snap := f.m.Board.Snapshot()
+	// Board keys are project-namespaced (BoardLabel) so a shared conductor/REPL
+	// board never cross-attributes two projects' like-named threads.
+	if len(snap) != 1 || snap[0].Label != BoardLabel("proj-test", "claude") {
+		t.Fatalf("board not populated with project-namespaced label: %+v", snap)
+	}
+	if !snap[0].Done {
+		t.Fatalf("agent not marked done: %+v", snap[0])
 	}
 }
 

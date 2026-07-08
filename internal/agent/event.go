@@ -4,7 +4,10 @@
 // agents; this package aims them and tracks their lifecycle.
 package agent
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // EventType labels a streamed agent event.
 type EventType string
@@ -12,6 +15,7 @@ type EventType string
 const (
 	EventInit   EventType = "init"   // session started; SessionID set
 	EventText   EventType = "text"   // intermediate assistant text
+	EventTool   EventType = "tool"   // agent invoked a tool; Tool + Text (target) set
 	EventResult EventType = "result" // final result; Text + token usage set
 )
 
@@ -19,6 +23,7 @@ const (
 type Event struct {
 	Type         EventType
 	SessionID    string
+	Tool         string // tool name for EventTool (e.g. "Bash", "command_execution")
 	Text         string
 	InputTokens  int // total context tokens (input + cache creation + cache reads)
 	OutputTokens int
@@ -34,8 +39,10 @@ type claudeLine struct {
 	IsError   bool   `json:"is_error"`
 	Message   struct {
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type  string          `json:"type"`
+			Text  string          `json:"text"`
+			Name  string          `json:"name"`
+			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 	} `json:"message"`
 	Usage struct {
@@ -47,7 +54,7 @@ type claudeLine struct {
 }
 
 // ParseClaudeEvent parses one stream-json line. ok is false for lines styx
-// does not care about (tool use, hooks, malformed input).
+// does not care about (hooks, malformed input).
 func ParseClaudeEvent(line []byte) (Event, bool) {
 	var l claudeLine
 	if err := json.Unmarshal(line, &l); err != nil {
@@ -62,6 +69,9 @@ func ParseClaudeEvent(line []byte) (Event, bool) {
 	case "assistant":
 		text := ""
 		for _, c := range l.Message.Content {
+			if c.Type == "tool_use" {
+				return Event{Type: EventTool, Tool: c.Name, Text: claudeToolTarget(c.Input)}, true
+			}
 			if c.Type == "text" {
 				text += c.Text
 			}
@@ -91,8 +101,9 @@ type codexLine struct {
 	Type     string `json:"type"`
 	ThreadID string `json:"thread_id"`
 	Item     struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Command string `json:"command"`
 	} `json:"item"`
 	Usage struct {
 		InputTokens       int `json:"input_tokens"`
@@ -105,7 +116,7 @@ type codexLine struct {
 }
 
 // ParseCodexEvent parses one codex exec --json line. ok is false for lines
-// styx does not care about (command executions, deltas, malformed input).
+// styx does not care about (deltas, malformed input).
 func ParseCodexEvent(line []byte) (Event, bool) {
 	var l codexLine
 	if err := json.Unmarshal(line, &l); err != nil {
@@ -118,10 +129,22 @@ func ParseCodexEvent(line []byte) (Event, bool) {
 		}
 		return Event{Type: EventInit, SessionID: l.ThreadID}, true
 	case "item.completed":
-		if l.Item.Type != "agent_message" || l.Item.Text == "" {
+		switch l.Item.Type {
+		case "agent_message":
+			if l.Item.Text == "" {
+				return Event{}, false
+			}
+			return Event{Type: EventText, Text: l.Item.Text}, true
+		case "":
 			return Event{}, false
+		default:
+			// Any non-message completed item is tool/command activity. codex item
+			// types include command_execution, file_change, mcp_tool_call; exact
+			// sub-field names vary by codex version, so surface the item type as
+			// the tool label plus a best-effort command string. Verified against a
+			// live `codex exec --json` stream; tighten if a richer field appears.
+			return Event{Type: EventTool, Tool: l.Item.Type, Text: firstLine(l.Item.Command)}, true
 		}
-		return Event{Type: EventText, Text: l.Item.Text}, true
 	case "turn.completed":
 		return Event{
 			Type:         EventResult,
@@ -132,4 +155,49 @@ func ParseCodexEvent(line []byte) (Event, bool) {
 		return Event{Type: EventResult, Text: l.Error.Message, IsError: true}, true
 	}
 	return Event{}, false
+}
+
+// claudeToolTarget pulls a best-effort target out of a tool_use input block:
+// the shell command, the file path, the URL, or the search pattern — whichever
+// is present. Empty when the tool takes none of these (target-less tools still
+// surface via their name).
+func claudeToolTarget(input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var m struct {
+		Command  string `json:"command"`
+		FilePath string `json:"file_path"`
+		Path     string `json:"path"`
+		URL      string `json:"url"`
+		Pattern  string `json:"pattern"`
+	}
+	if err := json.Unmarshal(input, &m); err != nil {
+		return ""
+	}
+	switch {
+	case m.Command != "":
+		return firstLine(m.Command)
+	case m.FilePath != "":
+		return m.FilePath
+	case m.Path != "":
+		return m.Path
+	case m.URL != "":
+		return m.URL
+	case m.Pattern != "":
+		return m.Pattern
+	}
+	return ""
+}
+
+// firstLine returns the first line of s, trimmed, capped at 80 runes.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimSpace(s)
+	if len([]rune(s)) > 80 {
+		return string([]rune(s)[:80]) + "…"
+	}
+	return s
 }

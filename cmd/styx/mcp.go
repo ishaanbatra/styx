@@ -646,7 +646,12 @@ func cmdMCP(a *app, args []string) error {
 	srv := mcpserver.New("styx", mcpServerVersion, tools)
 	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, thread_status, memory_save, pipeline_run, rate_dispatch, collect)")
 	go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake
-	return srv.Serve(ctx, os.Stdin, os.Stdout)
+	err := srv.Serve(ctx, os.Stdin, os.Stdout)
+	// Remove the watch mirror file on shutdown (mirrors the REPL's identical
+	// cleanup) so a later `styx watch` shows the "no live activity" nudge
+	// instead of this server's stale final frame.
+	d.removeMirror()
+	return err
 }
 
 // preloadOllamaModels warms the brain + embedding models with keep_alive so

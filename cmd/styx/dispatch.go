@@ -285,6 +285,10 @@ func dispatch(verb string, args []string) error {
 		return cmdExecuteVerb(args)
 	case "runs":
 		return cmdRuns(args)
+	case "watch":
+		// Reads the on-disk board mirror only — no app/routing/budget wiring,
+		// so it stays in this pre-loadApp switch.
+		return cmdWatch(args)
 	case "hook":
 		// Claude Code hook installed into conductor sessions by the launcher.
 		// Runs per matched tool call, so it stays OFF the loadApp/SQLite path.
@@ -376,7 +380,7 @@ func ensureFirstRun() error {
 	}
 	// Auto-upgrade: v0.2 rewrites gemini:* -> agy:default; v0.3 injects the
 	// `implement` verb rules. Both back up to routing.v0.1.toml.bak.
-	if n, injected, fableRestored, taskCapInjected, err := config.UpgradeRoutingFile(routingPath); err != nil {
+	if n, injected, fableRestored, taskCapInjected, watchInjected, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
 	} else {
 		if n > 0 {
@@ -390,6 +394,9 @@ func ensureFirstRun() error {
 		}
 		if taskCapInjected {
 			logStatus("auto-upgraded routing.toml: seeded [conductor] max_background_tasks = 4")
+		}
+		if watchInjected {
+			logStatus("auto-upgraded routing.toml: seeded [watch] stall_threshold_seconds=90 interval_seconds=15 ollama_enabled=true")
 		}
 	}
 	if projs, err := config.LoadProjects(); err == nil {

@@ -89,6 +89,7 @@ restarting the session.
 | `context show` | Print rendered `.claude/context.md` for the current project |
 | `runs ls` | List pipeline runs for the current project |
 | `runs show <run-id>` | Show JSON state of a specific run |
+| `styx watch [repo]` | Live dispatch board — per-agent heartbeat + stall flags, refreshed from a running session or `styx mcp`, in a second terminal. Defaults to the current-directory project; an explicit `repo` resolves by registered name/prefix/path the same way `styx repl [repo]` does, so `styx watch otherRepo` follows a `styx repl otherRepo` session launched from anywhere |
 
 ### One-shots + admin
 
