@@ -1711,16 +1711,34 @@ Mirror files live at `~/.config/styx/state/watch/<projectID>.json`
 roughly one write per 2s. **Path-consistency is the whole design constraint:**
 the writer (a REPL session or the `styx mcp` conductor) and the reader (a
 `styx watch` process in another terminal) must independently compute the same
-path, with no message passed between them. Both sides key the filename off a
-project ID resolved from **the process's cwd at its own construction/launch
-time** — `newREPLSession` uses `seed.ID` (resolved once, before any later
-`/focus` can move `s.focus` to a different bound repo) and `newConductorDeps`
-uses `resolveGlobalTarget("")` (the server's launch-directory project,
-matching `managerFor`'s existing cwd convention); `cmdWatch` resolves its own
-project with the identical `resolveGlobalTarget("")` call. Because none of
-these depend on mutable in-session state, `styx watch` run from the same
-directory a session was started in always agrees with what that session
-writes, regardless of `/focus` changes made after the fact.
+path, with no message passed between them. `newREPLSession(a, repos...)` has
+*two* seed-resolution paths and both must be matched:
+
+- With an explicit repo arg (`styx repl otherRepo`), `seed` resolves via
+  `target.Resolve(target.Spec{Alias: repos[0]})` — by registered name/prefix/
+  path, **not** the process's cwd — and the mirror is keyed on `seed.ID`.
+- With no repo arg (bare `styx repl`), `seed` resolves via
+  `resolveGlobalTarget("")` (the process's cwd), matching `newConductorDeps`'s
+  identical `resolveGlobalTarget("")` call (the server's launch-directory
+  project, per `managerFor`'s existing cwd convention).
+
+Either way `seed` (not the mutable `s.focus`, which `/focus` can move to a
+different bound repo mid-session) is resolved once, before the session
+struct exists, so the mirror path never drifts under a running session.
+
+`cmdWatch` (`cmd/styx/watch.go`) mirrors both branches via a small helper,
+`watchProjectID(args []string)`: a non-empty first positional arg resolves
+through the identical `target.Resolve(target.Spec{Alias: args[0]})` call the
+REPL's explicit-repo path uses, so `styx watch otherRepo` agrees with a
+`styx repl otherRepo` session launched from *any* directory; with no args it
+falls back to the same `resolveGlobalTarget("")` cwd resolution as the bare
+REPL and the conductor. `watchMirrorPath(args)` joins that ID onto
+`paths.StateDir()/watch/<id>.json`. (An earlier version of `cmdWatch` always
+called `resolveGlobalTarget("")` regardless of arguments — silently
+mismatching a `styx watch otherRepo` invocation against an explicit-repo REPL
+session; `watchProjectID` closes that gap and is covered by
+`TestWatchProjectIDMatchesREPLAliasResolution` /
+`TestWatchProjectIDNoArgsMatchesCwdResolution` in `cmd/styx/watch_test.go`.)
 
 Writers call the throttle from the dispatch event path: the REPL's
 `printEvent` (every streamed event) and, for the quiet parallel fan-out
@@ -1729,9 +1747,9 @@ one-second ticker (`startMirrorTicker`) bracketing the `LiveRenderer` span.
 The conductor calls it from its `dispatch` tool's `onEvent` (every streamed
 event, ahead of the existing progress-notification throttle) and explicitly
 before/after a background task's `Dispatch` call (which passes `onEvent =
-nil`, so there is no other hook mid-flight). `cmdWatch` (`cmd/styx/watch.go`)
-is a read-only loop: resolve the project, `ReadMirror` the mirror path, clear
-the screen, render via `activity.Render(states, note, activity.DefaultStall,
+nil`, so there is no other hook mid-flight). `cmdWatch` is a read-only loop:
+resolve the project via `watchMirrorPath(args)`, `ReadMirror` it, clear the
+screen, render via `activity.Render(states, note, activity.DefaultStall,
 time.Now())`, sleep ~1s, repeat; a missing mirror (`errors.Is(err,
 fs.ErrNotExist)`) prints `(no live activity …)` and returns nil rather than
 erroring. Because it never calls `loadApp()` (no routing/budget/sqlite

@@ -9,27 +9,67 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/paths"
+	"github.com/ishaanbatra/styx/internal/target"
 )
 
-// cmdWatch renders the live dispatch board written by a running styx session
-// (REPL or `styx mcp` conductor) in the current project. It reads the
-// on-disk mirror only — no app/routing/budget wiring — so it is registered in
-// dispatch.go's pre-loadApp switch, next to `runs`.
+// watchProjectID resolves the project ID that `styx watch <args>` should read
+// the mirror for. It MUST agree with newREPLSession's seed resolution
+// (repl.go) for both forms:
+//   - an explicit repo/alias arg resolves via target.Resolve(Spec{Alias:
+//     arg}) — the exact call newREPLSession makes when repos is non-empty —
+//     so `styx watch otherRepo` matches a writer started with `styx repl
+//     otherRepo`, regardless of the reader's own cwd.
+//   - no args falls back to resolveGlobalTarget(""), the same cwd-based
+//     resolution the no-arg REPL and the `styx mcp` conductor use at their
+//     own launch time.
 //
-// The mirror path MUST match what the writer (repl.go / mcp_conductor.go)
-// computes: <StateDir>/watch/<projectID>.json, where projectID comes from
-// resolveGlobalTarget("") — the same cwd-based resolution the writer uses at
-// its own launch time. See docs/ARCHITECTURE.md's Activity section.
-func cmdWatch(args []string) error {
-	proj, err := resolveGlobalTarget("")
+// Note: resolveGlobalTarget(arg) for a non-empty arg is equivalent to
+// target.Resolve(Spec{Alias: arg}) too — target.Resolve's Alias branch
+// ignores Dir/Cwd whenever Alias != "" — but we call target.Resolve directly
+// here to make that equivalence structural rather than incidental.
+func watchProjectID(args []string) (string, error) {
+	if len(args) > 0 && args[0] != "" {
+		p, err := target.Resolve(target.Spec{Alias: args[0]})
+		if err != nil {
+			return "", err
+		}
+		return p.ID, nil
+	}
+	p, err := resolveGlobalTarget("")
 	if err != nil {
-		return err
+		return "", err
+	}
+	return p.ID, nil
+}
+
+// watchMirrorPath resolves the on-disk mirror file `styx watch <args>` should
+// read: <StateDir>/watch/<projectID>.json, using watchProjectID above.
+func watchMirrorPath(args []string) (string, error) {
+	id, err := watchProjectID(args)
+	if err != nil {
+		return "", err
 	}
 	stateDir, err := paths.StateDir()
 	if err != nil {
+		return "", err
+	}
+	return filepath.Join(stateDir, "watch", id+".json"), nil
+}
+
+// cmdWatch renders the live dispatch board written by a running styx session
+// (REPL or `styx mcp` conductor) in the current project, or in an optional
+// explicitly named repo (`styx watch <repo>`, matching `styx repl <repo>`).
+// It reads the on-disk mirror only — no app/routing/budget wiring — so it is
+// registered in dispatch.go's pre-loadApp switch, next to `runs`.
+//
+// The mirror path MUST match what the writer (repl.go / mcp_conductor.go)
+// computes: <StateDir>/watch/<projectID>.json. See watchProjectID above and
+// docs/ARCHITECTURE.md's Activity section.
+func cmdWatch(args []string) error {
+	path, err := watchMirrorPath(args)
+	if err != nil {
 		return err
 	}
-	path := filepath.Join(stateDir, "watch", proj.ID+".json")
 
 	for {
 		states, note, err := activity.ReadMirror(path)
