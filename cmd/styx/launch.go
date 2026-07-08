@@ -70,7 +70,7 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 	if err != nil {
 		return fmt.Errorf("load guidance: %w", err)
 	}
-	guide = conductorGuidance(guide, p.Name, extraNote.String(), recallRoutingPrefs(a))
+	guide = conductorGuidance(guide, p.Name, extraNote.String(), recallRoutingPrefs(), recallUserPrefs())
 	styxBin, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate styx binary: %w", err)
@@ -85,10 +85,10 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 }
 
 // conductorGuidance assembles the final --append-system-prompt content:
-// base guidance, the focus project's registry alias (so the brain knows what
-// to pass as `project` on dispatch/thread_status/memory_save), extra-repo
-// notes, and learned routing preferences.
-func conductorGuidance(base, focusName, extraNote, prefs string) string {
+// base guidance, the focus project's registry alias, extra-repo notes, and
+// the two learned-preference sections (the entire application mechanism of
+// styx learn — nothing else consumes learned state).
+func conductorGuidance(base, focusName, extraNote, prefs, userPrefs string) string {
 	g := base
 	g += "\n\n## This session's project\n" +
 		"Registry alias: `" + focusName + "`. Pass it as `project` on dispatch/" +
@@ -98,6 +98,9 @@ func conductorGuidance(base, focusName, extraNote, prefs string) string {
 	}
 	if prefs != "" {
 		g += "\n\n## Routing preferences (learned)\n" + prefs
+	}
+	if userPrefs != "" {
+		g += "\n\n## User preferences (learned)\n" + userPrefs
 	}
 	return g
 }
@@ -150,39 +153,43 @@ func resolveLaunchTarget(repos []string) (project.Project, error) {
 	return project.Project{}, err
 }
 
-// recallRoutingPrefs opens the global memory store + embedder exactly as
-// newREPLSession does (repl.go) and recalls up to 5 routing-preference
-// memories to fold into the launch guidance. Recall is an enhancement, never
-// a blocker: any failure is narrated via logStatus and yields "".
-func recallRoutingPrefs(a *app) string {
+// topLearnedPrefs renders the global store's top-5 memories of kind, ranked
+// by confidence × recency (TopByKind) — kind-exact and embedder-free, so the
+// launch path works even with ollama down. A pure enhancement: any failure
+// is narrated via logStatus and yields "".
+func topLearnedPrefs(kind memory.Kind) string {
 	memDir, err := paths.MemoryDir()
 	if err != nil {
-		logStatus("routing preference recall skipped: %v", err)
+		logStatus("%s recall skipped: %v", kind, err)
 		return ""
 	}
 	if err := paths.EnsureDir(memDir); err != nil {
-		logStatus("routing preference recall skipped: %v", err)
+		logStatus("%s recall skipped: %v", kind, err)
 		return ""
 	}
 	glob, err := memory.Open(filepath.Join(memDir, "global.db"))
 	if err != nil {
-		logStatus("routing preference recall skipped: %v", err)
+		logStatus("%s recall skipped: %v", kind, err)
 		return ""
 	}
 	defer glob.Close()
-
-	emb := memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel)
-	hits, err := memory.Recall(context.Background(), emb, "routing preference", 5, glob)
+	items, err := glob.TopByKind(context.Background(), kind, 5)
 	if err != nil {
-		logStatus("routing preference recall skipped: %v", err)
+		logStatus("%s recall skipped: %v", kind, err)
 		return ""
 	}
-	if len(hits) == 0 {
+	if len(items) == 0 {
 		return ""
 	}
-	texts := make([]string, len(hits))
-	for i, h := range hits {
-		texts[i] = h.Item.Text
+	texts := make([]string, len(items))
+	for i, it := range items {
+		texts[i] = it.Text
 	}
-	return "- " + strings.Join(texts, "\n- ")
+	return "- " + strings.Join(texts, "\n- ") + "\n"
 }
+
+// recallRoutingPrefs and recallUserPrefs feed the two learned guidance
+// sections. Kind-exact TopByKind replaced the old embedding recall (which
+// would cross-match user-preference texts against "routing preference").
+func recallRoutingPrefs() string { return topLearnedPrefs(memory.KindRoutingPreference) }
+func recallUserPrefs() string    { return topLearnedPrefs(memory.KindUserPreference) }
