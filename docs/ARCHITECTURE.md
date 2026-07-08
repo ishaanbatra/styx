@@ -1640,6 +1640,16 @@ results to the caller.
   `maxClaimedAge` (7 days, wired in Task 7) are pruned (`os.Remove`) during
   the same scan — claimed files are never orphans, only prune candidates.
 
+**Awaiter (`cmd/styx/mcp_await.go`).** Awaited dispatches are observed
+background tasks: `awaitTasks` polls the registry every second until every
+awaited id is terminal, streaming one compact progress line per change
+(per-task heartbeats from the activity board in Render vocabulary, one-time
+"tN done — collect" notices for unrelated completions, the ollama watcher
+note when present) through the call's MCP progress emitter. Terminal awaited
+tasks are claimed — their results return inline. Context cancellation
+(host Esc → notifications/cancelled, or server EOF drain) detaches: nothing
+is claimed and the tasks keep running as collectible background work.
+
 ## Activity (internal/activity)
 
 - **Activity** (`internal/activity/`): live dispatch-observability board —
