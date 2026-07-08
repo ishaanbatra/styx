@@ -753,13 +753,54 @@ the learning digest (Task 5-6: ollama-backed summarization of scorecard +
 retrospectives into preference memories) and styx learn --scorecard human
 inspection.
 
+**Digest client** (`internal/learn/digest.go`): The `Digester` type wraps a
+local ollama `/api/chat` endpoint and uses structured output to propose
+candidate memories from a scorecard, unconsumed retrospectives, and rating
+notes. Its chat shape (`Model`, `Stream`, `Think`, `Format`, `KeepAlive`,
+`Options`, `Messages`) closely mirrors `internal/brain`'s shape to leverage
+the same ollama tuning (30-minute keep-alive, dynamic `num_ctx` sizing based
+on system + user prompt length, temperature 0 for deterministic classification)
+and the same local brain model (default `qwen2.5-coder:7b`). Unlike the brain
+which is REPL-coupled and ships with the conductor, the digest client is
+fully self-contained and invoked on demand by `styx learn` without requiring
+a REPL or brain session. `Propose(ctx, scorecard, retros, ratingNotes)` fails
+loudly when ollama is unreachable — never returns empty silently; any upstream
+failure is surfaced wrapped with context.
+
+**Candidate schema**: `Candidate{Kind, Text, Confidence, Evidence}`. `Kind`
+is an enum (`routing-preference` or `user-preference`); `Text` is a standalone
+plain sentence for injection into future guidance; `Confidence` is a float in
+(0,1] indicating certainty; `Evidence` is exactly one citation — either
+`scorecard:<cli>/<signal>` naming a real scorecard cell or `retro:<id>` naming
+a gathered retrospective id shown to the model. The schema enforces these
+constraints at the ollama structured-output layer.
+
+**Evidence guard** (`FilterByEvidence`): Mechanical hallucination filter that
+rejects candidates before any write, dropping those with:
+- kind not in the whitelist (`routing-preference`, `user-preference`)
+- empty or whitespace-only text
+- confidence outside (0,1]
+- evidence citations that do not name a real scorecard cell (parsed as
+  `scorecard:<cli>/<signal>`, verified against `Scorecard.HasCell`)
+  or a real retrospective id (parsed as `retro:<id>`, verified against the
+  provided `[]RetroNote`)
+- evidence in any other format (neither scorecard nor retro prefix)
+
+Survivors are capped at `maxCandidates = 5` (a hallucination bound: at worst 5
+bad sentences, each still evidence-checked and printed). Drop reasons are
+human-readable, one per dropped candidate.
+
 **Verb surface** (`cmd/styx/learn.go`, see above): `styx learn --scorecard`
 renders the table above with no memory store touched; `styx learn --list`
 and `styx learn --forget <id>` inspect/reverse the learned
 `routing-preference`/`user-preference` memories the digest will eventually
 write; bare `styx learn` (the digest itself — ollama-backed summarization
-into new memories) is a deliberate not-implemented stub until Task 6 lands
-it. Manual only, by design: no daemon runs the digest automatically.
+into new memories) remains a deliberate not-implemented stub — `runLearn`
+still returns `"styx learn digest not implemented yet — use --scorecard,
+--list, or --forget"` — pending Task 6, which will wire it up. Task 5 lands
+only the digest's building blocks: the `Digester.Propose` client and the
+`FilterByEvidence` guard now exist in `internal/learn`, but `runLearn` does
+not call them yet. Manual only, by design: no daemon runs the digest automatically.
 
 ## Audit (internal/audit)
 
