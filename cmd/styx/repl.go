@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -774,6 +775,7 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 	// writer and the styx-watch reader agree on a path; best-effort, like the
 	// ollama watcher below — a state-dir failure logs and leaves s.mirror nil
 	// rather than blocking the session.
+	var mirrorPath string
 	if stateDir, serr := paths.StateDir(); serr != nil {
 		logStatus("watch mirror unavailable: %v", serr)
 	} else {
@@ -781,7 +783,8 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 		if err := paths.EnsureDir(mirrorDir); err != nil {
 			logStatus("watch mirror dir: %v", err)
 		} else {
-			s.mirror = activity.MirrorThrottle(s.board, filepath.Join(mirrorDir, seed.ID+".json"), 2*time.Second)
+			mirrorPath = filepath.Join(mirrorDir, seed.ID+".json")
+			s.mirror = activity.MirrorThrottle(s.board, mirrorPath, 2*time.Second)
 		}
 	}
 
@@ -814,12 +817,20 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 	}
 
 	// cleanup cancels the session context (stopping the watcher goroutine),
-	// iterates all bound bundles, then closes session-global stores.
+	// iterates all bound bundles, removes the watch mirror file (so a later
+	// `styx watch` shows the "no live activity" nudge instead of this
+	// session's stale final frame — see the Activity section of
+	// docs/ARCHITECTURE.md), then closes session-global stores.
 	cleanup := func() {
 		cancel()
 		for _, bp := range s.bound {
 			for _, c := range bp.closers {
 				_ = c()
+			}
+		}
+		if mirrorPath != "" {
+			if err := os.Remove(mirrorPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				logStatus("watch mirror cleanup: %v", err)
 			}
 		}
 		glob.Close()

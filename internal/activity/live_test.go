@@ -30,3 +30,19 @@ func TestLiveRendererStartStop(t *testing.T) {
 	lr.Start()
 	lr.Stop() // must not hang or panic
 }
+
+// TestLiveRendererStopTwiceDoesNotPanic guards against the double-close
+// footgun: a second Stop() call must be a no-op, not a panic on an
+// already-closed channel. A bare Stop() before Start() (l.stop == nil) must
+// also stay safe.
+func TestLiveRendererStopTwiceDoesNotPanic(t *testing.T) {
+	b := NewBoard()
+	var buf bytes.Buffer
+	lr := NewLiveRenderer(&buf, b, DefaultStall)
+
+	lr.Stop() // before Start: stop is nil, must be a safe no-op
+
+	lr.Start()
+	lr.Stop()
+	lr.Stop() // second call: must not panic on a closed channel
+}

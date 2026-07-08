@@ -12,7 +12,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -47,6 +49,11 @@ type conductorDeps struct {
 	reg    *taskRegistry   // background dispatch registry (nil-safe on read paths)
 	board  *activity.Board // shared session liveness board (fed by every Manager)
 	mirror func() error    // Task 9: debounced disk mirror of board; nil if unavailable
+
+	// mirrorPath is the on-disk path d.mirror writes to (mirrors the field
+	// above; kept alongside it so shutdown() can remove the file without
+	// recomputing the path). Empty when d.mirror is nil.
+	mirrorPath string
 
 	mu       sync.Mutex
 	managers map[string]*managed
@@ -84,7 +91,8 @@ func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 		if err := paths.EnsureDir(mirrorDir); err != nil {
 			logStatus("watch mirror dir: %v", err)
 		} else {
-			d.mirror = activity.MirrorThrottle(board, filepath.Join(mirrorDir, proj.ID+".json"), 2*time.Second)
+			d.mirrorPath = filepath.Join(mirrorDir, proj.ID+".json")
+			d.mirror = activity.MirrorThrottle(board, d.mirrorPath, 2*time.Second)
 		}
 	}
 
@@ -112,6 +120,20 @@ func (d *conductorDeps) mirrorNow() {
 	}
 	if err := d.mirror(); err != nil {
 		logStatus("watch mirror: %v", err)
+	}
+}
+
+// removeMirror deletes the disk mirror file on server shutdown so a later
+// `styx watch` shows the "no live activity" nudge instead of this session's
+// stale final frame (mirrors the REPL's identical cleanup step in repl.go).
+// A missing file is not an error; any other removal failure is narrated,
+// never fatal — shutdown must still complete.
+func (d *conductorDeps) removeMirror() {
+	if d.mirrorPath == "" {
+		return
+	}
+	if err := os.Remove(d.mirrorPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		logStatus("watch mirror cleanup: %v", err)
 	}
 }
 

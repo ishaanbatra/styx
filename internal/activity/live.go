@@ -20,10 +20,11 @@ type LiveRenderer struct {
 	isTTY bool
 	now   func() time.Time
 
-	mu   sync.Mutex
-	prev int // lines painted last frame (TTY clear)
-	stop chan struct{}
-	done chan struct{}
+	mu       sync.Mutex
+	prev     int // lines painted last frame (TTY clear)
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once // guards Stop() against a double close(l.stop) panic
 }
 
 // NewLiveRenderer builds a renderer. TTY detection mirrors internal/progress.
@@ -71,12 +72,16 @@ func (l *LiveRenderer) Start() {
 	}()
 }
 
-// Stop halts repainting and paints a final frame.
+// Stop halts repainting and paints a final frame. Safe to call more than
+// once (a second call is a no-op) and safe to call before Start (also a
+// no-op, since l.stop is nil).
 func (l *LiveRenderer) Stop() {
 	if l.stop == nil {
 		return
 	}
-	close(l.stop)
-	<-l.done
-	l.paint()
+	l.stopOnce.Do(func() {
+		close(l.stop)
+		<-l.done
+		l.paint()
+	})
 }

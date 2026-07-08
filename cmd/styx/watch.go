@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/activity"
+	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/target"
 )
@@ -70,6 +71,7 @@ func cmdWatch(args []string) error {
 	if err != nil {
 		return err
 	}
+	stall := watchStallThreshold()
 
 	for {
 		states, note, err := activity.ReadMirror(path)
@@ -81,9 +83,25 @@ func cmdWatch(args []string) error {
 			return err
 		}
 		fmt.Print("\033[H\033[2J") // clear screen
-		for _, line := range activity.Render(states, note, activity.DefaultStall, time.Now()) {
+		for _, line := range activity.Render(states, note, stall, time.Now()) {
 			fmt.Println(line)
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+// watchStallThreshold returns the configured stall threshold
+// (routing.toml's [watch] stall_threshold_seconds) so a cross-process `styx
+// watch` flags stalls at the same duration as the in-process REPL /watch and
+// inline LiveRenderer, which both read routing.Watch.StallThreshold(). This is
+// a pure TOML parse (config.LoadRouting) — no loadApp()/sqlite wiring — so
+// `watch` stays registered in dispatch.go's pre-loadApp switch. A missing or
+// broken config falls back to activity.DefaultStall (90s) silently: watch is
+// a read-only viewer and must keep working even when routing.toml is absent.
+func watchStallThreshold() time.Duration {
+	routing, err := config.LoadRouting()
+	if err != nil {
+		return activity.DefaultStall
+	}
+	return routing.Watch.StallThreshold()
 }

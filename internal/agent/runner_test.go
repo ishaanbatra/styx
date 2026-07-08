@@ -90,6 +90,18 @@ func TestRunnerRecordsActivityToBoard(t *testing.T) {
 	}
 }
 
+// TestSummarizeEventTool covers summarize's EventTool branch directly: a
+// tool event with a target renders "Tool: target", and a target-less tool
+// event (no Text) renders just the tool name.
+func TestSummarizeEventTool(t *testing.T) {
+	if got, want := summarize(Event{Type: EventTool, Tool: "Bash", Text: "go test"}), "Bash: go test"; got != want {
+		t.Errorf("summarize with text = %q, want %q", got, want)
+	}
+	if got, want := summarize(Event{Type: EventTool, Tool: "Read"}), "Read"; got != want {
+		t.Errorf("summarize without text = %q, want %q", got, want)
+	}
+}
+
 // TestRunnerNoBoardDoesNotPanic proves a nil Board (or empty Label) leaves
 // recording disabled without touching anything — the "board optional" half
 // of the contract.

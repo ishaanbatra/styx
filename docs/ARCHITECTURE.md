@@ -1686,10 +1686,13 @@ cadence for logging). `Start()` begins a repainting goroutine that calls
 method: it snapshots the board, renders it via `Render`, acquires a mutex to
 serialize writes, and updates a counter tracking lines painted for next-frame
 cursor repositioning. `Stop()` closes the internal stop channel, waits for
-the goroutine to exit, and paints a final frame. Tests set `lr.now` to a
-fixed clock for deterministic rendering and call `paint()` directly against
-a buffer (non-TTY, so no ANSI codes), asserting the rendered output contains
-expected content.
+the goroutine to exit, and paints a final frame; a `sync.Once` (`stopOnce`)
+guards the close so a second `Stop()` call — or a `Stop()` before `Start()`,
+where `l.stop` is still nil — is a safe no-op instead of a
+close-of-closed-channel panic (`TestLiveRendererStopTwiceDoesNotPanic`).
+Tests set `lr.now` to a fixed clock for deterministic rendering and call
+`paint()` directly against a buffer (non-TTY, so no ANSI codes), asserting
+the rendered output contains expected content.
 
 **Disk mirror + `styx watch` (Task 9, `mirror.go`, `cmd/styx/watch.go`):** a
 throttled on-disk copy of the board so a *second, separate* `styx` process
@@ -1749,12 +1752,33 @@ event, ahead of the existing progress-notification throttle) and explicitly
 before/after a background task's `Dispatch` call (which passes `onEvent =
 nil`, so there is no other hook mid-flight). `cmdWatch` is a read-only loop:
 resolve the project via `watchMirrorPath(args)`, `ReadMirror` it, clear the
-screen, render via `activity.Render(states, note, activity.DefaultStall,
-time.Now())`, sleep ~1s, repeat; a missing mirror (`errors.Is(err,
-fs.ErrNotExist)`) prints `(no live activity …)` and returns nil rather than
-erroring. Because it never calls `loadApp()` (no routing/budget/sqlite
-wiring), `watch` is registered in `cmd/styx/dispatch.go`'s pre-`loadApp`
+screen, render via `activity.Render(states, note, stall, time.Now())`, sleep
+~1s, repeat; a missing mirror (`errors.Is(err, fs.ErrNotExist)`) prints `(no
+live activity …)` and returns nil rather than erroring. `stall` comes from
+`watchStallThreshold()`, a pure `config.LoadRouting()` TOML parse (no
+`loadApp()`/sqlite wiring) that returns `routing.Watch.StallThreshold()`, so
+a cross-process `styx watch` flags stalls at the same configured threshold
+as the in-process REPL `/watch` and inline `LiveRenderer` (both of which read
+`routing.Watch.StallThreshold()` too) instead of always using
+`activity.DefaultStall` (90s); a missing or unparsable routing.toml falls
+back to `activity.DefaultStall` silently, since `watch` is a read-only viewer
+that must keep working without a config. Because `cmdWatch` never calls
+`loadApp()` (no routing/budget/sqlite wiring beyond that one pure TOML
+parse), `watch` is registered in `cmd/styx/dispatch.go`'s pre-`loadApp`
 switch, alongside `runs`.
+
+**Mirror cleanup on session end:** both writers remove their mirror file when
+they stop, so a later `styx watch` shows the `(no live activity …)` nudge
+instead of replaying the last session's final frame. The REPL's `cleanup()`
+(`cmd/styx/repl.go`, run via `defer` in both the interactive and one-shot
+dispatch paths) does `os.Remove(mirrorPath)` after closing bound bundles,
+using the exact path captured when `s.mirror` was built; `fs.ErrNotExist` is
+ignored (nothing to clean up), any other error is narrated via `logStatus`
+and never fails cleanup. The conductor mirrors this: `conductorDeps` carries
+`mirrorPath` alongside `mirror`, and `cmdMCP` (`cmd/styx/mcp.go`) calls
+`d.removeMirror()` right after `srv.Serve(...)` returns, before propagating
+its error — so the file is gone whether the server exits cleanly or the host
+closes stdin.
 
 ## Progress (internal/progress)
 

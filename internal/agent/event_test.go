@@ -55,6 +55,12 @@ func TestParseClaudeEvent(t *testing.T) {
 			want: Event{Type: EventTool, Tool: "Read", Text: "/x/y.go"},
 			ok:   true,
 		},
+		{
+			name: "claude tool_use with no input surfaces target-less EventTool",
+			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite"}]}}`,
+			want: Event{Type: EventTool, Tool: "TodoWrite", Text: ""},
+			ok:   true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
