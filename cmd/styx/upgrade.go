@@ -12,12 +12,12 @@ func cmdUpgrade() error {
 	if err != nil {
 		return err
 	}
-	n, injected, fableRestored, taskCapInjected, err := config.UpgradeRoutingFile(p)
+	n, injected, fableRestored, taskCapInjected, watchInjected, err := config.UpgradeRoutingFile(p)
 	if err != nil {
 		return err
 	}
-	if n == 0 && !injected && !fableRestored && !taskCapInjected {
-		fmt.Println("routing.toml already up to date (agy + implement verb + fable tier + conductor task cap present).")
+	if n == 0 && !injected && !fableRestored && !taskCapInjected && !watchInjected {
+		fmt.Println("routing.toml already up to date (agy + implement verb + fable tier + conductor task cap + watch config present).")
 		return nil
 	}
 	if n > 0 {
@@ -31,6 +31,9 @@ func cmdUpgrade() error {
 	}
 	if taskCapInjected {
 		fmt.Println("Seeded [conductor] max_background_tasks = 4.")
+	}
+	if watchInjected {
+		fmt.Println("Seeded [watch] stall_threshold_seconds = 90, interval_seconds = 15, ollama_enabled = true.")
 	}
 	fmt.Printf("Backup saved to %s/routing.v0.1.toml.bak\n", "~/.config/styx")
 	return nil

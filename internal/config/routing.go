@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -16,7 +17,31 @@ type Routing struct {
 	Models    ModelsConfig      `toml:"models"`
 	Brain     BrainConfig       `toml:"brain"`
 	Conductor Conductor         `toml:"conductor"`
+	Watch     WatchCap          `toml:"watch"`
 	Tiers     map[string]string `toml:"tiers"`
+}
+
+// WatchCap configures live dispatch observability (styx watch / heartbeat).
+type WatchCap struct {
+	StallThresholdSeconds int  `toml:"stall_threshold_seconds"`
+	IntervalSeconds       int  `toml:"interval_seconds"`
+	OllamaEnabled         bool `toml:"ollama_enabled"`
+}
+
+// StallThreshold is the idle duration past which an agent is flagged; default 90s.
+func (w WatchCap) StallThreshold() time.Duration {
+	if w.StallThresholdSeconds > 0 {
+		return time.Duration(w.StallThresholdSeconds) * time.Second
+	}
+	return 90 * time.Second
+}
+
+// Interval is the ollama watcher cadence; default 15s.
+func (w WatchCap) Interval() time.Duration {
+	if w.IntervalSeconds > 0 {
+		return time.Duration(w.IntervalSeconds) * time.Second
+	}
+	return 15 * time.Second
 }
 
 // BudgetCaps holds the per-channel cap percentages.

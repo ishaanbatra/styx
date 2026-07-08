@@ -280,7 +280,7 @@ counts in `Response` are `len/4` estimates.
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
 `routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules,
-Models, Brain, Conductor, Tiers}`. Rules match on `verb` + required `signals`; **first match
+Models, Brain, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
 No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
@@ -323,6 +323,19 @@ already-customized `max_background_tasks` at any value, and appends a whole
 again (the top tier, callable since mid-2026 after the 2026-06-12 suspension —
 `config.EnsureFableTier` migrates suspension-era configs that still pin the seeded
 `fable = "opus"`, leaving user-customized mappings alone).
+
+`[watch]` (`config.WatchCap{StallThresholdSeconds, IntervalSeconds,
+OllamaEnabled}`) configures live dispatch observability for `styx watch`
+(`internal/activity`, see below): `StallThreshold()` returns the idle
+duration past which an agent is flagged stalled (default 90s when
+`StallThresholdSeconds <= 0`), `Interval()` returns the ollama-watcher poll
+cadence (default 15s when `IntervalSeconds <= 0`), and `OllamaEnabled` gates
+whether the watcher starts at all. Seeded into new installs by
+`default_routing.go` (`stall_threshold_seconds = 90`, `interval_seconds =
+15`, `ollama_enabled = true`) and injected into pre-C5 configs by
+`config.EnsureWatchSection` — idempotent, appends the whole `[watch]` block
+only when no `[watch]` section exists yet, leaving any existing section
+(default or user-customized) untouched.
 
 **Capability floor (v2).** `internal/signals/floor.go` defines `Tier`
 (`TierLocal < TierHaiku < TierSonnet < TierOpus`), `TierOf(channel, model)`

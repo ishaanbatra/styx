@@ -107,12 +107,15 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, _, _, _, err := UpgradeRoutingFile(routingPath)
+	n, _, _, _, watchInjected, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n != 1 {
 		t.Errorf("expected 1 substitution, got %d", n)
+	}
+	if !watchInjected {
+		t.Error("expected [watch] section to be injected on a config that lacks one")
 	}
 	// Backup exists
 	backup := filepath.Join(routingDir, "routing.v0.1.toml.bak")
@@ -241,5 +244,31 @@ func TestEnsureConductorTaskCap(t *testing.T) {
 	got4, changed4 := EnsureConductorTaskCap(bare)
 	if !changed4 || !strings.Contains(got4, "[conductor]") || !strings.Contains(got4, "max_background_tasks = 4") {
 		t.Fatalf("missing section must be appended whole:\n%s", got4)
+	}
+}
+
+func TestEnsureWatchSection(t *testing.T) {
+	// No [watch] section at all: whole section appended.
+	bare := "[tiers]\nfable  = \"fable\"\n"
+	got, changed := EnsureWatchSection(bare)
+	if !changed {
+		t.Fatal("expected changed=true when [watch] section is absent")
+	}
+	for _, want := range []string{"[watch]", "stall_threshold_seconds = 90", "interval_seconds = 15", "ollama_enabled = true"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in output; got:\n%s", want, got)
+		}
+	}
+	// Idempotent: already-present [watch] section is left alone.
+	again, changed2 := EnsureWatchSection(got)
+	if changed2 || again != got {
+		t.Fatal("second run must be a no-op")
+	}
+	// User customization is respected: a differently-configured [watch]
+	// section must not be duplicated or altered.
+	custom := "[watch]\nstall_threshold_seconds = 30\ninterval_seconds = 5\nollama_enabled = false\n"
+	gotCustom, changedCustom := EnsureWatchSection(custom)
+	if changedCustom || gotCustom != custom {
+		t.Fatal("a config already carrying a [watch] section must be left alone")
 	}
 }
