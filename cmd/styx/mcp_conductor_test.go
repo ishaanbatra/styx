@@ -364,8 +364,13 @@ func TestMemorySaveRoutesLearningKindsToGlobalStore(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("memory_save user-preference: %v", err)
 	}
+	if _, err := callTool(t, d, "memory_save", map[string]any{
+		"kind": "routing-preference", "text": "use codex for specced repo edits",
+	}); err != nil {
+		t.Fatalf("memory_save routing-preference: %v", err)
+	}
 
-	// Both landed in global.db — not a project store (note: no project was
+	// All three landed in global.db — not a project store (note: no project was
 	// even resolvable here; global kinds must not require one).
 	memDir, err := paths.MemoryDir()
 	if err != nil {
@@ -380,11 +385,11 @@ func TestMemorySaveRoutesLearningKindsToGlobalStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 2 {
-		t.Fatalf("want 2 global items, got %d", len(items))
+	if len(items) != 3 {
+		t.Fatalf("want 3 global items, got %d", len(items))
 	}
-	kinds := map[memory.Kind]bool{items[0].Kind: true, items[1].Kind: true}
-	if !kinds[memory.KindRetrospective] || !kinds[memory.KindUserPreference] {
+	kinds := map[memory.Kind]bool{items[0].Kind: true, items[1].Kind: true, items[2].Kind: true}
+	if !kinds[memory.KindRetrospective] || !kinds[memory.KindUserPreference] || !kinds[memory.KindRoutingPreference] {
 		t.Fatalf("wrong kinds in global store: %+v", items)
 	}
 	if items[0].Scope != "global" {

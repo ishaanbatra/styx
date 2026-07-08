@@ -628,8 +628,8 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				var store *memory.Store
 				projectName := ""
 				defaultScope := "project"
-				if kind == memory.KindUserPreference || kind == memory.KindRetrospective {
-					// Learning kinds are about the user/session, not one repo:
+				if kind == memory.KindRoutingPreference || kind == memory.KindUserPreference || kind == memory.KindRetrospective {
+					// Routing and learning kinds are about the user/session, not one repo:
 					// they live in global.db (no project resolution needed).
 					g, err := d.globalMem()
 					if err != nil {

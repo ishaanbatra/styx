@@ -1427,13 +1427,14 @@ REPL loop.
   initialized to `[]string{}`, never nil, so `tasks` is likewise always a
   JSON array (`[]`, never `null`) even when nothing is outstanding.
 - `memory_save(project?, kind, text, scope?)` — validates `kind` against
-  `memory.KindFact/KindDecision/KindTodo/KindRoutingPreference` plus the two
-  learning kinds `KindUserPreference` ("user-preference") and
-  `KindRetrospective` ("retrospective") (any other value errors loudly) and
-  requires non-empty `text`, then embeds via `d.emb.Embed`. Routing forks on
-  kind: the two learning kinds describe the user/session, not one repo, so
-  they write through `d.globalMem()` — a lazy, mutex-guarded, cached handle
-  on a shared `global.db` under `paths.MemoryDir()` (opened once per
+  `memory.KindFact/KindDecision/KindTodo` plus the three user/session kinds
+  `KindRoutingPreference` ("routing-preference"), `KindUserPreference`
+  ("user-preference"), and `KindRetrospective` ("retrospective") (any other
+  value errors loudly) and requires non-empty `text`, then embeds via
+  `d.emb.Embed`. Routing forks on kind: the three user/session kinds describe
+  the user/session, not one repo, so they write through `d.globalMem()` — a
+  lazy, mutex-guarded, cached handle on a shared `global.db` under
+  `paths.MemoryDir()` (opened once per
   `conductorDeps`, no project resolution needed) — with `Project: ""` and
   `scope` defaulting to `"global"`; the launch-time guidance injection
   (Task 7) reads this same store. All other kinds keep writing through
