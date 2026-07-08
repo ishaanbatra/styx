@@ -96,6 +96,13 @@ func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 		}
 	}
 
+	// Mechanical pulse: keeps the disk mirror live for background AND awaited
+	// work with no ollama dependency (awaited-dispatch spec). Only wired when
+	// the mirror itself is (same best-effort posture).
+	if d.mirror != nil {
+		go d.pulse(rootCtx)
+	}
+
 	// The ollama watcher summarizes cross-agent liveness into the board note,
 	// which the piggyback bg line and thread_status surface. Off the server's
 	// root context (dies with the server — no daemons); best-effort like the
@@ -135,6 +142,57 @@ func (d *conductorDeps) removeMirror() {
 	if err := os.Remove(d.mirrorPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		logStatus("watch mirror cleanup: %v", err)
 	}
+}
+
+// pulseTick is the mechanical mirror cadence; MirrorThrottle (2s) dedupes the
+// actual disk writes. A var so tests can shrink it.
+var pulseTick = 1 * time.Second
+
+// pulse drives the disk mirror while agents or tasks are live, plus one
+// unthrottled flush on the live→idle transition so `styx watch` shows final
+// ✓ done states instead of a stale last action. This is the mechanical layer
+// closing Task 9's deferred limitation (mirror frozen mid-run for background
+// tasks): it runs whenever the server runs — no ollama dependency, no config
+// gate — and dies with ctx (the server's root context; no daemons).
+func (d *conductorDeps) pulse(ctx context.Context) {
+	t := time.NewTicker(pulseTick)
+	defer t.Stop()
+	wasLive := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			live := d.anyLive()
+			switch {
+			case live:
+				d.mirrorNow()
+			case wasLive:
+				// Bypass the throttle for the final frame: the debounce could
+				// swallow it, and nothing else writes once everything is idle.
+				if err := activity.WriteMirror(d.mirrorPath, d.board.Snapshot(), d.board.WatcherNote()); err != nil {
+					logStatus("watch mirror: %v", err)
+				}
+			}
+			wasLive = live
+		}
+	}
+}
+
+// anyLive reports whether the board has an unfinished agent or the registry
+// a queued/running task.
+func (d *conductorDeps) anyLive() bool {
+	for _, s := range d.board.Snapshot() {
+		if !s.Done {
+			return true
+		}
+	}
+	for _, tk := range d.reg.Snapshot() {
+		if tk.State == taskQueued || tk.State == taskRunning {
+			return true
+		}
+	}
+	return false
 }
 
 // capPctFor returns the routing.toml cap_pct for a channel (0 = no cap).

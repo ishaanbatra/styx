@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
@@ -809,5 +810,52 @@ func TestCollectAllAndThreadStatusTasks(t *testing.T) {
 	res, _ = callTool(t, d, "collect", map[string]any{})
 	if results, _ := res["results"].([]any); len(results) != 0 {
 		t.Fatalf("claimed results must not repeat, got %v", res["results"])
+	}
+}
+
+// TestPulseKeepsMirrorFreshAndFlushesFinal: the mechanical pulse must mirror
+// live board state with NO ollama involved (Task-9 closure), write one final
+// frame on the live→idle transition, and then go quiet.
+func TestPulseKeepsMirrorFreshAndFlushesFinal(t *testing.T) {
+	oldTick := pulseTick
+	pulseTick = 5 * time.Millisecond
+	defer func() { pulseTick = oldTick }()
+
+	path := filepath.Join(t.TempDir(), "mirror.json")
+	board := activity.NewBoard()
+	d := &conductorDeps{
+		board:      board,
+		reg:        newTaskRegistry(context.Background(), 4, board),
+		mirror:     activity.MirrorThrottle(board, path, time.Millisecond),
+		mirrorPath: path,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.pulse(ctx)
+
+	board.Record("p1/claude", "reading files")
+	waitFor(t, "live state mirrored mid-run", func() bool {
+		states, _, err := activity.ReadMirror(path)
+		return err == nil && len(states) == 1 && !states[0].Done && states[0].Last == "reading files"
+	})
+
+	board.Done("p1/claude", 3*time.Second)
+	waitFor(t, "final flush shows done", func() bool {
+		states, _, err := activity.ReadMirror(path)
+		return err == nil && len(states) == 1 && states[0].Done
+	})
+
+	// Idle: no further writes.
+	fi1, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	fi2, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi1.ModTime().Equal(fi2.ModTime()) {
+		t.Fatal("pulse must not rewrite the mirror while everything is idle")
 	}
 }

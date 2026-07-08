@@ -1769,8 +1769,13 @@ Writers call the throttle from the dispatch event path: the REPL's
 one-second ticker (`startMirrorTicker`) bracketing the `LiveRenderer` span.
 The conductor calls it from its `dispatch` tool's `onEvent` (every streamed
 event, ahead of the existing progress-notification throttle) and explicitly
-before/after a background task's `Dispatch` call (which passes `onEvent =
-nil`, so there is no other hook mid-flight). `cmdWatch` is a read-only loop:
+before/after a background task's `Dispatch` call. A mechanical pulse goroutine
+in the conductor (`conductorDeps.pulse`, 1s tick) refreshes the throttled
+mirror whenever any agent or task is live and writes one unthrottled final
+frame on the live→idle transition — `styx watch` is live mid-run for
+background and awaited dispatches alike, with no ollama dependency. (This
+closes the Task-9 deferred limitation from the 2026-07-07 observability
+plan.) `cmdWatch` is a read-only loop:
 resolve the project via `watchMirrorPath(args)`, `ReadMirror` it, clear the
 screen, render via `activity.Render(states, note, stall, time.Now())`, sleep
 ~1s, repeat; a missing mirror (`errors.Is(err, fs.ErrNotExist)`) prints `(no
