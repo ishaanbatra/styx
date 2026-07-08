@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ishaanbatra/styx/internal/activity"
 )
 
 func fakeBin(t *testing.T) string {
@@ -50,6 +52,53 @@ func TestRunnerSendStreamsAndCapturesSession(t *testing.T) {
 	}
 	if events[0].Type != EventInit || events[len(events)-1].Type != EventResult {
 		t.Errorf("event order: first=%s last=%s", events[0].Type, events[len(events)-1].Type)
+	}
+}
+
+// TestRunnerRecordsActivityToBoard proves the Runner writes liveness to the
+// board on its own, independent of OnEvent (left nil here) — the property
+// background dispatch (which passes nil OnEvent) depends on.
+func TestRunnerRecordsActivityToBoard(t *testing.T) {
+	t.Setenv("FAKEAGENT_SESSION", "sess-99")
+	t.Setenv("FAKEAGENT_TEXT", "did the thing")
+	t.Setenv("FAKEAGENT_IN", "10")
+	t.Setenv("FAKEAGENT_OUT", "5")
+
+	board := activity.NewBoard()
+	th := &Thread{Name: "claude", CLI: "claude"}
+	r := &Runner{
+		Adapter: &ClaudeAdapter{BinPath: fakeBin(t)},
+		Thread:  th,
+		Board:   board,
+		Label:   "claude",
+		Timeout: 10 * time.Second,
+	}
+	if _, err := r.Send(context.Background(), "hi", "sonnet", nil, false); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	snap := board.Snapshot()
+	if len(snap) != 1 || snap[0].Label != "claude" {
+		t.Fatalf("board not populated: %+v", snap)
+	}
+	recent := board.Recent("claude")
+	if len(recent) == 0 || recent[0] != "session started" {
+		t.Fatalf("expected first activity line %q, got %v", "session started", recent)
+	}
+	if last := recent[len(recent)-1]; last != "finishing" {
+		t.Fatalf("expected last activity line %q, got %v", "finishing", recent)
+	}
+}
+
+// TestRunnerNoBoardDoesNotPanic proves a nil Board (or empty Label) leaves
+// recording disabled without touching anything — the "board optional" half
+// of the contract.
+func TestRunnerNoBoardDoesNotPanic(t *testing.T) {
+	t.Setenv("FAKEAGENT_TEXT", "ok")
+	th := &Thread{Name: "claude", CLI: "claude"}
+	r := &Runner{Adapter: &ClaudeAdapter{BinPath: fakeBin(t)}, Thread: th, Timeout: 10 * time.Second}
+	if _, err := r.Send(context.Background(), "hi", "", nil, false); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
 }
 

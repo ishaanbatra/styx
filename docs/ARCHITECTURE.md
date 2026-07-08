@@ -545,7 +545,17 @@ it as the result text when the final event's text is empty. For plain adapters
 (agy) it treats full stdout as the result and falls back to len/4 token
 estimates until those CLIs expose structured usage. Every successful turn
 updates the thread's context meter, turn count, and timestamp in memory; callers
-persist the store after lifecycle decisions. `testdata/fakeagent` is an
+persist the store after lifecycle decisions. `Runner.Board *activity.Board` and
+`Runner.Label string` (both optional; `Label == ""` disables recording) let the
+streaming loop write every parsed event to the shared liveness board via
+`summarize(ev)` — a small switch rendering `EventInit` as "session started",
+`EventTool` as `"<tool>: <target>"` (or just the tool name if there's no
+target), `EventText` as "thinking", and `EventResult` as "finishing". This call
+sits right after the existing `OnEvent` callback in the loop but does not
+depend on it: `OnEvent` is nil on background dispatch (the conductor's async
+path), so recording liveness in the Runner rather than in callers' `OnEvent`
+handlers is what makes both sync and background dispatch observable through
+one code path. `testdata/fakeagent` is an
 executable stream-json fixture for runner and manager lifecycle tests, including
 resume argument assertions and dead-session simulation; its `FAKEAGENT_SLEEP`
 knob (seconds) sleeps once, before either protocol block emits, so tests can
@@ -585,7 +595,14 @@ exposes `exec`, `resume`, `--json`, `--sandbox`, `--model`, and `--add-dir`).
 creates the thread on first use, seeds fresh/restarted sessions with a project
 role line or last distillation, runs the turn, records real token usage and the
 routed model to the budget log under verb `thread`, maintains rolling summaries
-for plain adapters, and saves the thread store. A codex thread that predates
+for plain adapters, and saves the thread store. `Manager.Board *activity.Board`
+(nil ok) is threaded into the per-dispatch `Runner` as `Board: m.Board, Label:
+name` so every turn's events land on the shared liveness board regardless of
+whether the caller passed an `onEvent` callback. `Dispatch` stamps `start :=
+time.Now()` on entry and, immediately after `m.record(...)` and before the
+`err != nil` branch, calls `m.Board.Done(name, time.Since(start))` — one
+placement that covers both the error and success return paths, so a failed
+turn still clears the agent's "in flight" state on the board. A codex thread that predates
 native resume (rolling `Summary`, no `SessionID`) seeds that summary into its
 first resume-capable turn as a one-time transition. If a resume-capable CLI
 reports a dead session, the manager clears the session ID and retries once using

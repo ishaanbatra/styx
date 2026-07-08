@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -44,12 +45,14 @@ type Manager struct {
 	DistillModel string                                                 // model for distill turns (haiku tier)
 	Timeout      time.Duration
 	OnCompact    func(threadName string) // REPL shows "thread compacted"; may be nil
+	Board        *activity.Board         // liveness board for /watch + heartbeat; nil ok
 }
 
 // Dispatch sends one message to a thread, lazily creating it, and handles
 // the full lifecycle: seeding, crash recovery, real-usage budget recording,
 // and distill-and-restart at the context threshold.
 func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(Event)) (TurnResult, error) {
+	start := time.Now()
 	ad, ok := m.Adapters[spec.CLI]
 	if !ok {
 		return TurnResult{}, fmt.Errorf("no adapter for CLI %q", spec.CLI)
@@ -59,7 +62,7 @@ func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(
 		name = spec.CLI
 	}
 	th := m.Threads.Get(name, spec.CLI)
-	run := &Runner{Adapter: ad, Thread: th, WorkDir: m.Project.Path, Timeout: m.Timeout, OnEvent: onEvent}
+	run := &Runner{Adapter: ad, Thread: th, WorkDir: m.Project.Path, Timeout: m.Timeout, OnEvent: onEvent, Board: m.Board, Label: name}
 
 	extra := append(append([]string{}, spec.Extra...), addDirArgs(spec.ExtraRoots)...)
 	msg := m.seedMessage(th, ad, spec.Message)
@@ -77,6 +80,9 @@ func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(
 		res, err = run.Send(ctx, msg, spec.Model, extra, spec.ReadOnly)
 	}
 	m.record(ctx, spec, res, err)
+	if m.Board != nil {
+		m.Board.Done(name, time.Since(start))
+	}
 	if err != nil {
 		_ = m.Threads.Save()
 		return TurnResult{}, err
