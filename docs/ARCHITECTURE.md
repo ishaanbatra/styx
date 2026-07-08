@@ -49,7 +49,7 @@ fallback chain when a channel is over its message caps.
 
 One file per verb (`research.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
-`repl.go`, `launch.go`, `runs.go`, …).
+`learn.go`, `repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
 
 - `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose` plus
@@ -131,6 +131,22 @@ Shared pieces:
   Claude tier aliases with a cheap one-shot call, and verifies that Ollama has
   both the brain model (`qwen2.5-coder:7b` by default) and embedding model
   pulled. `--fix` pulls missing Ollama models.
+- `learn.go` — `cmdLearn(a *app, args []string) error`, the `styx learn`
+  verb surface (second-tier switch, right after `intel`). Flags:
+  `--scorecard` (renders `internal/learn.Build(rows, 30).Render()` over
+  `a.tracker.OutcomesSince` for the trailing `scorecardWindow` = 30 days, no
+  memory store touched), `--list` (renders `KindRoutingPreference` +
+  `KindUserPreference` items via `memory.Store.TopByKind`, with id/source/
+  date/confidence so entries are addressable), `--forget <id>` (hard-deletes
+  via `memory.Store.Delete` — the reversibility guarantee), and bare
+  `styx learn`/`--dry-run` which route to `runLearn`, a deliberate
+  not-implemented stub (`"styx learn digest not implemented yet — use
+  --scorecard, --list, or --forget"`) until the digest lands. `--list` and
+  `--forget` share `openGlobalMemory()`, which opens (creating if needed)
+  `~/.config/styx/state/memory/global.db` — the same global store the
+  launcher's `recallRoutingPrefs` reads for guidance injection. Unknown
+  flags and a missing/non-numeric `--forget` id error immediately, naming
+  the bad flag/id.
 - `repl.go` — the conversational frontend and session core, now reached via
   `styx repl` rather than bare `styx`. `cmdREPL` runs the persistent loop with
   `/status`, `/budget`, `/threads`, `/why`,
@@ -736,6 +752,14 @@ ground truth for digest citations (`scorecard:<cli>/<signal>`) and feeds both
 the learning digest (Task 5-6: ollama-backed summarization of scorecard +
 retrospectives into preference memories) and styx learn --scorecard human
 inspection.
+
+**Verb surface** (`cmd/styx/learn.go`, see above): `styx learn --scorecard`
+renders the table above with no memory store touched; `styx learn --list`
+and `styx learn --forget <id>` inspect/reverse the learned
+`routing-preference`/`user-preference` memories the digest will eventually
+write; bare `styx learn` (the digest itself — ollama-backed summarization
+into new memories) is a deliberate not-implemented stub until Task 6 lands
+it. Manual only, by design: no daemon runs the digest automatically.
 
 ## Audit (internal/audit)
 
