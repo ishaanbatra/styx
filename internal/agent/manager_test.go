@@ -48,12 +48,13 @@ func newManagerFixture(t *testing.T, window int) *managerFixture {
 
 	return &managerFixture{
 		m: &Manager{
-			Project:  config.Project{Name: "testproj", Path: dir},
-			Threads:  ts,
-			Adapters: map[string]Adapter{"claude": &ClaudeAdapter{BinPath: fakeBin(t), Window: window}},
-			Budget:   bud,
-			Mem:      mem,
-			Emb:      fixedEmbedder{},
+			Project:   config.Project{Name: "testproj", Path: dir},
+			ProjectID: "proj-test",
+			Threads:   ts,
+			Adapters:  map[string]Adapter{"claude": &ClaudeAdapter{BinPath: fakeBin(t), Window: window}},
+			Budget:    bud,
+			Mem:       mem,
+			Emb:       fixedEmbedder{},
 			Summarize: func(_ context.Context, text string) (string, error) {
 				return "summary: " + text[:min13(20, len(text))], nil
 			},
@@ -118,8 +119,10 @@ func TestDispatchMarksBoardDone(t *testing.T) {
 	}
 
 	snap := f.m.Board.Snapshot()
-	if len(snap) != 1 || snap[0].Label != "claude" {
-		t.Fatalf("board not populated: %+v", snap)
+	// Board keys are project-namespaced (BoardLabel) so a shared conductor/REPL
+	// board never cross-attributes two projects' like-named threads.
+	if len(snap) != 1 || snap[0].Label != BoardLabel("proj-test", "claude") {
+		t.Fatalf("board not populated with project-namespaced label: %+v", snap)
 	}
 	if !snap[0].Done {
 		t.Fatalf("agent not marked done: %+v", snap[0])

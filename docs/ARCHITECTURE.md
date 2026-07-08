@@ -626,10 +626,15 @@ role line or last distillation, runs the turn, records real token usage and the
 routed model to the budget log under verb `thread`, maintains rolling summaries
 for plain adapters, and saves the thread store. `Manager.Board *activity.Board`
 (nil ok) is threaded into the per-dispatch `Runner` as `Board: m.Board, Label:
-name` so every turn's events land on the shared liveness board regardless of
-whether the caller passed an `onEvent` callback. `Dispatch` stamps `start :=
+BoardLabel(m.ProjectID, name)` so every turn's events land on the shared
+liveness board regardless of whether the caller passed an `onEvent` callback.
+`BoardLabel(projectID, thread)` (exported) namespaces the board key as
+`"<projectID>/<thread>"` so the single board a conductor server or REPL session
+shares across every bound project never cross-attributes two projects' like-named
+threads (e.g. both running a `codex` task); renderers strip the `"<projectID>/"`
+prefix for display (`activity.Render`). `Dispatch` stamps `start :=
 time.Now()` on entry and, immediately after `m.record(...)` and before the
-`err != nil` branch, calls `m.Board.Done(name, time.Since(start))` — one
+`err != nil` branch, calls `m.Board.Done(label, time.Since(start))` — one
 placement that covers both the error and success return paths, so a failed
 turn still clears the agent's "in flight" state on the board. A codex thread that predates
 native resume (rolling `Summary`, no `SessionID`) seeds that summary into its
@@ -1486,8 +1491,11 @@ REPL loop.
   tasks exist) AND the result is a `map[string]any` — sets `m["bg"]` to that
   status line before returning. `StatusLine`'s running-task entries are
   enriched (Task 8) with the task's last board action: when `reg.board` is set
-  (nil-safe), it matches `board.Snapshot()` state by `Label == Spec.Thread` and
-  appends `— <last>` so the piggyback line carries what each agent is *doing*,
+  (nil-safe), it matches `board.Snapshot()` state by the project-qualified key
+  `agent.BoardLabel(Spec.ProjectID, Spec.Thread)` (NOT the bare thread — the
+  board is shared across projects, so matching on thread alone would
+  cross-attribute two projects' like-named tasks) and appends `— <last>` so the
+  piggyback line carries what each agent is *doing*,
   not just its elapsed clock. Errors pass straight through untouched
   (never decorated); non-map results (e.g. the raw `shipgate.Result` token
   relay from a denied `risk: ship`/`pipeline_run` gate) also pass through
@@ -1618,7 +1626,11 @@ a per-agent ring buffer capped at `recentCap` (20) entries so the ollama
 watcher's prompt stays small. `Done(label, elapsed)` marks an agent finished
 with its total elapsed time. `Snapshot()` returns an `[]AgentState` (`Label`,
 `Last`, `LastAt`, `Done`, `Elapsed`, `Recent`) in first-seen order; `Recent
-(label)` returns just that agent's ring buffer. `SetWatcherNote`/
+(label)` returns just that agent's ring buffer. Labels are opaque keys: the
+`agent.Manager` writes project-namespaced ones (`agent.BoardLabel` →
+`"<projectID>/<thread>"`) so the single board shared across projects never
+collides; `activity.Render` strips the `"<projectID>/"` prefix (via
+`displayLabel`) so `/watch` and the live renderer show the bare thread name. `SetWatcherNote`/
 `WatcherNote` hold the ollama watcher's latest health read as a single
 string. **Wiring (Task 8):** both the REPL session and the conductor own one
 `Board`, injected into every `agent.Manager` (`Manager.Board`) so every turn

@@ -59,8 +59,14 @@ func bindTestProject(t *testing.T, name string, bud *budget.Tracker) *boundProje
 		mem:  mem,
 		mgr: &agent.Manager{
 			Project: p, ProjectID: name, Threads: threads,
-			Adapters: map[string]agent.Adapter{"claude": &agent.ClaudeAdapter{BinPath: fake}},
-			Budget:   bud, Mem: mem, Emb: replEmbedder{},
+			// Two claude-protocol adapters under distinct thread names lets a
+			// fan-out test drive concurrent dispatches without needing the codex
+			// wire protocol (the shared fakeagent can only speak one at a time).
+			Adapters: map[string]agent.Adapter{
+				"claude":   &agent.ClaudeAdapter{BinPath: fake},
+				"reviewer": &agent.ClaudeAdapter{BinPath: fake},
+			},
+			Budget: bud, Mem: mem, Emb: replEmbedder{},
 			ThresholdPct: 70, DistillModel: "haiku", Timeout: 10 * time.Second,
 		},
 		closers: []func() error{mem.Close},
@@ -109,6 +115,9 @@ func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *b
 		out:   out,
 		board: activity.NewBoard(),
 	}
+	// Mirror production bind(): the Manager feeds the session board (nil here
+	// otherwise, since bindTestProject runs before s exists).
+	bp.mgr.Board = s.board
 	return s, out
 }
 
@@ -321,6 +330,47 @@ func TestWatchCommandEmptyBoard(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "no agent activity yet") {
 		t.Errorf("/watch on empty board should nudge:\n%s", out.String())
+	}
+}
+
+// TestParallelDispatchQuietFlushesLabelledResults drives the quiet parallel
+// fan-out path (len(ds) > 1 && s.board != nil): two agents run concurrently
+// under the inline LiveRenderer, their streaming suppressed, and each result is
+// flushed labelled after the board stops. Run with -race to exercise the
+// concurrent board-write (per-agent) / renderer-read path the single-dispatch
+// tests never reach.
+func TestParallelDispatchQuietFlushesLabelledResults(t *testing.T) {
+	t.Setenv("FAKEAGENT_TEXT", "fan-out result")
+	b := &scriptedBrain{}
+	s, out := newTestSession(t, b, "")
+
+	ds := []brain.Dispatch{
+		{Thread: "claude", Model: "sonnet", Message: "half A", Rationale: "impl A"},
+		{Thread: "reviewer", Model: "sonnet", Message: "half B", Rationale: "impl B"},
+	}
+	if err := s.runDispatches(context.Background(), "do both halves", ds); err != nil {
+		t.Fatalf("runDispatches: %v", err)
+	}
+
+	got := out.String()
+	// Each agent's final text is flushed under its own thread label after the
+	// live board stops.
+	if !strings.Contains(got, "◆ claude ›") || !strings.Contains(got, "◆ reviewer ›") {
+		t.Errorf("missing per-thread result labels:\n%s", got)
+	}
+	if strings.Count(got, "fan-out result") != 2 {
+		t.Errorf("want both agents' result text flushed, got:\n%s", got)
+	}
+
+	// The board captured both agents' activity, keyed by project-namespaced
+	// labels (proving the fan-out fed the shared board without collision).
+	snap := s.board.Snapshot()
+	labels := map[string]bool{}
+	for _, st := range snap {
+		labels[st.Label] = true
+	}
+	if !labels[agent.BoardLabel("testproj", "claude")] || !labels[agent.BoardLabel("testproj", "reviewer")] {
+		t.Errorf("board did not capture both agents: %+v", snap)
 	}
 }
 

@@ -278,6 +278,12 @@ func (s *replSession) runDispatches(ctx context.Context, utterance string, ds []
 		}(i, d, model)
 	}
 	if quiet {
+		// The LiveRenderer writes s.out directly, bypassing outMu. That is safe:
+		// during a quiet span it is intentionally the SOLE terminal writer (the
+		// dispatches run with onEvent=nil, so nothing streams), and OS-level
+		// stdout writes are atomic. The one exception is a rare Manager.OnCompact
+		// line, which may visually interleave with the live board but cannot
+		// corrupt state — see the report's deliverable-5 note.
 		lr := activity.NewLiveRenderer(s.out, s.board, s.watchStall())
 		lr.Start()
 		wg.Wait()

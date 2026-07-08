@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/activity"
+	"github.com/ishaanbatra/styx/internal/agent"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/pipeline"
 )
@@ -262,8 +263,13 @@ func (r *taskRegistry) StatusLine() string {
 		case taskRunning:
 			line := fmt.Sprintf("%s running (%s, %s)", t.ID, t.Spec.CLI, elapsedShort(time.Since(t.Started)))
 			if r.board != nil {
+				// Match the project-qualified board key, not the bare thread:
+				// the board is shared across every project, so two projects each
+				// running a "codex" task would otherwise cross-attribute (the
+				// Manager keys entries as agent.BoardLabel(projectID, thread)).
+				key := agent.BoardLabel(t.Spec.ProjectID, t.Spec.Thread)
 				for _, st := range r.board.Snapshot() {
-					if st.Label == t.Spec.Thread && st.Last != "" {
+					if st.Label == key && st.Last != "" {
 						line += " — " + st.Last
 						break
 					}

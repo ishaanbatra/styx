@@ -48,6 +48,15 @@ type Manager struct {
 	Board        *activity.Board         // liveness board for /watch + heartbeat; nil ok
 }
 
+// BoardLabel namespaces an activity-board key by project so two projects each
+// running a like-named thread (e.g. both "codex") never collide on the single
+// board a conductor server or REPL session shares across every bound project.
+// Format: "<projectID>/<thread>"; renderers strip the "<projectID>/" prefix for
+// display (see internal/activity.Render).
+func BoardLabel(projectID, thread string) string {
+	return projectID + "/" + thread
+}
+
 // Dispatch sends one message to a thread, lazily creating it, and handles
 // the full lifecycle: seeding, crash recovery, real-usage budget recording,
 // and distill-and-restart at the context threshold.
@@ -61,8 +70,9 @@ func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(
 	if name == "" {
 		name = spec.CLI
 	}
+	label := BoardLabel(m.ProjectID, name)
 	th := m.Threads.Get(name, spec.CLI)
-	run := &Runner{Adapter: ad, Thread: th, WorkDir: m.Project.Path, Timeout: m.Timeout, OnEvent: onEvent, Board: m.Board, Label: name}
+	run := &Runner{Adapter: ad, Thread: th, WorkDir: m.Project.Path, Timeout: m.Timeout, OnEvent: onEvent, Board: m.Board, Label: label}
 
 	extra := append(append([]string{}, spec.Extra...), addDirArgs(spec.ExtraRoots)...)
 	msg := m.seedMessage(th, ad, spec.Message)
@@ -81,7 +91,7 @@ func (m *Manager) Dispatch(ctx context.Context, spec DispatchSpec, onEvent func(
 	}
 	m.record(ctx, spec, res, err)
 	if m.Board != nil {
-		m.Board.Done(name, time.Since(start))
+		m.Board.Done(label, time.Since(start))
 	}
 	if err != nil {
 		_ = m.Threads.Save()
