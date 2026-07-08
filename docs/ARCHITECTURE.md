@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-08
+last_verified: 2026-07-09
 ---
 
 # Styx Architecture
@@ -1590,9 +1590,24 @@ with its total elapsed time. `Snapshot()` returns an `[]AgentState` (`Label`,
 `Last`, `LastAt`, `Done`, `Elapsed`, `Recent`) in first-seen order; `Recent
 (label)` returns just that agent's ring buffer. `SetWatcherNote`/
 `WatcherNote` hold the ollama watcher's latest health read as a single
-string. This task only lands the board itself — stall detection, the ollama
-watcher, and the disk mirror are later tasks in the same plan
-(`docs/superpowers/plans/`).
+string. 
+
+**Ollama watcher** (`Watcher`): a best-effort background goroutine that
+periodically feeds cross-agent activity to local ollama `/api/chat` and
+writes health observations back to the board via `SetWatcherNote`.
+`Watcher{BaseURL, Model, Board, Interval}` configures the endpoint, chat
+model, target board, and poll cadence (0 defaults to 15s). `Run(ctx)` fires
+a goroutine that polls until context cancellation; poll errors are
+deliberately swallowed — a down ollama must not spam or crash the session.
+`pollOnce(ctx)` runs one watch cycle: it snapshots live (non-`Done`) agents,
+builds a structured prompt listing each agent's recent activity lines,
+sends it to ollama with a system prompt tuned for agent-health assessment,
+and stores the parsed response on success. On failure (unreachable ollama,
+parse error, etc.) it returns the error and leaves the existing note
+untouched — callers can log the error for debugging but the session
+continues unaffected. This graceful degradation is tested via `httptest`
+mocks for ollama success and failure paths. Stall detection, disk mirror,
+and the TUI renderer are later tasks in the same plan (`docs/superpowers/plans/`).
 
 ## Progress (internal/progress)
 
