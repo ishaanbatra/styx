@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/agent"
 	"github.com/ishaanbatra/styx/internal/audit"
 	"github.com/ishaanbatra/styx/internal/brain"
@@ -104,8 +105,9 @@ func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *b
 		pipelines: map[string]func(context.Context, string) error{
 			"research": func(context.Context, string) error { out.WriteString("[pipeline research ran]\n"); return nil },
 		},
-		in:  bufio.NewReader(strings.NewReader(input)),
-		out: out,
+		in:    bufio.NewReader(strings.NewReader(input)),
+		out:   out,
+		board: activity.NewBoard(),
 	}
 	return s, out
 }
@@ -287,6 +289,41 @@ func TestAuditTrail(t *testing.T) {
 	}
 }
 
+// TestWatchCommandRendersBoard proves /watch renders the session board's live
+// agent state (and, when set, the watcher note) through s.println.
+func TestWatchCommandRendersBoard(t *testing.T) {
+	b := &scriptedBrain{}
+	s, out := newTestSession(t, b, "")
+	s.board.Record("claude", "Bash: go test ./...")
+	s.board.SetWatcherNote("both agents look healthy")
+	if quit := s.slash("/watch"); quit {
+		t.Fatal("/watch should not quit")
+	}
+	got := out.String()
+	if !strings.Contains(got, "claude") {
+		t.Errorf("/watch did not render agent label:\n%s", got)
+	}
+	if !strings.Contains(got, "Bash: go test") {
+		t.Errorf("/watch did not render last action:\n%s", got)
+	}
+	if !strings.Contains(got, "both agents look healthy") {
+		t.Errorf("/watch did not render watcher note:\n%s", got)
+	}
+}
+
+// TestWatchCommandEmptyBoard proves /watch on a fresh session nudges the user
+// rather than printing nothing.
+func TestWatchCommandEmptyBoard(t *testing.T) {
+	b := &scriptedBrain{}
+	s, out := newTestSession(t, b, "")
+	if quit := s.slash("/watch"); quit {
+		t.Fatal("/watch should not quit")
+	}
+	if !strings.Contains(out.String(), "no agent activity yet") {
+		t.Errorf("/watch on empty board should nudge:\n%s", out.String())
+	}
+}
+
 func TestDispatchTargetsNamedRepoWithExtraRoots(t *testing.T) {
 	cfg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfg)
@@ -318,7 +355,7 @@ func TestDispatchTargetsNamedRepoWithExtraRoots(t *testing.T) {
 		Thread: "claude", Message: "trace upload",
 		Project: "ai-ta-teacher-ui", ExtraRoots: []string{"ai-ta-backend"},
 	}
-	if err := s.runOneDispatch(context.Background(), d, "opus"); err != nil {
+	if _, err := s.runOneDispatch(context.Background(), d, "opus", false); err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
 	// The teacher-ui thread ran; backend's did not.
@@ -345,9 +382,9 @@ func TestDispatchUnknownTargetSurfacesError(t *testing.T) {
 		tiers: map[string]string{"opus": "opus"},
 		in:    bufio.NewReader(strings.NewReader("")), out: &bytes.Buffer{},
 	}
-	err := s.runOneDispatch(context.Background(), brain.Dispatch{
+	_, err := s.runOneDispatch(context.Background(), brain.Dispatch{
 		Thread: "claude", Message: "x", Project: "nope-not-registered",
-	}, "opus")
+	}, "opus", false)
 	if err == nil || !strings.Contains(err.Error(), "unknown project") {
 		t.Fatalf("want unknown-project error, got %v", err)
 	}
@@ -580,7 +617,7 @@ func TestTwoRepoScriptedSession(t *testing.T) {
 		in:    bufio.NewReader(strings.NewReader("")), out: out,
 	}
 	d := brain.Dispatch{Thread: "claude", Message: "trace upload", Project: "teacher", ExtraRoots: []string{"backend"}}
-	if err := s.runOneDispatch(context.Background(), d, "opus"); err != nil {
+	if _, err := s.runOneDispatch(context.Background(), d, "opus", false); err != nil {
 		t.Fatal(err)
 	}
 	log, _ := os.ReadFile(argsLog)

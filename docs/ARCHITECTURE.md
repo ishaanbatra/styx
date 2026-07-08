@@ -149,7 +149,7 @@ Shared pieces:
   the bad flag/id.
 - `repl.go` — the conversational frontend and session core, now reached via
   `styx repl` rather than bare `styx`. `cmdREPL` runs the persistent loop with
-  `/status`, `/budget`, `/threads`, `/why`,
+  `/status`, `/budget`, `/threads`, `/watch`, `/why`,
   `/audit`, `/repos`, `/focus`, and `/quit`; `cmdBrainTurn` runs a single utterance and exits. Each turn
   recalls project/global memory, asks the local brain for an action, then
   replies, dispatches to persistent agent threads, runs a wired pipeline,
@@ -160,6 +160,22 @@ Shared pieces:
   session also opens a per-project audit log and `/audit` tails the last 20
   records. Session cleanup stores a best-effort distillation back to project
   memory and closes open stores/logs.
+  Dispatch observability (Task 8): the session holds a `board *activity.Board`
+  wired into every bound `Manager` (`Board: s.board`) so every agent turn —
+  sync or background — records liveness. `/watch` renders
+  `activity.Render(board.Snapshot(), board.WatcherNote(), watchStall(), now)`.
+  On construction the session starts an `activity.Watcher` goroutine (off a
+  session-lifetime `ctx`/`cancel`, cancelled in cleanup) gated on
+  `routing.Watch.OllamaEnabled`, summarizing cross-agent liveness into the
+  board note. `runDispatches` streams a single dispatch inline as before, but
+  the parallel fan-out (>1 dispatch, board present) runs "quiet" — `printEvent`
+  suppressed — under an inline `activity.LiveRenderer` so a TTY's in-place
+  repaint never collides with streamed text; each agent's final `res.Text` is
+  printed after `LiveRenderer.Stop()`. `runOneDispatch` gained a `quiet` param
+  and returns that final text (empty when streaming inline). Watch config
+  helpers (`watchModel`/`watchInterval`/`watchStall`) read pre-extracted
+  routing fields with defaults so test sessions (no routing) fall back to
+  `activity.DefaultStall`/15s.
 - `mcp.go` — MCP tool handlers, JSON schemas, tool assembly, and the `styx mcp`
   command entry point. Defines `routeArgs` (Task, Verb, Signals, Project),
   `routeResult` (Channel, Model, Effort, FallbackChain, Reasoning, Budget,
@@ -1226,17 +1242,27 @@ REPL loop.
 
 - `conductorDeps` (`a *app`, `gate *shipgate.Gate`, `emb memory.Embedder`,
   `reg *taskRegistry` — the background dispatch registry, nil-safe on every
-  read path — a mutex-guarded `managers map[string]*managed` cache keyed by
-  project ID, and a mutex-guarded `gmem *memory.Store` — lazy handle on the
+  read path — `board *activity.Board` — one shared liveness board fed by every
+  managed `Manager` (`Board: d.board`), so sync and background dispatches alike
+  record activity — a mutex-guarded `managers map[string]*managed` cache keyed
+  by project ID, and a mutex-guarded `gmem *memory.Store` — lazy handle on the
   shared `global.db`, opened on first use via `globalMem()` and cached for
   the life of the process) is built once per `styx mcp` invocation via
   `newConductorDeps(a, rootCtx)`. The `rootCtx` parameter is `cmdMCP`'s
   cancellable root context (see "MCP server" above); it flows straight into
-  `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks)` so every
-  background task this server ever spawns is rooted on the server's own
-  lifetime, not any single tool call's. `conductorTools(d)` returns six
-  tools: `dispatch`, `thread_status`, `memory_save`, `pipeline_run`,
-  `rate_dispatch`, and `collect`.
+  `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks, board)` so
+  every background task this server ever spawns is rooted on the server's own
+  lifetime, not any single tool call's, and the registry can read each running
+  task's last board action for its piggyback line. `newConductorDeps` also
+  starts an `activity.Watcher` goroutine off `rootCtx` gated on
+  `routing.Watch.OllamaEnabled` (dies with the server; best-effort).
+  `conductorTools(d)` returns six tools: `dispatch`, `thread_status`,
+  `memory_save`, `pipeline_run`, `rate_dispatch`, and `collect`. (Deviation
+  from the Task 8 brief, which put the board on the per-project `managed`
+  struct: the board must exist at `newConductorDeps` time to thread into the
+  registry, which is created before any `managed` — so it lives on
+  `conductorDeps` and is shared into every Manager, mirroring how the REPL
+  session owns one board across bound projects.)
 - `conductorDeps.managerFor(alias)` lazily binds a project exactly the way
   `replSession.bind` does (`cmd/styx/repl.go`): opens `<memDir>/<projectID>.db`
   via `memory.Open`, loads `agent.LoadThreads(projectID)`, wires the
@@ -1458,7 +1484,11 @@ REPL loop.
   every conductor tool's `Handler`, runs the inner handler unchanged, and on
   success — only when `reg.StatusLine()` is non-empty (live or unclaimed
   tasks exist) AND the result is a `map[string]any` — sets `m["bg"]` to that
-  status line before returning. Errors pass straight through untouched
+  status line before returning. `StatusLine`'s running-task entries are
+  enriched (Task 8) with the task's last board action: when `reg.board` is set
+  (nil-safe), it matches `board.Snapshot()` state by `Label == Spec.Thread` and
+  appends `— <last>` so the piggyback line carries what each agent is *doing*,
+  not just its elapsed clock. Errors pass straight through untouched
   (never decorated); non-map results (e.g. the raw `shipgate.Result` token
   relay from a denied `risk: ship`/`pipeline_run` gate) also pass through
   untouched, since there's no map to add a key to. An idle registry
@@ -1590,7 +1620,11 @@ with its total elapsed time. `Snapshot()` returns an `[]AgentState` (`Label`,
 `Last`, `LastAt`, `Done`, `Elapsed`, `Recent`) in first-seen order; `Recent
 (label)` returns just that agent's ring buffer. `SetWatcherNote`/
 `WatcherNote` hold the ollama watcher's latest health read as a single
-string. 
+string. **Wiring (Task 8):** both the REPL session and the conductor own one
+`Board`, injected into every `agent.Manager` (`Manager.Board`) so every turn
+records liveness; the REPL exposes it via `/watch` and an inline parallel-
+dispatch heartbeat, the conductor via the piggyback bg line and its own
+watcher goroutine (see the `repl.go` and "Conductor MCP tools" sections).
 
 **Ollama watcher** (`Watcher`): a best-effort background goroutine that
 periodically feeds cross-agent activity to local ollama `/api/chat` and

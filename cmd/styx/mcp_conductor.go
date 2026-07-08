@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/agent"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
@@ -40,10 +41,11 @@ type managed struct {
 
 // conductorDeps carries shared state for the conductor tool handlers.
 type conductorDeps struct {
-	a    *app
-	gate *shipgate.Gate
-	emb  memory.Embedder
-	reg  *taskRegistry // background dispatch registry (nil-safe on read paths)
+	a     *app
+	gate  *shipgate.Gate
+	emb   memory.Embedder
+	reg   *taskRegistry   // background dispatch registry (nil-safe on read paths)
+	board *activity.Board // shared session liveness board (fed by every Manager)
 
 	mu       sync.Mutex
 	managers map[string]*managed
@@ -55,13 +57,29 @@ type conductorDeps struct {
 // routing.toml's [conductor] section, task registry rooted on the server's
 // context (background work dies with the server — no daemons).
 func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
-	return &conductorDeps{
+	board := activity.NewBoard()
+	d := &conductorDeps{
 		a:        a,
 		gate:     shipgate.New(shipgate.Mode(a.routing.Conductor.ShipGate)),
 		emb:      memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel),
-		reg:      newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks),
+		board:    board,
+		reg:      newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks, board),
 		managers: map[string]*managed{},
 	}
+	// The ollama watcher summarizes cross-agent liveness into the board note,
+	// which the piggyback bg line and thread_status surface. Off the server's
+	// root context (dies with the server — no daemons); best-effort like the
+	// REPL's, gated on Task 5's ollama_enabled upgrade flag.
+	if a.routing.Watch.OllamaEnabled {
+		w := &activity.Watcher{
+			BaseURL:  "http://localhost:11434",
+			Model:    a.routing.Brain.Model,
+			Board:    board,
+			Interval: a.routing.Watch.Interval(),
+		}
+		go w.Run(rootCtx)
+	}
+	return d
 }
 
 // capPctFor returns the routing.toml cap_pct for a channel (0 = no cap).
@@ -265,6 +283,7 @@ func (d *conductorDeps) managerForProject(p project.Project) (*managed, error) {
 		ThresholdPct: d.a.routing.Brain.ContextThresholdPct,
 		DistillModel: d.a.routing.Tiers["haiku"],
 		Timeout:      timeout,
+		Board:        d.board,
 	}}
 	d.managers[p.ID] = m
 	return m, nil
