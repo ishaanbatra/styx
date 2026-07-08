@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-07
+last_verified: 2026-07-08
 ---
 
 # Styx Architecture
@@ -509,16 +509,24 @@ continuity is maintained by styx summaries (agy exposes `--continue`/
 so headless resume stays impossible).
 
 The package defines the shared event shape and parses both Claude's and Codex's
-stream protocols. For claude: `system/init` captures session IDs, assistant
-text chunks stream intermediate output, and final `result` events carry the
-answer plus real usage (normal input, cache creation input, and cache-read
-input tokens). For codex (`ParseCodexEvent`): `thread.started` captures the
-resumable `thread_id`, `item.completed` `agent_message` items stream assistant
-text, `turn.completed` carries exact usage (`input_tokens` +
+stream protocols. Events carry a `Type` (`EventInit`/`EventText`/`EventTool`/
+`EventResult`) plus a `Tool` field set only for `EventTool`. For claude:
+`system/init` captures session IDs, assistant text chunks stream intermediate
+output, `assistant` messages whose content is a `tool_use` block surface as
+`EventTool` (`Tool` = the tool name, e.g. `Bash`/`Read`; `Text` = a best-effort
+target pulled from the tool's `input` — command first line, file path, path,
+URL, or search pattern, via `claudeToolTarget`/`firstLine`), and final `result`
+events carry the answer plus real usage (normal input, cache creation input,
+and cache-read input tokens). For codex (`ParseCodexEvent`): `thread.started`
+captures the resumable `thread_id`, `item.completed` `agent_message` items
+stream assistant text, any other non-empty `item.completed` type (e.g.
+`command_execution`, `file_change`, `mcp_tool_call`) surfaces as `EventTool`
+(`Tool` = the item type; `Text` = the item's `command` field, first line only,
+when present), `turn.completed` carries exact usage (`input_tokens` +
 `cached_input_tokens`, and `output_tokens`) but no text, and `turn.failed`
 surfaces an error result. Context size is metered against each adapter's real
-context window rather than rough character estimates. Hook, tool-use-only,
-command-execution, and malformed stream lines are ignored.
+context window rather than rough character estimates. Hook and malformed
+stream lines are still ignored.
 
 Each project has a JSON thread store under
 `~/.config/styx/state/threads/<id>.json`, keyed by the stable project ID rather
