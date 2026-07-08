@@ -337,3 +337,38 @@ func TestBackgroundDispatchRoundtrip(t *testing.T) {
 		t.Fatalf("no live/unclaimed tasks => no bg line, got %v", bg)
 	}
 }
+
+// TestLearnScorecardSeesDispatchOutcomes closes the loop hermetically: a
+// dispatch through the real `styx mcp` subprocess writes an outcome row to
+// the isolated usage.db, and `styx learn --scorecard` (a separate process,
+// same isolated config) aggregates it. No ollama involved (--scorecard is
+// the deterministic layer).
+func TestLearnScorecardSeesDispatchOutcomes(t *testing.T) {
+	c, proj := startServer(t)
+	if _, isErr := c.toolCall("dispatch", map[string]any{
+		"cli": "claude", "message": "reply ok", "risk": "read",
+	}); isErr {
+		t.Fatal("dispatch errored")
+	}
+
+	// Reconstruct the server's isolated env: proj is <home>/demo-proj.
+	home := filepath.Dir(proj)
+	repoRoot, _ := filepath.Abs("..")
+	cmd := exec.Command(filepath.Join(repoRoot, "bin", "styx"), "learn", "--scorecard")
+	cmd.Dir = proj
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
+		"PATH="+filepath.Join(home, "fakebin")+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("styx learn --scorecard: %v\n%s", err, out)
+	}
+	// "reply ok" is ≤50 chars => the trivial signal; the row must aggregate.
+	for _, want := range []string{"claude", "1/1 clean"} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("scorecard must show the dispatch outcome (want %q):\n%s", want, out)
+		}
+	}
+}

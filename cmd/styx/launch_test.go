@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/memory"
+	"github.com/ishaanbatra/styx/internal/paths"
 )
 
 // fakeClaudeOnPath drops a stub `claude` script that records its argv to
@@ -244,17 +247,69 @@ func TestEnsureInteractiveTTY(t *testing.T) {
 // pass as `project` on dispatch/thread_status/memory_save) and still folds in
 // the extra-repo note and learned routing preferences when present.
 func TestConductorGuidanceNamesFocusProject(t *testing.T) {
-	got := conductorGuidance("BASE", "styx", "", "")
+	got := conductorGuidance("BASE", "styx", "", "", "")
 	if !strings.Contains(got, "`styx`") || !strings.Contains(got, "project") {
 		t.Fatalf("guidance must name the focus project alias, got:\n%s", got)
 	}
 	if !strings.HasPrefix(got, "BASE") {
 		t.Fatal("base guidance must come first")
 	}
-	withExtras := conductorGuidance("BASE", "styx", "- ai-ta: /x (extra)\n", "- prefer codex\n")
+	withExtras := conductorGuidance("BASE", "styx", "- ai-ta: /x (extra)\n", "- prefer codex\n", "")
 	for _, want := range []string{"Bound repos beyond styx", "Routing preferences", "prefer codex"} {
 		if !strings.Contains(withExtras, want) {
 			t.Fatalf("missing %q in:\n%s", want, withExtras)
 		}
+	}
+}
+
+// TestConductorGuidanceUserPreferencesSection proves the assembled guidance
+// carries a distinct "User preferences (learned)" section after the routing
+// preferences section, and that the section is absent entirely when there
+// are no learned user preferences to fold in.
+func TestConductorGuidanceUserPreferencesSection(t *testing.T) {
+	got := conductorGuidance("BASE", "styx", "", "- prefer codex\n", "- prefers table-driven tests\n")
+	if !strings.Contains(got, "## User preferences (learned)") ||
+		!strings.Contains(got, "prefers table-driven tests") {
+		t.Fatalf("guidance must carry the user-preferences section:\n%s", got)
+	}
+	// Section order: routing prefs before user prefs.
+	if strings.Index(got, "Routing preferences") > strings.Index(got, "User preferences") {
+		t.Fatalf("routing prefs must precede user prefs:\n%s", got)
+	}
+	// Absent prefs => absent section.
+	none := conductorGuidance("BASE", "styx", "", "", "")
+	if strings.Contains(none, "User preferences") {
+		t.Fatal("empty userPrefs must not emit the section")
+	}
+}
+
+// TestRecallPrefsViaTopByKind proves recallRoutingPrefs/recallUserPrefs use
+// kind-exact TopByKind (no embedder, no ollama call) so launch-time guidance
+// injection keeps working with ollama down.
+func TestRecallPrefsViaTopByKind(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	memDir, err := paths.MemoryDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := paths.EnsureDir(memDir); err != nil {
+		t.Fatal(err)
+	}
+	glob, err := memory.Open(filepath.Join(memDir, "global.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	glob.Add(ctx, memory.Item{Kind: memory.KindRoutingPreference, Text: "codex implements", Confidence: 0.9, Embedding: []float32{1}})
+	glob.Add(ctx, memory.Item{Kind: memory.KindUserPreference, Text: "short summaries", Confidence: 0.9, Embedding: []float32{1}})
+	glob.Close()
+
+	// No embedder, no ollama: kind-exact recall still works.
+	if got := recallRoutingPrefs(); !strings.Contains(got, "codex implements") || strings.Contains(got, "short summaries") {
+		t.Fatalf("routing prefs must be kind-exact, got %q", got)
+	}
+	if got := recallUserPrefs(); !strings.Contains(got, "short summaries") || strings.Contains(got, "codex implements") {
+		t.Fatalf("user prefs must be kind-exact, got %q", got)
 	}
 }

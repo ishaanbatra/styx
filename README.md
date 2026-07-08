@@ -101,6 +101,7 @@ restarting the session.
 | `critique <text>` | Devil's-advocate critique (Codex) |
 | `check` | Dashboard: git status, latest briefs/plans |
 | `budget` | Per-channel usage summary |
+| `learn [--scorecard\|--dry-run\|--list\|--forget <id>]` | Digest dispatch outcomes + session retrospectives into learned routing/user preferences — plain-text memories with provenance, injected into conductor guidance; `--list` inspects, `--forget` reverses |
 | `doctor [--fix]` | Preflight CLIs, capability-card drift, callable Claude tiers, and required Ollama models |
 | `route --explain <verb> "..."` | Why did styx pick that channel? |
 | `project ls/add/rm/rename/scan` | Manage project registry |

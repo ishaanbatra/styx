@@ -49,7 +49,7 @@ fallback chain when a channel is over its message caps.
 
 One file per verb (`research.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
-`repl.go`, `launch.go`, `runs.go`, …).
+`learn.go`, `repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
 
 - `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose` plus
@@ -131,6 +131,22 @@ Shared pieces:
   Claude tier aliases with a cheap one-shot call, and verifies that Ollama has
   both the brain model (`qwen2.5-coder:7b` by default) and embedding model
   pulled. `--fix` pulls missing Ollama models.
+- `learn.go` — `cmdLearn(a *app, args []string) error`, the `styx learn`
+  verb surface (second-tier switch, right after `intel`). Flags:
+  `--scorecard` (renders `internal/learn.Build(rows, 30).Render()` over
+  `a.tracker.OutcomesSince` for the trailing `scorecardWindow` = 30 days, no
+  memory store touched), `--list` (renders `KindRoutingPreference` +
+  `KindUserPreference` items via `memory.Store.TopByKind`, with id/source/
+  date/confidence so entries are addressable), `--forget <id>` (hard-deletes
+  via `memory.Store.Delete` — the reversibility guarantee), and bare
+  `styx learn`/`--dry-run` which route to `runLearn`, a deliberate
+  not-implemented stub (`"styx learn digest not implemented yet — use
+  --scorecard, --list, or --forget"`) until the digest lands. `--list` and
+  `--forget` share `openGlobalMemory()`, which opens (creating if needed)
+  `~/.config/styx/state/memory/global.db` — the same global store the
+  launcher's `recallRoutingPrefs` reads for guidance injection. Unknown
+  flags and a missing/non-numeric `--forget` id error immediately, naming
+  the bad flag/id.
 - `repl.go` — the conversational frontend and session core, now reached via
   `styx repl` rather than bare `styx`. `cmdREPL` runs the persistent loop with
   `/status`, `/budget`, `/threads`, `/why`,
@@ -334,18 +350,23 @@ before dispatching. `Router.Explain` prints `floor: <tier>` (when not
 Data-driven routing guidance replacing the v0.2 brain's compiled-in preamble.
 A global guidance file is seeded at `~/.config/styx/guidance.md` on first call
 to `Load()` and is user-editable. User edits are never overwritten, but a file
-whose content exactly matches a previous seed version (the retained `seedV1`,
-`seedV2`, and `seedV3` constants — `seedV3` is the pre-async-dispatch seed,
-shipped 2026-07-07, kept verbatim from the live `Seed` at the moment background
-dispatch/collect/rate_dispatch were added) is recognized as unmodified and
-transparently upgraded to the current `Seed` on load. `Load(projectPath
-string)` returns the global guidance with an optional per-repo override
-appended from `<repo>/styx/guidance.md` if it exists. The `Seed` constant
-contains the default shipped guidance: a dispatch-by-default rule (substantive
-work — implementation, research, review, large summarization — goes through
-`dispatch`/`pipeline_run` rather than the host's built-in Agent/Task
-subagents, which burn the interactive session's Claude quota invisibly to
-styx's budget ledger; built-ins are reserved for work too small to brief), a
+whose content exactly matches a previous seed version (the retained `seedV1`
+through `seedV5` constants — `seedV3` is the pre-async-dispatch seed, shipped
+2026-07-07, kept verbatim from the live `Seed` at the moment background
+dispatch/collect/rate_dispatch were added; `seedV4` is the pre-route-gate seed,
+kept verbatim from before the "## Gated tools" section; `seedV5` is the
+route-gate-era seed, kept verbatim from before the learning-loop nudges below)
+is recognized as unmodified and transparently upgraded to the current `Seed`
+on load. `Load(projectPath string)` returns the global guidance with an
+optional per-repo override appended from `<repo>/styx/guidance.md` if it
+exists. The `Seed` constant contains the default shipped guidance: a
+dispatch-by-default rule (substantive work — implementation, research,
+review, large summarization — goes through `dispatch`/`pipeline_run` rather
+than the host's built-in Agent/Task subagents, which burn the interactive
+session's Claude quota invisibly to styx's budget ledger; built-ins are
+reserved for work too small to brief), a gated-tools section (WebSearch,
+WebFetch, Task subagents, and external-fetch Bash/MCP tools are blocked by
+route-gate design, not a bug — redirect to dispatch/pipeline_run), a
 research-task mapping (`pipeline_run research` for brief-producing research,
 `dispatch cli=claude` for repo-focused investigation, agy when very large),
 channel best purposes (codex as primary implementer for well-scoped work,
@@ -358,8 +379,13 @@ queue rather than parallelize; `risk=ship` never backgrounds; orphaned tasks
 are reported if the mcp session ends), a rating-outcomes section (call
 `rate_dispatch` with a thread/task id and one-line note on notably good or bad
 outcomes, feeding styx's learning loop), working style conventions (plan
-before dispatch, reuse threads, consult memory, check budget), and ship policy
-(confirmation token handoff).
+before dispatch, reuse threads, consult memory, check budget, and — new in
+the learning-loop task — two explicit save nudges: memory_save an explicit
+durable statement of the user's ("remember I prefer X") as kind=user-
+preference immediately, no digest needed; and memory_save a 2-line what-
+worked/what-didn't retrospective as kind=retrospective at natural session
+endpoints, which is digest fuel for `styx learn` and is never injected into
+guidance directly), and ship policy (confirmation token handoff).
 
 ## Model Sync (internal/modelsync)
 
@@ -684,25 +710,181 @@ Claude Code auto-loads project context.
 Long-term memory is stored in SQLite databases under
 `~/.config/styx/state/memory/`: `<id>.db` for per-project memory and
 `global.db` for shared cross-project memory. Each store has a `memory` table of
-typed items (`decision`, `todo`, `distillation`, `brief`, `fact`, or
-`routing-preference`) with source metadata, provenance columns (`project`,
-`scope`, `confidence`, `last_used_at`), creation time, and a float32 embedding
-packed as a little-endian blob. Old memory DBs are migrated additively on open;
+typed items (`decision`, `todo`, `distillation`, `brief`, `fact`,
+`routing-preference`, `user-preference`, or `retrospective`) with source
+metadata, provenance columns (`project`, `scope`, `confidence`, `last_used_at`),
+creation time, a `consumed_at` timestamp, and a float32 embedding packed as a
+little-endian blob. `user-preference` captures how the user likes to work
+(fed by `styx learn`); `retrospective` holds raw session notes that are
+digest fuel only — never injected into recall or prompts, they exist purely
+for a later summarization pass to consume. Old memory DBs are migrated
+additively on open (including `consumed_at`, which defaults to `0` — zero
+value = unconsumed — so pre-existing rows on upgrade read as never-consumed);
 unset confidence defaults to `1`, while one-off routing preferences enter at
 lower confidence and may carry a scope hint such as `reviews`. The store API
-supports open, close, insert, and newest-first full scans. `Recall` embeds a
-query and ranks items across one or more stores by brute-force cosine
-similarity weighted by confidence and recency (`confidence * 0.5^(age/90d)`),
-so stale or low-confidence corrections fade at personal scale. In a
-multi-project REPL session, recall spans every bound repo's store plus the
-global store, giving cross-repo recall without an explicit scope hint. `Embedder`
-abstracts text to float32 vectors; the production `OllamaEmbedder` posts to
-`/api/embed` with a 30s HTTP client timeout and caller-provided context,
-carrying `keep_alive: "30m"` on every request so the embed model isn't evicted
-between calls. Every `Embed` call site embeds a single text per user action
-(recall query, `memory_save`, distillation, brief indexing, routing-preference
+supports open, close, insert, and newest-first full scans (`Add`, `All`), plus
+learning-loop methods: `TopByKind(kind, k)` ranks same-kind items by the
+recall decay curve with similarity fixed at 1 (`confidence * 0.5^(age/90d)`),
+so the top preferences are the newest, most confident ones and drift resolves
+itself; `UnconsumedByKind(kind)` returns items with a zero `ConsumedAt`,
+oldest first, for a digest to work through in order; `MarkConsumed(ids)`
+stamps `consumed_at` on a batch (empty slice is a no-op); `Delete(id)` and
+`UpdateEvidence(id, text)` both error loudly on an unknown id (Delete backs
+`styx learn --forget`'s honesty; UpdateEvidence is the digest's dedupe path —
+a re-learned memory gets fresher text and `created_at` instead of a duplicate
+row); `MostSimilar(kind, vec)` returns the same-kind item with the highest
+cosine similarity (zero `Item`, similarity `0` when the store holds no items
+of that kind) — the seam a caller uses to decide "update existing evidence"
+vs. "add a new memory" before writing. `Recall` embeds a query and ranks
+items across one or more stores by brute-force cosine similarity weighted by
+confidence and recency (`confidence * 0.5^(age/90d)`), so stale or
+low-confidence corrections fade at personal scale. In a multi-project REPL
+session, recall spans every bound repo's store plus the global store, giving
+cross-repo recall without an explicit scope hint. `Embedder` abstracts text to
+float32 vectors; the production `OllamaEmbedder` posts to `/api/embed` with a
+30s HTTP client timeout and caller-provided context, carrying
+`keep_alive: "30m"` on every request so the embed model isn't evicted between
+calls. Every `Embed` call site embeds a single text per user action (recall
+query, `memory_save`, distillation, brief indexing, routing-preference
 correction, session-end summary) — no call site batches, so `EmbedBatch` stays
 unimplemented pending bulk-embedding intel indexing.
+
+## Learning (internal/learn)
+
+**Application**: launch-time guidance injection (`cmd/styx/launch.go`,
+documented under "Launcher" below) is the entire application mechanism for
+what this package writes. No other code path reads `routing-preference` or
+`user-preference` memories — the digest below and `styx learn` only produce
+and manage them; the conductor's system prompt is where they take effect,
+folded in as two sections (`## Routing preferences (learned)` and `##
+User preferences (learned)`) each time the conductor launches.
+
+Deterministic scorecard aggregation layer over dispatch outcomes — no LLM
+involvement, read-only on routing.toml and code. `Scorecard` groups
+`budget.Outcome` rows (seeded by real dispatch history) into `Cell` structs
+(one per cli × signal pair), computing tallies (attempts, clean rate), medians
+(duration, tokens), and rating counts. A row with N signals contributes to N
+cells; a row with no signals lands in a `"(none)"` cell. Clean = no
+classified error *and* not rated bad. The scorecard is the mechanical evidence
+ground truth for digest citations (`scorecard:<cli>/<signal>`) and feeds both
+the learning digest (Task 5-6: ollama-backed summarization of scorecard +
+retrospectives into preference memories) and styx learn --scorecard human
+inspection.
+
+**Digest client** (`internal/learn/digest.go`): The `Digester` type wraps a
+local ollama `/api/chat` endpoint and uses structured output to propose
+candidate memories from a scorecard, unconsumed retrospectives, and rating
+notes. Its chat shape (`Model`, `Stream`, `Think`, `Format`, `KeepAlive`,
+`Options`, `Messages`) closely mirrors `internal/brain`'s shape to leverage
+the same ollama tuning (30-minute keep-alive, dynamic `num_ctx` sizing based
+on system + user prompt length, temperature 0 for deterministic classification)
+and the same local brain model (default `qwen2.5-coder:7b`). Unlike the brain
+which is REPL-coupled and ships with the conductor, the digest client is
+fully self-contained and invoked on demand by `styx learn` without requiring
+a REPL or brain session. `Propose(ctx, scorecard, retros, ratingNotes)` fails
+loudly when ollama is unreachable — never returns empty silently; any upstream
+failure is surfaced wrapped with context.
+
+**Candidate schema**: `Candidate{Kind, Text, Confidence, Evidence}`. `Kind`
+is an enum (`routing-preference` or `user-preference`); `Text` is a standalone
+plain sentence for injection into future guidance; `Confidence` is a float in
+(0,1] indicating certainty; `Evidence` is exactly one citation — either
+`scorecard:<cli>/<signal>` naming a real scorecard cell or `retro:<id>` naming
+a gathered retrospective id shown to the model. The schema enforces these
+constraints at the ollama structured-output layer.
+
+**Evidence guard** (`FilterByEvidence`): Mechanical hallucination filter that
+rejects candidates before any write, dropping those with:
+- kind not in the whitelist (`routing-preference`, `user-preference`)
+- empty or whitespace-only text
+- confidence outside (0,1]
+- evidence citations that do not name a real scorecard cell (parsed as
+  `scorecard:<cli>/<signal>`, verified against `Scorecard.HasCell`)
+  or a real retrospective id (parsed as `retro:<id>`, verified against the
+  provided `[]RetroNote`)
+- evidence in any other format (neither scorecard nor retro prefix)
+
+Survivors are capped at `maxCandidates = 5` (a hallucination bound: at worst 5
+bad sentences, each still evidence-checked and printed). Drop reasons are
+human-readable, one per dropped candidate.
+
+**Verb surface** (`cmd/styx/learn.go`, see above): `styx learn --scorecard`
+renders the table above with no memory store touched; `styx learn --list`
+and `styx learn --forget <id>` inspect/reverse the learned
+`routing-preference`/`user-preference` memories the digest writes; bare
+`styx learn` (with an optional `--dry-run`) now runs the full digest —
+implemented as of Task 6. Manual only, by design: no daemon runs the digest
+automatically.
+
+**The digest pass** (`runLearnDigest` in `cmd/styx/learn.go`, called by the
+thin production wrapper `runLearn` which wires a real `memory.NewOllamaEmbedder`
+against `a.routing.Brain.EmbedModel` and a `learn.Digester` against
+`a.routing.Brain.Model`, both pointed at `http://localhost:11434` — the same
+literal every other ollama caller in `cmd/styx` uses; there is no shared
+base-URL constant/helper in this codebase). One digest pass is six steps:
+
+1. **Scorecard** — `learn.Build` over `a.tracker.OutcomesSince(now -
+   scorecardWindow)`, same as `--scorecard`.
+2. **Gather** — `store.UnconsumedByKind(KindRetrospective)` plus rated
+   dispatch notes (`Rating`+`Note` on outcome rows) from the same window.
+3. **Propose** — `dig.Propose(ctx, scorecard.Render(), retros, notes)`
+   against the local ollama brain model; an unreachable/erroring ollama
+   returns here and the whole pass aborts with a wrapped error — nothing
+   downstream runs.
+4. **Evidence guard** — `learn.FilterByEvidence` drops any candidate whose
+   citation doesn't name a real scorecard cell or gathered retrospective;
+   every drop is printed (`dropped: "<text>" — <reason>`), never silent.
+5. **Dedupe** — see below.
+6. **Write + consume** — see below.
+
+**Plan-before-write (partial-failure safety)**: after the evidence guard,
+*every* surviving candidate is embedded (`emb.Embed`) and dedupe-checked
+(`store.MostSimilar`) into an in-memory `plannedWrite` list *before any
+store write happens*. If ollama's embed call fails on any candidate midway
+through planning, `runLearnDigest` returns a wrapped error immediately —
+nothing has been written yet and no retrospective has been marked consumed,
+so a flaky/ollama-down run never leaves partial state. This is the same
+plan-then-commit discipline as `execute`'s apply step, applied to memory
+writes instead of file writes.
+
+**Dedupe**: for each planned candidate, `store.MostSimilar(ctx, candidate.Kind,
+vec)` finds the closest same-kind existing memory. Cosine similarity ≥
+`dedupeSimilarity` (`0.9`, `cmd/styx/learn.go`) means "refresh, don't
+duplicate": the plan records the existing row's id instead of a new write.
+Below threshold, the candidate becomes a new memory row.
+
+**Write phase**: runs only after planning completes successfully (and is
+skipped entirely in `--dry-run`, see below). For each planned write:
+- **Dedupe hit** (`dupeID > 0`): `store.UpdateEvidence(ctx, dupeID, text)`
+  overwrites the existing row's text with the refreshed provenance string —
+  same row id, no new memory. Narrated as `refreshed <id> [<kind>]: <text>`.
+- **New row**: `store.Add` with `Source: "styx-learn"`, `Scope: "global"`,
+  `Confidence` carried verbatim from the candidate, and the embedding vector
+  computed during planning. Narrated as `learned <id> [<kind>]: <text>`.
+
+Written/refreshed text always has the provenance suffix appended to the
+candidate's raw sentence: `<sentence> [learned-by styx-learn <YYYY-MM-DD>;
+evidence: <citation>]` — e.g. `codex handles complex specced work well
+[learned-by styx-learn 2026-07-07; evidence: scorecard:codex/complex]`. The
+date is `time.Now()` at write time; the citation is the candidate's raw
+`scorecard:<cli>/<signal>` or `retro:<id>` evidence string, preserved
+verbatim so `--list` and future digest passes can trace it back.
+
+**Consumed-marking timing**: retrospectives gathered in step 2 are marked
+consumed (`store.MarkConsumed`) only *after* every planned write in the write
+phase has succeeded — the very last step of a live (non-dry-run) pass. A
+retrospective is never marked consumed by a dry run, and never marked
+consumed if any write in the phase fails partway (the function returns the
+wrapped error before reaching `MarkConsumed`).
+
+**`--dry-run`**: stops immediately after the plan phase, before the write
+phase. Narrates each planned action without doing it — `would learn [<kind>,
+conf X.XX]: <text>` for new rows, `would refresh memory <id> [<kind>, conf
+X.XX]: <text>` for dedupe hits — followed by `dry run: nothing written,
+retrospectives left unconsumed`. Embeds and `MostSimilar` dedupe checks still
+run during planning (so a dry run still requires ollama to be reachable and
+still surfaces the same loud failure if it isn't), but the store is never
+mutated and retrospectives stay unconsumed for the next real pass.
 
 ## Audit (internal/audit)
 
@@ -855,12 +1037,28 @@ the plain cwd when that fails with `ErrNotInGitRepo` and no explicit
 target was given), loads
 `internal/guidance.Load(project.Path)` for the base system-prompt content,
 then assembles the final guidance via the pure `conductorGuidance(base,
-focusName, extraNote, prefs string) string`: it appends a "This session's
-project" section naming the focus project's registry alias (so the brain
-knows what to pass as `project` on `dispatch`/`thread_status`/`memory_save`;
-an empty `project` also resolves to this repo — see Task 4 above), then a
-note about any extra repos and `recallRoutingPrefs(a)`'s learned
-routing-preference memories when present. It resolves the running binary via
+focusName, extraNote, prefs, userPrefs string) string`: it appends a "This
+session's project" section naming the focus project's registry alias (so the
+brain knows what to pass as `project` on `dispatch`/`thread_status`/
+`memory_save`; an empty `project` also resolves to this repo — see Task 4
+above), then a note about any extra repos, then two learned-preference
+sections — `## Routing preferences (learned)` from `recallRoutingPrefs()`
+and, after it, `## User preferences (learned)` from `recallUserPrefs()` —
+each omitted entirely when empty. Both helpers call the shared
+`topLearnedPrefs(kind memory.Kind) string`, which opens `global.db` and
+renders `Store.TopByKind(ctx, kind, 5)` (confidence × recency ranking, no
+embedding involved) as a bullet list. This replaced an earlier
+embedding-based `recallRoutingPrefs(a *app)` that built an
+`OllamaEmbedder` and called `memory.Recall` with the literal query string
+"routing preference" — a similarity search that could cross-match
+`user-preference` memory text into the routing section (and vice versa) and
+depended on ollama being reachable at launch time. The kind-exact
+`TopByKind` switch fixes both: it is exact per-kind (no cross-contamination
+between the two sections) and embedder-free, so guidance injection — the
+entire application mechanism for `styx learn`'s output, see "Learning"
+above — still works with ollama down; any store-open/read failure is
+best-effort, narrated via `logStatus`, and yields `""` rather than blocking
+the launch. It resolves the running binary via
 `os.Executable()` (so the spawned Claude Code always shells back out to
 *this* styx, not a stale `PATH` copy), and calls `ClaudeHost.Launch`. Once
 Claude Code is running, it talks back to styx exclusively through the MCP
@@ -990,8 +1188,10 @@ REPL loop.
 
 - `conductorDeps` (`a *app`, `gate *shipgate.Gate`, `emb memory.Embedder`,
   `reg *taskRegistry` — the background dispatch registry, nil-safe on every
-  read path — and a mutex-guarded `managers map[string]*managed` cache keyed
-  by project ID) is built once per `styx mcp` invocation via
+  read path — a mutex-guarded `managers map[string]*managed` cache keyed by
+  project ID, and a mutex-guarded `gmem *memory.Store` — lazy handle on the
+  shared `global.db`, opened on first use via `globalMem()` and cached for
+  the life of the process) is built once per `styx mcp` invocation via
   `newConductorDeps(a, rootCtx)`. The `rootCtx` parameter is `cmdMCP`'s
   cancellable root context (see "MCP server" above); it flows straight into
   `newTaskRegistry(rootCtx, a.routing.Conductor.MaxBackgroundTasks)` so every
@@ -1137,11 +1337,19 @@ REPL loop.
   initialized to `[]string{}`, never nil, so `tasks` is likewise always a
   JSON array (`[]`, never `null`) even when nothing is outstanding.
 - `memory_save(project?, kind, text, scope?)` — validates `kind` against
-  `memory.KindFact/KindDecision/KindTodo/KindRoutingPreference` (any other
-  value errors loudly) and requires non-empty `text`, then embeds via
-  `d.emb.Embed` and writes through `managerFor(project).mem.Add` with
-  `Source: "conductor"`, `Confidence: 0.9`, and `scope` defaulting to
-  `"project"`. Returns `{saved, id}`.
+  `memory.KindFact/KindDecision/KindTodo/KindRoutingPreference` plus the two
+  learning kinds `KindUserPreference` ("user-preference") and
+  `KindRetrospective` ("retrospective") (any other value errors loudly) and
+  requires non-empty `text`, then embeds via `d.emb.Embed`. Routing forks on
+  kind: the two learning kinds describe the user/session, not one repo, so
+  they write through `d.globalMem()` — a lazy, mutex-guarded, cached handle
+  on a shared `global.db` under `paths.MemoryDir()` (opened once per
+  `conductorDeps`, no project resolution needed) — with `Project: ""` and
+  `scope` defaulting to `"global"`; the launch-time guidance injection
+  (Task 7) reads this same store. All other kinds keep writing through
+  `managerFor(project).mem.Add` with `scope` defaulting to `"project"`.
+  Every write uses `Source: "conductor"`, `Confidence: 0.9`. Returns
+  `{saved, id}`.
 - `pipeline_run(pipeline, arg?, confirm_token?)` — `pipeline` is one of
   `research|review|intel|auto`; an unknown value is rejected **before** the
   ship gate so it errors loudly regardless of gate mode. `auto` (which
@@ -1400,7 +1608,15 @@ transition to `status:"done"` with the fakeagent's text once its
 and no `bg` line once the result is claimed. This is hermetic by default: no
 Docker (a plain subprocess + fake-CLIs-on-PATH gives the same isolation for a
 single-binary CLI without the image/build overhead), no network beyond a
-possibly-absent local ollama, and no real AI-CLI calls. `TestLiveSmoke` is
+possibly-absent local ollama, and no real AI-CLI calls. `TestLearnScorecardSeesDispatchOutcomes` closes the
+learning loop across two separate processes sharing one isolated config: a
+`dispatch` call over the `styx mcp` subprocess writes an outcome row to the
+isolated `usage.db`, then a second, independently-spawned `styx learn
+--scorecard` process — with `HOME`/`XDG_CONFIG_HOME`/`PATH` reconstructed from
+`filepath.Dir(proj)` to match the server's env — reads that same db and
+renders the aggregated `claude × trivial: 1/1 clean` cell (a message ≤50
+chars tags the `trivial` signal); no ollama is involved since `--scorecard`
+is the deterministic aggregation layer. `TestLiveSmoke` is
 skipped unless `STYX_E2E_LIVE=1`, in which case it runs `styx doctor` and a
 live ollama one-shot dispatch through the real routing brain model — meant to
 be run manually and rarely, since it consumes real quota/local resources.

@@ -35,6 +35,9 @@ VERBS
   critique <text|file>      Devil's-advocate critique (Codex)
   check                     Dashboard: git status, ollama, latest briefs/plans
   budget                    Per-channel usage summary
+  learn [--scorecard|--dry-run|--list|--forget <id>]
+                            Digest dispatch outcomes + retrospectives into
+                            learned preferences (local ollama; reversible)
   doctor [--fix]            Preflight CLIs, capability cards, ollama models
   route --explain <verb> "..." Show routing decision for a hypothetical request
   project ls|add|rm|rename  Manage project registry

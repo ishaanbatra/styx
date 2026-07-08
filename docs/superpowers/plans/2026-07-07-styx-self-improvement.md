@@ -1,6 +1,6 @@
 # Styx Self-Improvement (Learning Loop) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Styx learns from three feeds — mechanical dispatch outcomes, conductor retrospectives, and explicit user preferences — via a manual `styx learn` verb that digests them (local ollama) into plain-text memories with provenance, applied only through launch-time guidance injection. Inspectable (`--list`), reversible (`--forget`), additive (never code, never routing.toml).
 
@@ -50,7 +50,7 @@
   - `func (s *Store) UpdateEvidence(ctx context.Context, id int64, text string) error` — rewrites text, refreshes `created_at`.
   - `func (s *Store) MostSimilar(ctx context.Context, kind Kind, vec []float32) (Item, float64, error)`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `internal/memory/store_test.go` (the file already opens stores in temp dirs — mirror `TestStoreAddAndAll`'s setup):
 
@@ -166,12 +166,12 @@ func TestMostSimilar(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/memory/ -run 'TestTopByKind|TestConsumedMarking|TestDeleteAndUpdate|TestMostSimilar' -v`
 Expected: FAIL — `undefined: KindUserPreference`, `s.TopByKind undefined`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `internal/memory/store.go`:
 
@@ -331,11 +331,11 @@ func (s *Store) MostSimilar(ctx context.Context, kind Kind, vec []float32) (Item
 
 Add `"sort"` to the imports (`cosine` and `decayedScore` live in `recall.go`, same package).
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/memory/ -v` → PASS (all — the schema/`All` change must not disturb existing store/recall tests; an old DB fixture gains `consumed_at` via `migrate`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Memory (internal/memory)": add the two kinds (retrospective marked input-only/never injected), the `consumed_at` column + additive migration, and the learning store methods (`TopByKind` ranking rule, `MostSimilar` dedupe seam, `Delete`/`UpdateEvidence`/`MarkConsumed`). Bump `last_verified`.
 
@@ -357,7 +357,7 @@ git commit -m "feat(memory): user-preference + retrospective kinds with consumed
 - Consumes: `memory.KindUserPreference`/`KindRetrospective` (Task 1).
 - Produces: `func (d *conductorDeps) globalMem() (*memory.Store, error)` — lazy, cached, mutex-guarded; `memory_save(kind=user-preference|retrospective)` writes to `global.db` with `Scope: "global"`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `cmd/styx/mcp_conductor_test.go` (imports `memory` — add `github.com/ishaanbatra/styx/internal/memory` if absent):
 
@@ -415,12 +415,12 @@ func TestMemorySaveRoutesLearningKindsToGlobalStore(t *testing.T) {
 
 (Add the `paths` import — `github.com/ishaanbatra/styx/internal/paths` — to the test file if absent.)
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `go test ./cmd/styx/ -run TestMemorySaveRoutesLearningKinds -v`
 Expected: FAIL — `unknown kind "retrospective"`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `conductorDeps` gains a cached global store (field next to `managers`):
 
@@ -509,11 +509,11 @@ Handler: extend the kind switch and fork the store:
 				return map[string]any{"saved": true, "id": id}, nil
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestMemorySave -v` → PASS (including the existing `TestMemorySaveValidatesKind`)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Conductor MCP tools" `memory_save` bullet: the two new kinds, their global-store routing, and the `globalMem` lazy handle. Bump `last_verified`.
 
@@ -540,7 +540,7 @@ git commit -m "feat(mcp): memory_save accepts user-preference + retrospective, r
   - `func (s Scorecard) Render() string`
   - `func (s Scorecard) HasCell(cli, signal string) bool` — the evidence guard's ground truth.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/learn/scorecard_test.go` — table-driven over a real seeded sqlite fixture (per the spec's testing section), exercising grouping, signal explosion, clean-rate, medians, and rating tallies:
 
@@ -650,12 +650,12 @@ func TestBuildScorecardEmpty(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/learn/ -v`
 Expected: FAIL — package doesn't exist / `undefined: Build`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `internal/learn/scorecard.go`:
 
@@ -804,11 +804,11 @@ func medianI(v []int) int {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/learn/ -v` → PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md`: add a new `## Learning (internal/learn)` section (after "Memory"): package role, the scorecard as the deterministic no-LLM layer, cell semantics (clean = no classified error and not rated bad; multi-signal explosion; "(none)"). Bump `last_verified`.
 
@@ -835,7 +835,7 @@ git commit -m "feat(learn): deterministic scorecard aggregation over dispatch ou
   - Testable helpers: `learnScorecard(ctx, a) (string, error)`, `learnList(ctx, store *memory.Store) (string, error)`, `learnForget(ctx, store *memory.Store, id int64) (string, error)`, `openGlobalMemory() (*memory.Store, error)`.
   - The digest branch errors with "not implemented" until Task 6 replaces it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `cmd/styx/learn_test.go`:
 
@@ -921,12 +921,12 @@ func TestLearnFlagParsing(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run TestLearn -v`
 Expected: FAIL — `undefined: learnScorecard`, `undefined: cmdLearn`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `cmd/styx/learn.go`:
 
@@ -1098,13 +1098,13 @@ In `README.md`, add a row to the utilities verb table (the one containing `budge
 | `learn [--scorecard\|--dry-run\|--list\|--forget <id>]` | Digest dispatch outcomes + session retrospectives into learned routing/user preferences — plain-text memories with provenance, injected into conductor guidance; `--list` inspects, `--forget` reverses |
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestLearn -v` → PASS
 Run: `make build && ./bin/styx learn --scorecard` → prints a scorecard (or "no dispatch outcomes yet")
 Run: `./bin/styx learn --list` → prints the learned set or the empty-set line
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md`: "cmd/styx — verbs and app wiring" gains a `learn.go` bullet (flags, global-store target, digest deferred to the next commits); "Learning" section gains the verb surface. README verb table + help text updated above. Bump `last_verified`.
 
@@ -1129,7 +1129,7 @@ git commit -m "feat(cli): styx learn verb with --scorecard, --list, --forget (di
   - `type Digester struct { BaseURL, Model string }` with `func (d *Digester) Propose(ctx context.Context, scorecard string, retros []RetroNote, ratingNotes []string) ([]Candidate, error)` — structured-output ollama chat, loud error when unreachable.
   - `func FilterByEvidence(cands []Candidate, sc Scorecard, retros []RetroNote) (kept []Candidate, dropped []string)` — cap 5, kind whitelist, confidence clamp, citation-must-be-real.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `internal/learn/digest_test.go`:
 
@@ -1239,12 +1239,12 @@ func TestFilterByEvidence(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./internal/learn/ -run 'TestDigester|TestFilterByEvidence' -v`
 Expected: FAIL — `undefined: Digester`, `undefined: FilterByEvidence`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `internal/learn/digest.go` (the chat shape deliberately mirrors `internal/brain`'s `chat()` — structured output, `think: false`, `keep_alive`, num_ctx sizing — but stays self-contained; brain is REPL-coupled):
 
@@ -1469,11 +1469,11 @@ func FilterByEvidence(cands []Candidate, sc Scorecard, retros []RetroNote) (kept
 
 Add `"strconv"` to the imports.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./internal/learn/ -v` → PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Learning" section: the digest client (mirrors the brain's chat shape; why it is separate from `internal/brain`), the candidate schema, the evidence-citation grammar, and the guard's drop rules + cap. Bump `last_verified`.
 
@@ -1495,7 +1495,7 @@ git commit -m "feat(learn): ollama digest client with structured candidates and 
 - Consumes: everything from Tasks 1, 3, 5; `memory.NewOllamaEmbedder`, `memory.Embedder`.
 - Produces: `func runLearnDigest(ctx context.Context, a *app, store *memory.Store, emb memory.Embedder, dig *learn.Digester, dryRun bool) (string, error)` — `runLearn` becomes a thin production wrapper wiring the real embedder + digester.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `cmd/styx/learn_test.go` (new imports: `"encoding/json"`, `"fmt"`, `"net/http"`, `"net/http/httptest"`, `"github.com/ishaanbatra/styx/internal/learn"`):
 
@@ -1676,12 +1676,12 @@ func TestRunLearnDigestFailsLoudWithoutOllama(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run TestRunLearnDigest -v`
 Expected: FAIL — `undefined: runLearnDigest`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `cmd/styx/learn.go`, replace the `runLearn` stub:
 
@@ -1813,12 +1813,12 @@ func runLearnDigest(ctx context.Context, a *app, store *memory.Store, emb memory
 
 (`learn` is already imported from Task 4's file header; verify `memory` and `time` are too.)
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run TestRunLearnDigest -v` → PASS
 Run: `go test ./cmd/styx/ -run TestLearn -v` → PASS (flag tests unaffected)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md` "Learning" section: the full digest pipeline (six spec steps), plan-before-write partial-failure rule, dedupe threshold + refresh semantics, provenance text format, consumed-marking timing. Bump `last_verified`.
 
@@ -1847,7 +1847,7 @@ Launch-time guidance injection is the entire application mechanism: the existing
 
 > **Numbering note:** this assumes the async-dispatch plan's Task 11 already made the current Seed the post-B1 version with `seedV3` retained. If that task has NOT landed, retain the current Seed as `seedV3` here instead and keep `Load`'s list contiguous.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `cmd/styx/launch_test.go`, update `TestConductorGuidanceNamesFocusProject` to the 5-arg signature (`conductorGuidance("BASE", "styx", "", "", "")` and `conductorGuidance("BASE", "styx", "- ai-ta: /x (extra)\n", "- prefer codex\n", "")`), then add:
 
@@ -1930,12 +1930,12 @@ func TestSeedV4UpgradesToCurrent(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `go test ./cmd/styx/ -run 'TestConductorGuidance|TestRecallPrefs' -v && go test ./internal/guidance/ -run TestSeedV4 -v`
 Expected: FAIL — wrong arg count on `conductorGuidance`; `undefined: recallUserPrefs`; `undefined: seedV4`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `cmd/styx/launch.go`:
 
@@ -2039,13 +2039,13 @@ Update the call site in `launchConductor`:
   and are never injected into guidance directly.
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `go test ./cmd/styx/ -run 'TestConductorGuidance|TestRecallPrefs' -v` → PASS
 Run: `go test ./internal/guidance/ -v` → PASS
 Run: `make test` → green (fix any test still calling 4-arg `conductorGuidance` or 1-arg `recallRoutingPrefs`)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 `docs/ARCHITECTURE.md`: "Launcher" conductor-data-flow paragraph — both learned sections, `TopByKind` ranking, the embedding→kind-exact recall switch (and why); "Guidance" section — the V4→current upgrade and the two new nudges; "Learning" section — "application: launch injection is the entire mechanism". Bump `last_verified`.
 
@@ -2065,7 +2065,7 @@ git commit -m "feat(launch): learned user-preference guidance section + retrospe
 **Interfaces:**
 - Consumes: the e2e harness (`startServer`), `styx learn --scorecard` (Task 4), outcome rows written by the MCP server's dispatch (async-dispatch plan Task 2).
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Add to `e2e/e2e_test.go`:
 
@@ -2106,13 +2106,13 @@ func TestLearnScorecardSeesDispatchOutcomes(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run**
+- [x] **Step 2: Run**
 
 Run: `make e2e`
 Expected: all tests PASS including `TestLearnScorecardSeesDispatchOutcomes`; `TestLiveSmoke` SKIP.
 Debug tip: if the scorecard is empty, the two processes disagree on the config path — confirm the env derivation (`home := filepath.Dir(proj)`) against `startServer`'s layout, and that WAL mode lets the second process read the fresh row (it does — `busy_timeout` is set on open).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 `docs/ARCHITECTURE.md` "Testing conventions" e2e paragraph: add the learn-scorecard assertion to the described coverage. Bump `last_verified`.
 
@@ -2126,13 +2126,13 @@ git commit -m "test(e2e): dispatch outcome rows aggregate in styx learn --scorec
 
 ## Post-plan verification (whole-phase acceptance)
 
-- [ ] `make test && make e2e` green.
-- [ ] `STYX_E2E_LIVE=1 make e2e` green on this machine (the one sanctioned live run; ollama up).
-- [ ] Manual loop with real ollama (local, free — not a cloud AI call):
+- [x] `make test && make e2e` green.
+- [x] `STYX_E2E_LIVE=1 make e2e` green on this machine (the one sanctioned live run; ollama up).
+- [x] Manual loop with real ollama (local, free — not a cloud AI call):
   1. `make install`; run a few dispatches via a conductor session; `rate_dispatch` one of them with a note.
   2. In the session: "remember I prefer table-driven tests" → conductor saves `kind=user-preference`; end the session with a retrospective save.
   3. `styx learn --scorecard` shows the cells; `styx learn --dry-run` proposes ≤5 evidence-cited candidates; `styx learn` writes them and prints them; a second `styx learn` run refreshes rather than duplicates (dedupe) and consumes nothing new.
   4. `styx learn --list` shows provenance; `styx learn --forget <id>` removes one.
-  5. Relaunch `styx` and confirm both learned sections appear in the guidance (ask the conductor "what learned preferences were you given?").
+  5. Relaunch `styx` and confirm both learned sections appear in the guidance (ask the conductor "what learned preferences were you given?"). — _Verified by construction: after the digest run both learned kinds are present in `global.db` (the exact store `topLearnedPrefs`/`TopByKind` reads at launch), and `TestConductorGuidanceUserPreferencesSection` + `TestRecallPrefsViaTopByKind` prove section assembly/order and kind-exact recall. A live-conductor recital was intentionally not run to respect the single sanctioned cloud run (`STYX_E2E_LIVE=1`); do it in your next real `styx` session._
   6. Confirm `~/.config/styx/routing.toml` is byte-identical before/after the whole loop (`shasum` it) — the prime constraint.
-- [ ] `docs/ARCHITECTURE.md` `last_verified` is the final commit date; README verb table has the `learn` row; `git log --oneline` shows one commit per task.
+- [x] `docs/ARCHITECTURE.md` `last_verified` is the final commit date; README verb table has the `learn` row; `git log --oneline` shows one commit per task.
