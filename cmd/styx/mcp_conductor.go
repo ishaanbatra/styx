@@ -663,6 +663,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 		},
 		{
 			Name:        "pipeline_run",
+			Serial:      true,
 			Description: "Run a styx pipeline: research | review | intel | auto. auto ships (branch→push→PR) and requires the confirm_token handshake.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
 				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto"}},

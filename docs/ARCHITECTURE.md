@@ -1199,6 +1199,15 @@ line via `s.write`, interleaved with (but never colliding with) the eventual
 `tools/call` response — stdout carries JSON-RPC exclusively, so this is the
 only channel for mid-call narration; `logStatus` stays on stderr.
 
+**Concurrent `tools/call`, cancellation, and the Serial lane.**
+`tools/call` requests run concurrently, one goroutine per call, tracked by
+request id; `notifications/cancelled` cancels the matching call's context
+(this is how a host-side Esc reaches a long-running handler). `initialize`
+and `tools/list` answer inline. On EOF the server cancels and drains every
+in-flight call before returning. Tools whose handlers are not audited for
+concurrent use set `Tool.Serial` and share a single lane (`pipeline_run`,
+`refresh_intel`).
+
 **`route` v2 additive fields.** `routeResult` gained five fields that v1
 consumers safely ignore (all `omitempty` except `blocked_by_budget`):
 `classified_signals` (the signal slice actually used for routing — either the

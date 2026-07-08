@@ -568,6 +568,7 @@ func mcpTools(a *app) []mcpserver.Tool {
 		},
 		{
 			Name:        "refresh_intel",
+			Serial:      true,
 			Description: "Rebuild the per-project intelligence index (walk + convention sniff + agy module/key-symbol summaries) and return the fresh result. The deliberate write path.",
 			InputSchema: refreshIntelSchema,
 			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {

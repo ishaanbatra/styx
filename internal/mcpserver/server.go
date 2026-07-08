@@ -24,6 +24,12 @@ type Tool struct {
 	Description string
 	InputSchema any // serialized as a JSON Schema object in tools/list
 	Handler     func(ctx context.Context, args json.RawMessage) (any, error)
+
+	// Serial routes this tool through a single shared lane: Serial handlers
+	// never run concurrently with each other. Set it on handlers not audited
+	// for concurrent use (e.g. whole-pipeline runners); everything else runs
+	// in parallel now that tools/call is handled per-goroutine.
+	Serial bool
 }
 
 // Server is a registry of tools served over one MCP stdio connection.
@@ -35,6 +41,12 @@ type Server struct {
 
 	mu  sync.Mutex    // serializes writes to enc
 	enc *json.Encoder // set for the duration of Serve
+
+	serialMu sync.Mutex // shared lane for Tool.Serial handlers
+
+	callsMu sync.Mutex
+	calls   map[string]context.CancelFunc // in-flight tools/call by request id
+	wg      sync.WaitGroup                // outstanding tools/call goroutines
 }
 
 func (s *Server) write(v any) error {
@@ -56,7 +68,9 @@ func ProgressFn(ctx context.Context) (func(progress float64, message string), bo
 
 // New builds a Server with the given identity and tool set.
 func New(name, version string, tools []Tool) *Server {
-	s := &Server{name: name, version: version, tools: tools, byName: make(map[string]Tool, len(tools))}
+	s := &Server{name: name, version: version, tools: tools,
+		byName: make(map[string]Tool, len(tools)),
+		calls:  map[string]context.CancelFunc{}}
 	for _, t := range tools {
 		s.byName[t.Name] = t
 	}
@@ -83,7 +97,12 @@ type rpcError struct {
 }
 
 // Serve reads JSON-RPC messages from in and writes responses to out until EOF.
-// It returns nil on a clean EOF (the host closed the connection).
+// tools/call requests run on their own goroutine so a minutes-long awaited
+// dispatch cannot stall other calls or the read loop — the loop must stay
+// free to read notifications/cancelled. Everything else answers inline.
+// On EOF the host has hung up: every in-flight call is cancelled and awaited
+// before returning, so handlers wind down (an awaited dispatch detaches; its
+// background tasks belong to the caller's root context, not to Serve).
 func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	scanner := bufio.NewScanner(in)
 	// A line larger than this cap makes scanner.Err() return bufio.ErrTooLong and
@@ -103,23 +122,81 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 			}
 			continue
 		}
-		resp, isNotification := s.handle(ctx, req)
-		if isNotification {
+		if len(req.ID) == 0 {
+			s.handleNotification(req)
 			continue
 		}
-		if err := s.write(resp); err != nil {
+		if req.Method == "tools/call" {
+			s.startCall(ctx, req)
+			continue
+		}
+		if err := s.write(s.handle(req)); err != nil {
 			return fmt.Errorf("write response: %w", err)
 		}
 	}
+	s.cancelInflight()
+	s.wg.Wait()
 	return scanner.Err()
 }
 
-// handle routes one request. The bool is true when req is a notification
-// (no id) and therefore gets no response.
-func (s *Server) handle(ctx context.Context, req rpcRequest) (rpcResponse, bool) {
-	if len(req.ID) == 0 {
-		return rpcResponse{}, true
+// startCall runs one tools/call on its own goroutine, tracked by request id
+// for notifications/cancelled. The response write error is deliberately
+// dropped: a failed write means the host hung up, and the read loop is about
+// to see EOF and return on its own.
+func (s *Server) startCall(ctx context.Context, req rpcRequest) {
+	callCtx, cancel := context.WithCancel(ctx)
+	key := string(req.ID)
+	s.callsMu.Lock()
+	s.calls[key] = cancel
+	s.callsMu.Unlock()
+	s.wg.Add(1)
+	go func() {
+		defer func() {
+			s.callsMu.Lock()
+			delete(s.calls, key)
+			s.callsMu.Unlock()
+			cancel()
+			s.wg.Done()
+		}()
+		result, rpcErr := s.callTool(callCtx, req.Params)
+		_ = s.write(rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result, Error: rpcErr})
+	}()
+}
+
+// handleNotification processes id-less messages. Only notifications/cancelled
+// is meaningful today: it cancels the matching in-flight tools/call, which is
+// how a host-side interrupt (Esc) reaches a long-running handler. The id is
+// matched on its raw JSON form — hosts cancel with the same id shape they
+// called with.
+func (s *Server) handleNotification(req rpcRequest) {
+	if req.Method != "notifications/cancelled" {
+		return
 	}
+	var p struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if err := json.Unmarshal(req.Params, &p); err != nil {
+		return // malformed cancel: nothing to correlate, nothing to answer
+	}
+	s.callsMu.Lock()
+	cancel, ok := s.calls[string(p.RequestID)]
+	s.callsMu.Unlock()
+	if ok {
+		cancel()
+	}
+}
+
+// cancelInflight cancels every outstanding tools/call (EOF path).
+func (s *Server) cancelInflight() {
+	s.callsMu.Lock()
+	defer s.callsMu.Unlock()
+	for _, cancel := range s.calls {
+		cancel()
+	}
+}
+
+// handle answers the inline (non-tools/call) request types.
+func (s *Server) handle(req rpcRequest) rpcResponse {
 	resp := rpcResponse{JSONRPC: "2.0", ID: req.ID}
 	switch req.Method {
 	case "initialize":
@@ -130,12 +207,10 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) (rpcResponse, bool)
 		}
 	case "tools/list":
 		resp.Result = map[string]any{"tools": s.toolList()}
-	case "tools/call":
-		resp.Result, resp.Error = s.callTool(ctx, req.Params)
 	default:
 		resp.Error = &rpcError{Code: -32601, Message: "method not found: " + req.Method}
 	}
-	return resp, false
+	return resp
 }
 
 func (s *Server) toolList() []map[string]any {
@@ -173,6 +248,10 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *rpcEr
 	tool, ok := s.byName[p.Name]
 	if !ok {
 		return nil, &rpcError{Code: -32602, Message: "unknown tool: " + p.Name}
+	}
+	if tool.Serial {
+		s.serialMu.Lock()
+		defer s.serialMu.Unlock()
 	}
 	if len(p.Meta.ProgressToken) > 0 && string(p.Meta.ProgressToken) != "null" {
 		tok := p.Meta.ProgressToken
