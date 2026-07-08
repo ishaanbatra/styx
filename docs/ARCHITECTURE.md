@@ -1541,6 +1541,29 @@ results to the caller.
   `maxClaimedAge` (7 days, wired in Task 7) are pruned (`os.Remove`) during
   the same scan — claimed files are never orphans, only prune candidates.
 
+## Activity (internal/activity)
+
+- **Activity** (`internal/activity/`): live dispatch-observability board —
+  per-agent heartbeat, stall detection, ollama watcher, and the cross-process
+  disk mirror behind `styx watch`.
+
+`Board` is the in-process, thread-safe (single `sync.Mutex`) liveness
+substrate every later surface (TUI renderer, ollama watcher, disk mirror)
+reads from. It holds only strings and timestamps — never `agent.Event` — so
+`internal/activity` imports nothing from `internal/agent`; the dependency
+runs one way, agent → activity. `NewBoard()` starts empty on the wall clock
+(`SetClock` overrides it for tests). `Record(label, summary)` stamps a
+one-line activity string for an agent label, marking it live and appending to
+a per-agent ring buffer capped at `recentCap` (20) entries so the ollama
+watcher's prompt stays small. `Done(label, elapsed)` marks an agent finished
+with its total elapsed time. `Snapshot()` returns an `[]AgentState` (`Label`,
+`Last`, `LastAt`, `Done`, `Elapsed`, `Recent`) in first-seen order; `Recent
+(label)` returns just that agent's ring buffer. `SetWatcherNote`/
+`WatcherNote` hold the ollama watcher's latest health read as a single
+string. This task only lands the board itself — stall detection, the ollama
+watcher, and the disk mirror are later tasks in the same plan
+(`docs/superpowers/plans/`).
+
 ## Progress (internal/progress)
 
 TTY-aware narrator: animated braille spinner on a terminal, plain lines
