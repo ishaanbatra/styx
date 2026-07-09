@@ -218,7 +218,7 @@ Shared pieces:
   mcpServerVersion, append(mcpTools(a), withBackgroundStatus(conductorTools(d), d.reg)...))`
   — the conductor tools are wrapped so every map result carries the background
   status line (see the Piggyback note under "Conductor MCP tools"). It
-  logs readiness to stderr via `logStatus` (naming all thirteen tools), and runs
+  logs readiness to stderr via `logStatus` (naming all fourteen tools), and runs
   `srv.Serve(ctx, os.Stdin, os.Stdout)` — stdout carries the JSON-RPC protocol
   only, nothing else. `const mcpServerVersion = "0.1.0"`. See the "MCP
   server" and "Conductor MCP tools" sections below for the
@@ -1146,11 +1146,12 @@ and writes a config file for it to read.
 ## MCP server (internal/mcpserver + cmd/styx/mcp.go + cmd/styx/mcp_conductor.go)
 
 A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the
-routing brain and the conductor dispatch surface as thirteen tools for MCP
+routing brain and the conductor dispatch surface as fourteen tools for MCP
 hosts like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
 `channel_health`, `get_intel`, `refresh_intel`, `recall`, `dispatch`,
-`thread_status`, `memory_save`, `pipeline_run`, `rate_dispatch`, and
-`collect`. Pure stdlib, no provider SDK; stdout carries the protocol,
+`dispatch_parallel`, `thread_status`, `memory_save`, `pipeline_run`,
+`rate_dispatch`, and `collect`. Pure stdlib, no provider SDK; stdout carries
+the protocol,
 status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
 
