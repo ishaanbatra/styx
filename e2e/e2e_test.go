@@ -169,11 +169,20 @@ func startServer(t *testing.T, extraEnv ...string) (*mcpClient, string) {
 func TestFirstContact(t *testing.T) {
 	c, _ := startServer(t)
 
-	// tools/list: all 13 tools present.
+	// tools/list: all 14 tools present.
 	resp := c.call("tools/list", nil)
 	tools, _ := resp["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 13 {
-		t.Fatalf("want 13 tools, got %d", len(tools))
+	if len(tools) != 14 {
+		t.Fatalf("want 14 tools, got %d", len(tools))
+	}
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[fmt.Sprint(tool.(map[string]any)["name"])] = true
+	}
+	for _, want := range []string{"dispatch", "dispatch_parallel", "collect"} {
+		if !names[want] {
+			t.Fatalf("tools/list missing %q: %v", want, names)
+		}
 	}
 
 	// route: pure local decision.
