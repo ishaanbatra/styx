@@ -113,6 +113,16 @@ restarting the session.
 | `upgrade` | Re-run routing migrations manually (v0.1->v0.2 gemini->agy; v0.3 adds the `implement` verb) |
 | `version` / `styx --version` | Print the styx version and exit |
 
+Dispatches wait by default: while an agent works, live progress (tool-by-tool
+activity plus the local-ollama watcher's narration) streams into the MCP
+host's UI as progress notifications — no tokens, no polling — and the
+findings return inline the moment the work finishes. `dispatch_parallel`
+does the same for several agents at once. `background: true` detaches
+instead; `styx watch` in a second terminal is live either way. Interrupting
+an awaited call (Esc) detaches it — the agents keep working and `collect`
+fetches their results. For very long dispatches, raise your MCP client's
+tool-call timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
+
 ## Configuration
 
 - `~/.config/styx/routing.toml` — routing rules + budget caps (you edit this)

@@ -1151,8 +1151,7 @@ hosts like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
 `channel_health`, `get_intel`, `refresh_intel`, `recall`, `dispatch`,
 `dispatch_parallel`, `thread_status`, `memory_save`, `pipeline_run`,
 `rate_dispatch`, and `collect`. Pure stdlib, no provider SDK; stdout carries
-the protocol,
-status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
+the protocol, status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
 
 **Cancellable root context (no daemons).** `cmdMCP` opens `ctx, cancel :=
