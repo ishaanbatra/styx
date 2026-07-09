@@ -48,6 +48,10 @@ func TestTaskHeartbeat(t *testing.T) {
 			nil, "t1 claude ▸ running (7s)"},
 		{"terminal", bgTask{ID: "t1", State: taskDone, Spec: taskSpec{CLI: "claude"}},
 			nil, "t1 claude ✓ done"},
+		{"terminal error", bgTask{ID: "t1", State: taskError, Spec: taskSpec{CLI: "claude"}},
+			nil, "t1 claude ✗ error"},
+		{"terminal orphaned", bgTask{ID: "t1", State: taskOrphaned, Spec: taskSpec{CLI: "claude"}},
+			nil, "t1 claude ✗ orphaned"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := taskHeartbeat(tc.tk, tc.states, now); got != tc.want {

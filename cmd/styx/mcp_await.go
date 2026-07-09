@@ -116,8 +116,8 @@ func (d *conductorDeps) awaitLine(ids []string, awaited, announced map[string]bo
 }
 
 // taskHeartbeat renders one awaited task's live state in the same vocabulary
-// as activity.Render (▸ / ⚠ / ✓), sourced from the board entry keyed by the
-// task's project-qualified thread label.
+// as activity.Render (▸ / ⚠ / ✓ / ✗), sourced from the board entry keyed by
+// the task's project-qualified thread label.
 func taskHeartbeat(tk bgTask, states map[string]activity.AgentState, now time.Time) string {
 	switch tk.State {
 	case taskQueued:
@@ -136,8 +136,10 @@ func taskHeartbeat(tk bgTask, states map[string]activity.AgentState, now time.Ti
 			return fmt.Sprintf("%s %s ⚠ idle %s (last: %s)", tk.ID, tk.Spec.CLI, elapsedShort(idle), s.Last)
 		}
 		return fmt.Sprintf("%s %s ▸ %s (%s)", tk.ID, tk.Spec.CLI, s.Last, elapsedShort(idle))
-	default:
-		return fmt.Sprintf("%s %s ✓ %s", tk.ID, tk.Spec.CLI, tk.State)
+	case taskDone:
+		return fmt.Sprintf("%s %s ✓ done", tk.ID, tk.Spec.CLI)
+	default: // taskError, taskOrphaned
+		return fmt.Sprintf("%s %s ✗ %s", tk.ID, tk.Spec.CLI, tk.State)
 	}
 }
 
