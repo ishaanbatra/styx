@@ -845,5 +845,127 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				return map[string]any{"results": results, "pending": pending}, nil
 			},
 		},
+		{
+			Name: "dispatch_parallel",
+			Description: "Run several agent dispatches in parallel and WAIT for all of them: live combined " +
+				"progress streams while they work and every result returns inline, in input order. This is the " +
+				"default for multi-agent work the user is waiting on. read|edit risk only (no ship, no ollama); " +
+				"thread/project collisions queue per the ordering rules. Cancelling detaches: tasks keep running, " +
+				"collect fetches their results.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"tasks": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"project":     map[string]any{"type": "string", "description": "registered project alias; empty = the project styx was launched in"},
+								"thread":      map[string]any{"type": "string", "description": "thread name; empty = cli name"},
+								"cli":         map[string]any{"type": "string", "enum": []string{"claude", "codex", "agy"}},
+								"message":     map[string]any{"type": "string"},
+								"model":       map[string]any{"type": "string", "description": "tier (opus|sonnet|haiku) or raw model id; empty = channel default"},
+								"risk":        map[string]any{"type": "string", "enum": []string{"read", "edit"}},
+								"extra_roots": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							},
+							"required": []string{"cli", "message", "risk"},
+						},
+					},
+				},
+				"required": []string{"tasks"},
+			},
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in struct {
+					Tasks []dispatchArgs `json:"tasks"`
+				}
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("dispatch_parallel args: %w", err)
+				}
+				if len(in.Tasks) == 0 {
+					return nil, fmt.Errorf("tasks is required (at least one)")
+				}
+				if d.reg == nil {
+					return nil, fmt.Errorf("dispatch_parallel unavailable (no task registry)")
+				}
+				results := make([]map[string]any, len(in.Tasks))
+				var ids []string
+				idIndex := map[string]int{}
+				for i, tin := range in.Tasks {
+					fail := func(err error) {
+						results[i] = map[string]any{"status": taskError, "error": err.Error(),
+							"cli": tin.CLI, "thread": tin.Thread}
+					}
+					switch tin.CLI {
+					case "claude", "codex", "agy":
+					default:
+						fail(fmt.Errorf("unknown cli %q (claude|codex|agy — ollama one-shots and ship risk are single-dispatch only)", tin.CLI))
+						continue
+					}
+					if tin.Message == "" {
+						fail(fmt.Errorf("message is required"))
+						continue
+					}
+					if tin.Risk != "read" && tin.Risk != "edit" {
+						fail(fmt.Errorf("risk must be read|edit in a parallel dispatch, got %q", tin.Risk))
+						continue
+					}
+					if err := d.spawnBudgetCheck(ctx, tin.CLI); err != nil {
+						fail(err)
+						continue
+					}
+					m, err := d.managerFor(tin.Project)
+					if err != nil {
+						fail(err)
+						continue
+					}
+					model := tin.Model
+					if resolved, ok := d.a.routing.Tiers[model]; ok {
+						model = resolved
+					}
+					thread := tin.Thread
+					if thread == "" {
+						thread = tin.CLI
+					}
+					meta := dispatchMeta{
+						ProjectID: m.mgr.ProjectID, Thread: thread, CLI: tin.CLI,
+						Model: model, Risk: tin.Risk, Signals: dispatchSignals(tin.Message),
+						Start: time.Now(),
+					}
+					spec := agent.DispatchSpec{
+						Thread: tin.Thread, CLI: tin.CLI, Model: model,
+						Message: tin.Message, ExtraRoots: tin.ExtraRoots,
+						ReadOnly: tin.Risk == "read",
+					}
+					mgr := m.mgr
+					runFn := func(bctx context.Context, id string) (map[string]any, error) {
+						ameta := meta
+						ameta.TaskID = id
+						d.mirrorNow()
+						res, derr := mgr.Dispatch(bctx, spec, nil)
+						d.mirrorNow()
+						return d.finishDispatch(bctx, ameta, res, derr)
+					}
+					id, _ := d.reg.Spawn(taskSpec{
+						Project: tin.Project, ProjectID: m.mgr.ProjectID, Thread: thread,
+						CLI: tin.CLI, Model: model, Risk: tin.Risk,
+					}, runFn)
+					ids = append(ids, id)
+					idIndex[id] = i
+				}
+				if len(ids) == 0 {
+					return map[string]any{"results": results, "detached": false}, nil
+				}
+				notify, _ := mcpserver.ProgressFn(ctx)
+				out := d.awaitTasks(ctx, ids, notify)
+				if out.Detached {
+					return map[string]any{"detached": true, "task_ids": ids, "results": results,
+						"note": "await interrupted; tasks keep running — collect fetches their results"}, nil
+				}
+				for j, id := range ids {
+					results[idIndex[id]] = out.Results[j]
+				}
+				return map[string]any{"results": results, "detached": false}, nil
+			},
+		},
 	}
 }

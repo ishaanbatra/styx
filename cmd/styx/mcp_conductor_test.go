@@ -976,3 +976,134 @@ func TestPulseKeepsMirrorFreshAndFlushesFinal(t *testing.T) {
 		t.Fatal("pulse must not rewrite the mirror while everything is idle")
 	}
 }
+
+// TestDispatchParallelCombinesResults: two read-risk tasks on different
+// threads run concurrently and both results return inline, in input order.
+func TestDispatchParallelCombinesResults(t *testing.T) {
+	fastAwait(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "parallel answer")
+	fakeSrc, err := filepath.Abs("../../testdata/fakeagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	copyExecutable(t, fakeSrc, filepath.Join(binDir, "claude"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	projDir := t.TempDir()
+	if err := config.SaveProjects([]config.Project{{ID: "proj1", Name: "proj1", Path: projDir}}); err != nil {
+		t.Fatal(err)
+	}
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	d := &conductorDeps{
+		a: &app{
+			routing:  config.Routing{Brain: config.BrainConfig{ContextThresholdPct: 70}, Tiers: map[string]string{}},
+			tracker:  bud,
+			channels: map[string]channel.Channel{},
+		},
+		gate: shipgate.New(shipgate.ModeOff), emb: replEmbedder{},
+		managers: map[string]*managed{},
+		reg:      newTaskRegistry(context.Background(), 4, nil),
+	}
+	res, err := callTool(t, d, "dispatch_parallel", map[string]any{
+		"tasks": []map[string]any{
+			{"project": "proj1", "thread": "scan-a", "cli": "claude", "message": "scan A", "risk": "read"},
+			{"project": "proj1", "thread": "scan-b", "cli": "claude", "message": "scan B", "risk": "read"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dispatch_parallel: %v", err)
+	}
+	if res["detached"] != false {
+		t.Fatalf("completed fan-out must not be detached: %v", res)
+	}
+	results, _ := res["results"].([]any)
+	if len(results) != 2 {
+		t.Fatalf("want 2 results, got %v", res["results"])
+	}
+	for i, r := range results {
+		m, _ := r.(map[string]any)
+		if m["status"] != "done" || m["text"] != "parallel answer" {
+			t.Fatalf("result %d mismatch: %v", i, m)
+		}
+	}
+	// Both awaited tasks were claimed: nothing pending for collect.
+	all, err := callTool(t, d, "collect", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := all["results"].([]any); len(got) != 0 {
+		t.Fatalf("awaited fan-out results must be claimed, got %v", all["results"])
+	}
+}
+
+// TestDispatchParallelPerTaskFailures: a bad task fails as a per-task entry;
+// valid siblings still run. Whole-call errors are reserved for bad args.
+func TestDispatchParallelPerTaskFailures(t *testing.T) {
+	fastAwait(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "survivor")
+	fakeSrc, err := filepath.Abs("../../testdata/fakeagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	copyExecutable(t, fakeSrc, filepath.Join(binDir, "claude"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	projDir := t.TempDir()
+	if err := config.SaveProjects([]config.Project{{ID: "proj1", Name: "proj1", Path: projDir}}); err != nil {
+		t.Fatal(err)
+	}
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	d := &conductorDeps{
+		a: &app{
+			routing:  config.Routing{Brain: config.BrainConfig{ContextThresholdPct: 70}, Tiers: map[string]string{}},
+			tracker:  bud,
+			channels: map[string]channel.Channel{},
+		},
+		gate: shipgate.New(shipgate.ModeOff), emb: replEmbedder{},
+		managers: map[string]*managed{},
+		reg:      newTaskRegistry(context.Background(), 4, nil),
+	}
+	res, err := callTool(t, d, "dispatch_parallel", map[string]any{
+		"tasks": []map[string]any{
+			{"cli": "ollama", "message": "not allowed here", "risk": "read"},
+			{"cli": "claude", "message": "ship it", "risk": "ship"},
+			{"project": "proj1", "thread": "ok", "cli": "claude", "message": "fine", "risk": "read"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("per-task failures must not fail the call: %v", err)
+	}
+	results, _ := res["results"].([]any)
+	if len(results) != 3 {
+		t.Fatalf("want 3 results, got %v", res["results"])
+	}
+	r0, _ := results[0].(map[string]any)
+	r1, _ := results[1].(map[string]any)
+	r2, _ := results[2].(map[string]any)
+	if r0["status"] != "error" || !strings.Contains(r0["error"].(string), "cli") {
+		t.Fatalf("ollama task must fail per-task: %v", r0)
+	}
+	if r1["status"] != "error" || !strings.Contains(r1["error"].(string), "risk") {
+		t.Fatalf("ship task must fail per-task: %v", r1)
+	}
+	if r2["status"] != "done" || r2["text"] != "survivor" {
+		t.Fatalf("valid sibling must complete: %v", r2)
+	}
+
+	// Bad args (no tasks) IS a whole-call error.
+	if _, err := callTool(t, d, "dispatch_parallel", map[string]any{"tasks": []map[string]any{}}); err == nil {
+		t.Fatal("empty tasks must be a call error")
+	}
+}

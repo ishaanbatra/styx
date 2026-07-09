@@ -1295,8 +1295,9 @@ REPL loop.
   and after; the mechanical pulse (`conductorDeps.pulse`, see the Activity
   section) covers mid-run freshness, so these brackets are just the
   start/end frames.
-  `conductorTools(d)` returns six tools: `dispatch`, `thread_status`,
-  `memory_save`, `pipeline_run`, `rate_dispatch`, and `collect`. (Deviation
+  `conductorTools(d)` returns seven tools: `dispatch`, `dispatch_parallel`,
+  `thread_status`, `memory_save`, `pipeline_run`, `rate_dispatch`, and
+  `collect`. (Deviation
   from the Task 8 brief, which put the board on the per-project `managed`
   struct: the board must exist at `newConductorDeps` time to thread into the
   registry, which is created before any `managed` — so it lives on
@@ -1530,6 +1531,13 @@ REPL loop.
     `taskQueued` → `"<id> queued <behind X|at cap> (<cli>, thread
     <thread>, <elapsed>)"`; terminal states → `"<id> <state>[ unclaimed]
     (<cli>, thread <thread>)"`.
+- `dispatch_parallel` — awaited N-agent fan-out: an array of {cli, message,
+  risk, thread?, project?, model?, extra_roots?} specs, each spawned as a
+  registry task (read risk runs concurrently; ordering rules queue
+  collisions), observed by the same awaiter as `dispatch`. Per-task failures
+  (validation, budget, agent error) are per-entry results — the call errors
+  only on malformed arguments. Cancellation detaches all spawned tasks.
+  read|edit only; ship and ollama stay single-dispatch.
 - **Piggyback (Task 9)** — `withBackgroundStatus(tools []mcpserver.Tool, reg
   *taskRegistry) []mcpserver.Tool` (`cmd/styx/mcp_tasks.go`) is the single
   decoration point that keeps background work from being forgotten: it wraps
