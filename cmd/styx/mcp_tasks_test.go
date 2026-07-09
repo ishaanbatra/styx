@@ -144,34 +144,6 @@ func TestRegistryErrorsCollectAndClaim(t *testing.T) {
 	}
 }
 
-func TestRegistryBusyAndNilSafety(t *testing.T) {
-	var nilReg *taskRegistry
-	if _, busy := nilReg.Busy("p1", "codex", "edit"); busy {
-		t.Fatal("nil registry must report not busy")
-	}
-	if nilReg.StatusLine() != "" || nilReg.Snapshot() != nil {
-		t.Fatal("nil registry reads must be safe no-ops")
-	}
-
-	r := newTaskRegistry(context.Background(), 4, nil)
-	run1, started1, release1 := blockingRun(nil)
-	id1, _ := r.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "edit"}, run1)
-	<-started1
-	if blocker, busy := r.Busy("p1", "codex", "read"); !busy || blocker != id1 {
-		t.Fatalf("same thread must be busy, got %q %v", blocker, busy)
-	}
-	if blocker, busy := r.Busy("p1", "other", "edit"); !busy || blocker != id1 {
-		t.Fatalf("edit against a running edit on the project must be busy, got %q %v", blocker, busy)
-	}
-	if _, busy := r.Busy("p1", "other", "read"); busy {
-		t.Fatal("read on another thread must not be busy")
-	}
-	if _, busy := r.Busy("p2", "codex", "edit"); busy {
-		t.Fatal("another project must not be busy")
-	}
-	close(release1)
-}
-
 func TestTaskStateMirrorAndOrphanScan(t *testing.T) {
 	dir := t.TempDir()
 	r := newTaskRegistry(context.Background(), 4, nil)

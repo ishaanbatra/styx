@@ -152,6 +152,7 @@ func TestDispatchHappyPath(t *testing.T) {
 		gate:     shipgate.New(shipgate.ModeOff),
 		emb:      replEmbedder{},
 		managers: map[string]*managed{},
+		reg:      newTaskRegistry(context.Background(), 4, nil),
 	}
 
 	res, err := callTool(t, d, "dispatch", map[string]any{
@@ -168,6 +169,9 @@ func TestDispatchHappyPath(t *testing.T) {
 	}
 	if res["tokens_out"] != float64(22) {
 		t.Errorf("tokens_out = %v, want 22", res["tokens_out"])
+	}
+	if res["status"] != "done" || res["task_id"] == "" {
+		t.Fatalf("awaited dispatch must return a claimed done task, got %v", res)
 	}
 
 	// thread_status on the same project should now report the thread.
@@ -467,6 +471,7 @@ func TestDispatchThreadAppendsOutcomeRow(t *testing.T) {
 		gate:     shipgate.New(shipgate.ModeOff),
 		emb:      replEmbedder{},
 		managers: map[string]*managed{},
+		reg:      newTaskRegistry(context.Background(), 4, nil),
 	}
 
 	if _, err := callTool(t, d, "dispatch", map[string]any{
@@ -489,6 +494,9 @@ func TestDispatchThreadAppendsOutcomeRow(t *testing.T) {
 	}
 	if o.ErrorKind != "" {
 		t.Fatalf("success must record empty error kind, got %q", o.ErrorKind)
+	}
+	if o.TaskID == "" {
+		t.Fatal("awaited dispatch outcome must carry its task id")
 	}
 	if !strings.Contains(o.Signals, "complex") {
 		t.Fatalf("signals must be extracted from the message (refactor => complex), got %q", o.Signals)
@@ -612,15 +620,21 @@ func TestDispatchBackgroundSpawnBudgetCheck(t *testing.T) {
 	}
 }
 
-func TestDispatchSyncBusyThreadGuard(t *testing.T) {
-	reg := newTaskRegistry(context.Background(), 4, nil)
-	run1, started1, release1 := blockingRun(nil)
-	reg.Spawn(taskSpec{ProjectID: "proj1", Thread: "codex", CLI: "codex", Risk: "edit"}, run1)
-	<-started1
-	defer close(release1)
-
+// TestDispatchAwaitedQueuesBehindBusyThread: a dispatch to a thread with a
+// live background task no longer errors — it queues behind it (ordering
+// rules) and completes once the blocker releases.
+func TestDispatchAwaitedQueuesBehindBusyThread(t *testing.T) {
+	fastAwait(t)
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "queued then ran")
+	fakeSrc, err := filepath.Abs("../../testdata/fakeagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	copyExecutable(t, fakeSrc, filepath.Join(binDir, "claude"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	projDir := t.TempDir()
 	if err := config.SaveProjects([]config.Project{{ID: "proj1", Name: "proj1", Path: projDir}}); err != nil {
 		t.Fatal(err)
@@ -630,6 +644,7 @@ func TestDispatchSyncBusyThreadGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { bud.Close() })
+	reg := newTaskRegistry(context.Background(), 4, nil)
 	d := &conductorDeps{
 		a: &app{
 			routing:  config.Routing{Brain: config.BrainConfig{ContextThresholdPct: 70}, Tiers: map[string]string{}},
@@ -639,11 +654,113 @@ func TestDispatchSyncBusyThreadGuard(t *testing.T) {
 		gate: shipgate.New(shipgate.ModeOff), emb: replEmbedder{},
 		managers: map[string]*managed{}, reg: reg,
 	}
-	_, err = callTool(t, d, "dispatch", map[string]any{
-		"project": "proj1", "thread": "codex", "cli": "codex", "message": "hi", "risk": "read",
+	// t1: blocking background task holding the thread.
+	run1, started1, release1 := blockingRun(nil)
+	reg.Spawn(taskSpec{ProjectID: "proj1", Thread: "claude", CLI: "claude", Risk: "edit"}, run1)
+	<-started1
+
+	var handler func(context.Context, json.RawMessage) (any, error)
+	for _, tool := range conductorTools(d) {
+		if tool.Name == "dispatch" {
+			handler = tool.Handler
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"project": "proj1", "thread": "claude", "cli": "claude", "message": "hi", "risk": "read",
 	})
-	if err == nil || !strings.Contains(err.Error(), "busy") || !strings.Contains(err.Error(), "t1") {
-		t.Fatalf("sync dispatch to a thread with a live background task must error naming it, got %v", err)
+	type ret struct {
+		res any
+		err error
+	}
+	ch := make(chan ret, 1)
+	go func() {
+		res, err := handler(context.Background(), raw)
+		ch <- ret{res, err}
+	}()
+	waitFor(t, "dispatch queued behind t1", func() bool {
+		tk, ok := reg.Get("t2")
+		return ok && tk.State == taskQueued && tk.QueuedBehind == "t1"
+	})
+	close(release1)
+	got := <-ch
+	if got.err != nil {
+		t.Fatalf("queued dispatch must complete after blocker releases: %v", got.err)
+	}
+	b, _ := json.Marshal(got.res)
+	var res map[string]any
+	json.Unmarshal(b, &res)
+	if res["text"] != "queued then ran" || res["status"] != "done" {
+		t.Fatalf("awaited result mismatch: %v", res)
+	}
+}
+
+// TestDispatchAwaitedDetachesOnCancel: cancelling the call context mid-await
+// (host Esc) returns a detach notice; the task keeps running unclaimed.
+func TestDispatchAwaitedDetachesOnCancel(t *testing.T) {
+	fastAwait(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("FAKEAGENT_TEXT", "slow answer")
+	t.Setenv("FAKEAGENT_SLEEP", "1")
+	fakeSrc, err := filepath.Abs("../../testdata/fakeagent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	copyExecutable(t, fakeSrc, filepath.Join(binDir, "claude"))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	projDir := t.TempDir()
+	if err := config.SaveProjects([]config.Project{{ID: "proj1", Name: "proj1", Path: projDir}}); err != nil {
+		t.Fatal(err)
+	}
+	bud, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bud.Close() })
+	reg := newTaskRegistry(context.Background(), 4, nil)
+	d := &conductorDeps{
+		a: &app{
+			routing:  config.Routing{Brain: config.BrainConfig{ContextThresholdPct: 70}, Tiers: map[string]string{}},
+			tracker:  bud,
+			channels: map[string]channel.Channel{},
+		},
+		gate: shipgate.New(shipgate.ModeOff), emb: replEmbedder{},
+		managers: map[string]*managed{}, reg: reg,
+	}
+	var handler func(context.Context, json.RawMessage) (any, error)
+	for _, tool := range conductorTools(d) {
+		if tool.Name == "dispatch" {
+			handler = tool.Handler
+		}
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"project": "proj1", "cli": "claude", "message": "hi", "risk": "read",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	type ret struct {
+		res any
+		err error
+	}
+	ch := make(chan ret, 1)
+	go func() {
+		res, err := handler(ctx, raw)
+		ch <- ret{res, err}
+	}()
+	waitFor(t, "task running", func() bool { return state(reg, "t1") == taskRunning })
+	cancel()
+	got := <-ch
+	if got.err != nil {
+		t.Fatalf("detach must not be an error: %v", got.err)
+	}
+	b, _ := json.Marshal(got.res)
+	var res map[string]any
+	json.Unmarshal(b, &res)
+	if res["detached"] != true || res["task_id"] != "t1" {
+		t.Fatalf("want detach notice for t1, got %v", res)
+	}
+	if tk, _ := reg.Get("t1"); tk.Claimed {
+		t.Fatal("detached task must stay unclaimed and collectible")
 	}
 }
 

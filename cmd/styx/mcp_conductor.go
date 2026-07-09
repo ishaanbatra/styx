@@ -450,7 +450,10 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 		{
 			Name: "dispatch",
 			Description: "Send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task. " +
-				"risk: read|edit|ship. ship requires the confirm_token handshake.",
+				"By default this WAITS: live progress streams while the agent works and the result returns inline — " +
+				"use it for anything the user is waiting on. background:true detaches instead (returns a task_id; " +
+				"collect fetches the result) — only when the user explicitly wants to keep working meanwhile. " +
+				"For several agents at once use dispatch_parallel. risk: read|edit|ship. ship requires the confirm_token handshake.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -563,22 +566,17 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					Model: model, Risk: in.Risk, Signals: dispatchSignals(in.Message),
 					Start: start,
 				}
+				spec := agent.DispatchSpec{
+					Thread: in.Thread, CLI: in.CLI, Model: model,
+					Message: in.Message, ExtraRoots: in.ExtraRoots,
+					ReadOnly: in.Risk == "read",
+				}
 				if in.Background {
-					spec := agent.DispatchSpec{
-						Thread: in.Thread, CLI: in.CLI, Model: model,
-						Message: in.Message, ExtraRoots: in.ExtraRoots,
-						ReadOnly: in.Risk == "read",
-					}
 					runFn := func(bctx context.Context, id string) (map[string]any, error) {
 						// bctx is the server's root context: the task survives
 						// this tool call returning and dies with the server.
-						// No progress notifications mid-flight (this call's
-						// JSON-RPC exchange is long gone); completion
-						// bookkeeping is the same finishDispatch as sync. There
-						// is no onEvent here (nil below) to drive the mirror
-						// mid-flight, so bracket the dispatch with explicit
-						// calls: one so `styx watch` shows the task starting,
-						// one to flush its Board.Done state on completion.
+						// The mechanical pulse mirrors mid-run; these brackets
+						// keep the start/end frames prompt.
 						bmeta := meta
 						bmeta.Background = true
 						bmeta.TaskID = id
@@ -593,45 +591,38 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}, runFn)
 					return map[string]any{"task_id": id, "thread": thread, "cli": in.CLI, "status": state}, nil
 				}
-				if blocker, busy := d.reg.Busy(m.mgr.ProjectID, thread, in.Risk); busy {
-					return nil, fmt.Errorf("thread %q is busy with background task %s — collect it, wait, or use another thread", thread, blocker)
+				// Awaited (the default): spawn through the same registry as
+				// background work — the ordering rules queue a thread collision
+				// instead of erroring — and observe until terminal, streaming
+				// board-derived progress. Cancellation (host Esc) detaches: the
+				// task keeps running and stays collectible; work is never lost
+				// (spec: awaited = observed background).
+				if d.reg == nil {
+					return nil, fmt.Errorf("dispatch unavailable (no task registry)")
 				}
-				notify, hasNotify := mcpserver.ProgressFn(ctx)
-				var events int
-				onEvent := func(ev agent.Event) {
-					events++
-					// Drive the disk mirror (Task 9) on every event, ahead of
-					// the streaming-chatter throttle below — d.mirror is
-					// itself debounced, so this is cheap and keeps a second
-					// `styx watch` process current during the dispatch.
+				runFn := func(bctx context.Context, id string) (map[string]any, error) {
+					ameta := meta
+					ameta.TaskID = id
 					d.mirrorNow()
-					var msg string
-					switch ev.Type {
-					case agent.EventInit:
-						msg = in.CLI + ": session started"
-					case agent.EventText:
-						if events%5 != 0 { // throttle streaming chatter
-							return
-						}
-						msg = fmt.Sprintf("%s: streaming (%d events)", in.CLI, events)
-					case agent.EventResult:
-						msg = in.CLI + ": finishing"
-					}
-					if msg == "" {
-						return
-					}
-					logStatus("dispatch %s", msg)
-					if hasNotify {
-						notify(float64(events), msg)
-					}
+					res, derr := m.mgr.Dispatch(bctx, spec, nil)
+					d.mirrorNow()
+					return d.finishDispatch(bctx, ameta, res, derr)
 				}
-				res, err := m.mgr.Dispatch(ctx, agent.DispatchSpec{
-					Thread: in.Thread, CLI: in.CLI, Model: model,
-					Message: in.Message, ExtraRoots: in.ExtraRoots,
-					ReadOnly: in.Risk == "read",
-				}, onEvent)
-				d.mirrorNow() // final flush attempt: reflect Board.Done before returning
-				return d.finishDispatch(ctx, meta, res, err)
+				id, _ := d.reg.Spawn(taskSpec{
+					Project: in.Project, ProjectID: m.mgr.ProjectID, Thread: thread,
+					CLI: in.CLI, Model: model, Risk: in.Risk,
+				}, runFn)
+				notify, _ := mcpserver.ProgressFn(ctx)
+				out := d.awaitTasks(ctx, []string{id}, notify)
+				if out.Detached {
+					return map[string]any{"detached": true, "task_id": id,
+						"note": "await interrupted; the task keeps running — collect fetches its result"}, nil
+				}
+				r := out.Results[0]
+				if r["status"] != taskDone {
+					return nil, fmt.Errorf("%v", r["error"])
+				}
+				return r, nil
 			},
 		},
 		{
