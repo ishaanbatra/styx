@@ -218,7 +218,7 @@ Shared pieces:
   mcpServerVersion, append(mcpTools(a), withBackgroundStatus(conductorTools(d), d.reg)...))`
   — the conductor tools are wrapped so every map result carries the background
   status line (see the Piggyback note under "Conductor MCP tools"). It
-  logs readiness to stderr via `logStatus` (naming all thirteen tools), and runs
+  logs readiness to stderr via `logStatus` (naming all fourteen tools), and runs
   `srv.Serve(ctx, os.Stdin, os.Stdout)` — stdout carries the JSON-RPC protocol
   only, nothing else. `const mcpServerVersion = "0.1.0"`. See the "MCP
   server" and "Conductor MCP tools" sections below for the
@@ -606,9 +606,10 @@ dispatch introduces: a background task's goroutine can call `Manager.Dispatch`
 on a thread while a synchronous `thread_status` call, or a second background
 dispatch on a *different* thread of the same project, concurrently reads or
 persists the same `*Manager`/`*ThreadStore` (they share one cached instance
-per project — see "Conductor MCP tools" `managed`/`managerFor`; `Busy` only
-guards same-thread reentrancy, so two different-thread dispatches on one
-project can run at once). `Thread.mu` guards its own mutable fields (every
+per project — see "Conductor MCP tools" `managed`/`managerFor`; the
+registry's ordering rules (`conflictLocked`) only serialize same-thread
+tasks, so two different-thread dispatches on one project can run at once).
+`Thread.mu` guards its own mutable fields (every
 read/write outside construction takes it, including a `MarshalJSON` override
 so `ThreadStore.Save` never reads a torn thread) and `ThreadStore.mu` guards
 the `Threads` map structure (`Get`, `Save`, `StatusLines`, `Handoff`).
@@ -1145,12 +1146,12 @@ and writes a config file for it to read.
 ## MCP server (internal/mcpserver + cmd/styx/mcp.go + cmd/styx/mcp_conductor.go)
 
 A transport-only JSON-RPC-over-stdio MCP server (`styx mcp`) exposing the
-routing brain and the conductor dispatch surface as thirteen tools for MCP
+routing brain and the conductor dispatch surface as fourteen tools for MCP
 hosts like OpenClaw or Claude Code: `route`, `budget_status`, `record_usage`,
 `channel_health`, `get_intel`, `refresh_intel`, `recall`, `dispatch`,
-`thread_status`, `memory_save`, `pipeline_run`, `rate_dispatch`, and
-`collect`. Pure stdlib, no provider SDK; stdout carries the protocol,
-status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
+`dispatch_parallel`, `thread_status`, `memory_save`, `pipeline_run`,
+`rate_dispatch`, and `collect`. Pure stdlib, no provider SDK; stdout carries
+the protocol, status stays on stderr. `cmd/styx/mcp.go` adapts tool args onto
 `internal/router`, `internal/budget`, `internal/intel`, and `internal/memory`.
 
 **Cancellable root context (no daemons).** `cmdMCP` opens `ctx, cancel :=
@@ -1198,6 +1199,15 @@ without a nil check. Calling the emitter writes a
 line via `s.write`, interleaved with (but never colliding with) the eventual
 `tools/call` response — stdout carries JSON-RPC exclusively, so this is the
 only channel for mid-call narration; `logStatus` stays on stderr.
+
+**Concurrent `tools/call`, cancellation, and the Serial lane.**
+`tools/call` requests run concurrently, one goroutine per call, tracked by
+request id; `notifications/cancelled` cancels the matching call's context
+(this is how a host-side Esc reaches a long-running handler). `initialize`
+and `tools/list` answer inline. On EOF the server cancels and drains every
+in-flight call before returning. Tools whose handlers are not audited for
+concurrent use set `Tool.Serial` and share a single lane (`pipeline_run`,
+`refresh_intel`).
 
 **`route` v2 additive fields.** `routeResult` gained five fields that v1
 consumers safely ignore (all `omitempty` except `blocked_by_budget`):
@@ -1279,11 +1289,15 @@ REPL loop.
   alongside the server both use, so the mirror path always agrees with what
   `styx watch` reads (see the Activity section's disk-mirror write-up for the
   full path-consistency argument). `d.mirrorNow()` narrates (never swallows)
-  a write failure via `logStatus` and is called from `dispatch`'s streaming
-  `onEvent` and, for background tasks (which pass `onEvent = nil`), explicitly
-  before and after the task's `Dispatch` call.
-  `conductorTools(d)` returns six tools: `dispatch`, `thread_status`,
-  `memory_save`, `pipeline_run`, `rate_dispatch`, and `collect`. (Deviation
+  a write failure via `logStatus` and is called from every dispatch's `runFn`
+  closure — background and awaited spawns alike now route through the same
+  `taskRegistry`, so both bracket `m.mgr.Dispatch` with `d.mirrorNow()` before
+  and after; the mechanical pulse (`conductorDeps.pulse`, see the Activity
+  section) covers mid-run freshness, so these brackets are just the
+  start/end frames.
+  `conductorTools(d)` returns seven tools: `dispatch`, `dispatch_parallel`,
+  `thread_status`, `memory_save`, `pipeline_run`, `rate_dispatch`, and
+  `collect`. (Deviation
   from the Task 8 brief, which put the board on the per-project `managed`
   struct: the board must exist at `newConductorDeps` time to thread into the
   registry, which is created before any `managed` — so it lives on
@@ -1307,9 +1321,9 @@ REPL loop.
   "pass --dir" or "cd into a repo", so the error lists the registry instead
   of suggesting shell remedies.
 - `dispatch(project?, thread?, cli, message, model?, risk, extra_roots?,
-  confirm_token?)` — `cli` is one of `claude|codex|agy|ollama`; `risk` is
-  `read|edit|ship`. Validation (unknown cli, empty message, invalid risk)
-  runs first and returns a plain error. For `risk: ship`, the
+  confirm_token?, background?)` — `cli` is one of `claude|codex|agy|ollama`;
+  `risk` is `read|edit|ship`. Validation (unknown cli, empty message, invalid
+  risk) runs first and returns a plain error. For `risk: ship`, the
   **`internal/shipgate` check runs before project resolution** — a ship-risk
   call against an unbound project still gets gated, never silently resolved
   first. `cli: ollama` is a one-shot call through `a.channels["ollama"]`
@@ -1325,25 +1339,47 @@ REPL loop.
   string) and `duration_s` (wall-clock seconds since a `start := time.Now()`
   taken right after arg validation, rounded via
   `math.Round(time.Since(start).Seconds()*10)/10` to one decimal) alongside
-  `{cli, text}`. Otherwise the
-  call routes through `managerFor` + `agent.Manager.Dispatch`, returning
-  `{thread, cli, text, tokens_in, tokens_out, model, duration_s}` (`thread`
-  defaults to `cli` when unset, matching `Manager.Dispatch`'s own
-  thread-naming default; `model`/`duration_s` computed the same way as the
-  ollama branch) or, when gated and denied, the raw `shipgate.Result`
-  (`{allowed, token, message}`) so the brain can relay the confirmation
-  token to the user. The thread branch also wires dispatch narration:
-  `mcpserver.ProgressFn(ctx)` (see "MCP server" above) is checked once per
-  call, and an `onEvent(ev agent.Event)` closure — replacing the prior
-  `nil` — fires `logStatus("dispatch %s", msg)` on stderr and, when the
-  client sent a progress token, `notify(float64(events), msg)` on
-  `agent.EventInit` ("session started"), `agent.EventResult` ("finishing"),
-  and every 5th `agent.EventText` (throttled to avoid notification
-  spam on streaming chatter); other event types emit nothing.
-  **Every dispatch completion — both the ollama one-shot branch and the
-  thread branch — also appends one `budget.Outcome` row** via
-  `(*Tracker).RecordOutcome` (see "Budget tracker" `outcomes` table): CLI,
-  resolved model, risk, wall-clock duration, real token counts, and
+  `{cli, text}`.
+
+  Otherwise the call routes through `managerFor` and builds one shared
+  `spec := agent.DispatchSpec{Thread, CLI, Model, Message, ExtraRoots,
+  ReadOnly}` consumed by both forks below.
+
+- **Awaited by default — spawn + observe (spec: awaited-dispatch, superpowers
+  2026-07-08).** This is the governing behavior: `background` absent/`false`
+  no longer calls `agent.Manager.Dispatch` directly. Instead the handler
+  spawns an ordinary `taskRegistry` task — `runFn(bctx, id)` sets
+  `ameta.TaskID = id`, brackets `m.mgr.Dispatch(bctx, spec, nil)` with
+  `d.mirrorNow()`, and finishes through the shared `d.finishDispatch(bctx,
+  ameta, res, derr)`, exactly like the background fork below — via
+  `d.reg.Spawn(taskSpec{...}, runFn)`, then observes it with
+  `(*conductorDeps).awaitTasks(ctx, []string{id}, notify)` (see "Awaiter"
+  below) until it's terminal. Because the spawn goes through the same
+  registry as `background: true`, the ordering rules apply uniformly: a
+  thread or project-write collision **queues** the new dispatch behind the
+  blocker instead of erroring — the old synchronous `Busy` guard is gone;
+  queueing replaces it entirely. While the await runs,
+  `mcpserver.ProgressFn(ctx)` (when the client sent a progress token)
+  streams `awaitTasks`'s board-derived progress line (done count, per-task
+  heartbeat, notices for unrelated completions) in place of the removed
+  `onEvent` "streaming (N events)" chatter. On completion the claimed task's
+  `collectOne` shape returns inline — `{task_id, status: "done", thread,
+  cli, text, tokens_in, tokens_out, model, duration_s}`, a superset of the
+  old sync result that now always carries `task_id` — or, on a task error,
+  `finishDispatch`'s wrapped `dispatch <cli>: %w` string surfaces as the
+  tool error. **Cancellation detaches.** If the call's `ctx` is cancelled
+  mid-await (host Esc → `notifications/cancelled`, per-call cancellation
+  wired in Task 1; or the server's EOF drain), `awaitTasks` returns
+  `{Detached: true}` without claiming anything, and the handler returns
+  `{detached: true, task_id, note}` — the task keeps running unclaimed on
+  the registry's root context and stays fetchable via `collect`; the work
+  itself is never lost, only the in-call observation of it. A nil `d.reg`
+  (registry unavailable) is rejected loudly rather than silently falling
+  back to a direct `Dispatch` call.
+  **Every dispatch completion — the ollama one-shot branch, the awaited
+  fork, and the background fork alike — appends one `budget.Outcome` row**
+  via `(*Tracker).RecordOutcome` (see "Budget tracker" `outcomes` table):
+  CLI, resolved model, risk, wall-clock duration, real token counts, and
   `Signals` (routing signals extracted from the raw message via
   `dispatchSignals` → `signals.Extract("dispatch", []string{message},
   config.Project{})`, comma-joined — recorded for learning, not routing,
@@ -1352,25 +1388,29 @@ REPL loop.
   dispatch error wraps one, else `"other"` (`outcomeErrKind`). As with the
   budget-event record above, an outcome-record failure is narrated via
   `logStatus` and never fails an otherwise-completed dispatch — this is
-  the plan's one sanctioned soften of "never swallow errors". The thread
-  branch's post-dispatch bookkeeping (append the outcome row, wrap a
-  dispatch error as `dispatch %s: %w`, or shape the success result map) is
-  the shared `(*conductorDeps).finishDispatch(ctx, dispatchMeta, res
+  the plan's one sanctioned soften of "never swallow errors". Awaited
+  outcome rows now carry a non-empty `TaskID` with `Background: false`
+  (distinguishing them from `background: true` rows, which carry both
+  `TaskID` and `Background: true`) — before this task only background rows
+  ever set `TaskID`. Post-dispatch bookkeeping (append the outcome row,
+  wrap a dispatch error as `dispatch %s: %w`, or shape the success result
+  map) is the shared `(*conductorDeps).finishDispatch(ctx, dispatchMeta, res
   agent.TurnResult, dispatchErr error) (map[string]any, error)` method —
   built from a `dispatchMeta{ProjectID, Thread, CLI, Model, Risk, Signals,
-  TaskID, Background, Start}` struct assembled before `Manager.Dispatch`
-  runs. `finishDispatch` is the function background task completions share
-  with this synchronous path — reused verbatim, not reimplemented.
+  TaskID, Background, Start}` struct assembled before either fork's
+  `Manager.Dispatch` runs. `finishDispatch` is the one function every task
+  completion (awaited or background) shares — reused verbatim, not
+  reimplemented.
 - **`background: bool`** — `dispatch` takes an optional `background`
-  argument. `false`/omitted is the synchronous path described above,
-  unchanged. `true` spawns a `taskRegistry` task and returns
-  `{task_id, thread, cli, status}` immediately instead of waiting for the
-  turn to finish; `collect` (Task 8) later fetches the result. Spawn-time
-  work runs in this fixed order, deliberately front-loaded so failures are
-  synchronous and cheap — nothing here touches the (potentially expensive)
-  project/thread resolution that follows:
-  1. The same arg validation as sync (unknown cli, empty message, invalid
-     risk).
+  argument. `true` spawns the same kind of `taskRegistry` task as the
+  awaited path above (same `spec`, same `d.reg.Spawn` call) but skips the
+  observer entirely, returning `{task_id, thread, cli, status}` immediately
+  instead of waiting for the turn to finish; `collect` (Task 8) later
+  fetches the result. Spawn-time work runs in this fixed order, deliberately
+  front-loaded so failures are synchronous and cheap — nothing here touches
+  the (potentially expensive) project/thread resolution that follows:
+  1. The same arg validation as the awaited path (unknown cli, empty
+     message, invalid risk).
   2. **Ship/ollama rejection**: `risk: ship` background dispatches are
      rejected — the confirm-token handshake is interactive and cannot
      survive a tool call returning immediately — as are `cli: ollama`
@@ -1378,7 +1418,7 @@ REPL loop.
      enough to run synchronously. Both are plain errors naming `"background"`
      / `"ollama"` respectively.
   3. A nil `d.reg` (registry unavailable) is rejected loudly rather than
-     silently falling back to sync.
+     silently falling back to a direct dispatch.
   4. **`(*conductorDeps).spawnBudgetCheck(ctx, cli) error`** — refuses the
      spawn when `tracker.ShouldCircuitBreak(ctx, cli, budget.BreakerThreshold,
      budget.BreakerWindow)` reports the channel's circuit open, or when
@@ -1388,31 +1428,17 @@ REPL loop.
      fail on budget/circuit grounds is refused at spawn time instead of
      burning a registry slot only to fail invisibly later.
   5. Only past all four checks does project/thread resolution happen, after
-     which (in the thread branch, right after `meta := dispatchMeta{...}` is
-     assembled) the background fork builds an `agent.DispatchSpec` and a
-     `runFn(bctx, id)` closure — `bctx` is the registry's root context, not
-     this call's `ctx` — that sets `bmeta.Background = true; bmeta.TaskID =
-     id`, runs `m.mgr.Dispatch(bctx, spec, nil)` (no progress callback: this
-     tool call's JSON-RPC exchange is long gone by the time it completes),
-     and finishes through the same `d.finishDispatch(bctx, bmeta, res,
-     derr)` as sync. `d.reg.Spawn(taskSpec{...}, runFn)` registers it and
-     returns immediately with `{task_id, thread, cli, status}`
-     (`status` is `"running"` or `"queued"` per the registry's cap/ordering
-     rules — see "Background task registry" below).
-- **Sync busy-thread guard.** Immediately after the background branch
-  returns (so it never reaches here), a **synchronous** dispatch checks
-  `d.reg.Busy(m.mgr.ProjectID, thread, in.Risk)` and, if a live background
-  task already owns that thread or that project's edit-risk write lock,
-  errors `thread %q is busy with background task %s — collect it, wait, or
-  use another thread` instead of proceeding. This asymmetry is deliberate: a
-  **background** dispatch that collides with another live task QUEUES (the
-  registry's ordering rules handle it silently — see "Background task
-  registry"); a **synchronous** dispatch that collides cannot queue, because
-  the caller is blocked waiting on this call, so it errors loudly instead of
-  interleaving with a stateful thread's other in-flight turn. `Busy` is
-  nil-safe, so this guard is a no-op (never busy) when `d.reg` is nil —
-  existing sync dispatch behavior is unchanged when `background` is absent
-  and the registry isn't wired (e.g. most unit tests).
+     which (right after `meta := dispatchMeta{...}` and `spec := agent.
+     DispatchSpec{...}` are assembled) the background fork's `runFn(bctx,
+     id)` closure — `bctx` is the registry's root context, not this call's
+     `ctx` — sets `bmeta.Background = true; bmeta.TaskID = id`, brackets
+     `m.mgr.Dispatch(bctx, spec, nil)` (no progress callback: this tool
+     call's JSON-RPC exchange is long gone by the time it completes) with
+     `d.mirrorNow()`, and finishes through the same `d.finishDispatch(bctx,
+     bmeta, res, derr)` as the awaited fork. `d.reg.Spawn(taskSpec{...},
+     runFn)` registers it and returns immediately with `{task_id, thread,
+     cli, status}` (`status` is `"running"` or `"queued"` per the registry's
+     cap/ordering rules — see "Background task registry" below).
 - `thread_status(project?)` — resolves the project via the same
   `managerFor` and returns `{threads: []string, tasks: []string}`. `threads`
   comes from `agent.Manager.StatusLines()` (name, CLI, turn count,
@@ -1505,6 +1531,13 @@ REPL loop.
     `taskQueued` → `"<id> queued <behind X|at cap> (<cli>, thread
     <thread>, <elapsed>)"`; terminal states → `"<id> <state>[ unclaimed]
     (<cli>, thread <thread>)"`.
+- `dispatch_parallel` — awaited N-agent fan-out: an array of {cli, message,
+  risk, thread?, project?, model?, extra_roots?} specs, each spawned as a
+  registry task (read risk runs concurrently; ordering rules queue
+  collisions), observed by the same awaiter as `dispatch`. Per-task failures
+  (validation, budget, agent error) are per-entry results — the call errors
+  only on malformed arguments. Cancellation detaches all spawned tasks.
+  read|edit only; ship and ollama stay single-dispatch.
 - **Piggyback (Task 9)** — `withBackgroundStatus(tools []mcpserver.Tool, reg
   *taskRegistry) []mcpserver.Tool` (`cmd/styx/mcp_tasks.go`) is the single
   decoration point that keeps background work from being forgotten: it wraps
@@ -1591,16 +1624,20 @@ results to the caller.
   resurfacing on every status line. `run` errors are never swallowed: a
   failed task's `Err` field carries `err.Error()`, surfaced through `Get`/
   `Snapshot`/`StatusLine`, not dropped.
-- **`Busy` guard for sync dispatches** — `Busy(projectID, thread, risk)`
-  applies the same two ordering rules against live (queued or running)
-  background tasks, so a *synchronous* `dispatch` call can check before
-  running whether a background task already owns that thread or that
-  project's write lock, and returns the blocking task id instead of
-  interleaving with it.
-- **Nil-safety** — `Busy`, `Get`, `Claim`, `Snapshot`, and `StatusLine` are
-  all safe to call on a nil `*taskRegistry` (not-busy / zero-value+false /
-  no-op / nil slice / `""` respectively), so callers don't need a separate
-  "is async enabled" check.
+- **No sync bypass — every dispatch goes through the registry.** The
+  `Busy(projectID, thread, risk)` guard that used to let a *synchronous*
+  `dispatch` call check for a colliding live background task and error
+  loudly (`thread %q is busy with background task %s`) is gone (removed by
+  the awaited-dispatch task, superpowers 2026-07-08): since `dispatch`
+  awaits by default via `Spawn` + `awaitTasks` (see "Conductor MCP tools"
+  above), a thread or project-write collision now hits the same
+  `conflictLocked` ordering rules a `background: true` collision always
+  did, and **queues** rather than erroring. There is no longer a
+  synchronous caller that bypasses the registry to check.
+- **Nil-safety** — `Get`, `Claim`, `Snapshot`, and `StatusLine` are all safe
+  to call on a nil `*taskRegistry` (zero-value+false / no-op / nil slice /
+  `""` respectively), so callers don't need a separate "is async enabled"
+  check.
 - **State-file mirror (crash honesty, never resumption)** —
   `persistLocked` mirrors task state to `r.dir` via `writeTaskFile` on every
   `Spawn`/completion/`Claim` when `r.dir != ""` (`""` in most unit tests, so
@@ -1630,6 +1667,18 @@ results to the caller.
   stops. Claimed files whose `Finished` timestamp is older than
   `maxClaimedAge` (7 days, wired in Task 7) are pruned (`os.Remove`) during
   the same scan — claimed files are never orphans, only prune candidates.
+
+**Awaiter (`cmd/styx/mcp_await.go`).** Awaited dispatches are observed
+background tasks: `awaitTasks` polls the registry every second until every
+awaited id is terminal, streaming one compact progress line per change
+(per-task heartbeats from the activity board in Render vocabulary — ▸ / ⚠ /
+✓ — plus ✗ for an awaited task that finished in `taskError` or
+`taskOrphaned`, one-time "tN done — collect" notices for unrelated
+completions, the ollama watcher note when present) through the call's MCP
+progress emitter. Terminal awaited tasks are claimed — their results return
+inline. Context cancellation
+(host Esc → notifications/cancelled, or server EOF drain) detaches: nothing
+is claimed and the tasks keep running as collectible background work.
 
 ## Activity (internal/activity)
 
@@ -1748,10 +1797,16 @@ Writers call the throttle from the dispatch event path: the REPL's
 `printEvent` (every streamed event) and, for the quiet parallel fan-out
 (where `onEvent` is `nil` and `printEvent` never fires), a dedicated
 one-second ticker (`startMirrorTicker`) bracketing the `LiveRenderer` span.
-The conductor calls it from its `dispatch` tool's `onEvent` (every streamed
-event, ahead of the existing progress-notification throttle) and explicitly
-before/after a background task's `Dispatch` call (which passes `onEvent =
-nil`, so there is no other hook mid-flight). `cmdWatch` is a read-only loop:
+The conductor calls it from every `dispatch` task's `runFn` closure —
+awaited and background spawns alike now route through the registry, and
+each brackets its `Dispatch` call with explicit `d.mirrorNow()` calls before
+and after. A mechanical pulse goroutine
+in the conductor (`conductorDeps.pulse`, 1s tick) refreshes the throttled
+mirror whenever any agent or task is live and writes one unthrottled final
+frame on the live→idle transition — `styx watch` is live mid-run for
+background and awaited dispatches alike, with no ollama dependency. (This
+closes the Task-9 deferred limitation from the 2026-07-07 observability
+plan.) `cmdWatch` is a read-only loop:
 resolve the project via `watchMirrorPath(args)`, `ReadMirror` it, clear the
 screen, render via `activity.Render(states, note, stall, time.Now())`, sleep
 ~1s, repeat; a missing mirror (`errors.Is(err, fs.ErrNotExist)`) prints `(no

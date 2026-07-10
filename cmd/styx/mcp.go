@@ -568,6 +568,7 @@ func mcpTools(a *app) []mcpserver.Tool {
 		},
 		{
 			Name:        "refresh_intel",
+			Serial:      true,
 			Description: "Rebuild the per-project intelligence index (walk + convention sniff + agy module/key-symbol summaries) and return the fresh result. The deliberate write path.",
 			InputSchema: refreshIntelSchema,
 			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -644,7 +645,7 @@ func cmdMCP(a *app, args []string) error {
 	}
 	tools := append(mcpTools(a), withBackgroundStatus(conductorTools(d), d.reg)...)
 	srv := mcpserver.New("styx", mcpServerVersion, tools)
-	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, thread_status, memory_save, pipeline_run, rate_dispatch, collect)")
+	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, dispatch_parallel, thread_status, memory_save, pipeline_run, rate_dispatch, collect)")
 	go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake
 	err := srv.Serve(ctx, os.Stdin, os.Stdout)
 	// Remove the watch mirror file on shutdown (mirrors the REPL's identical

@@ -96,6 +96,13 @@ func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 		}
 	}
 
+	// Mechanical pulse: keeps the disk mirror live for background AND awaited
+	// work with no ollama dependency (awaited-dispatch spec). Only wired when
+	// the mirror itself is (same best-effort posture).
+	if d.mirror != nil {
+		go d.pulse(rootCtx)
+	}
+
 	// The ollama watcher summarizes cross-agent liveness into the board note,
 	// which the piggyback bg line and thread_status surface. Off the server's
 	// root context (dies with the server — no daemons); best-effort like the
@@ -135,6 +142,57 @@ func (d *conductorDeps) removeMirror() {
 	if err := os.Remove(d.mirrorPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		logStatus("watch mirror cleanup: %v", err)
 	}
+}
+
+// pulseTick is the mechanical mirror cadence; MirrorThrottle (2s) dedupes the
+// actual disk writes. A var so tests can shrink it.
+var pulseTick = 1 * time.Second
+
+// pulse drives the disk mirror while agents or tasks are live, plus one
+// unthrottled flush on the live→idle transition so `styx watch` shows final
+// ✓ done states instead of a stale last action. This is the mechanical layer
+// closing Task 9's deferred limitation (mirror frozen mid-run for background
+// tasks): it runs whenever the server runs — no ollama dependency, no config
+// gate — and dies with ctx (the server's root context; no daemons).
+func (d *conductorDeps) pulse(ctx context.Context) {
+	t := time.NewTicker(pulseTick)
+	defer t.Stop()
+	wasLive := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			live := d.anyLive()
+			switch {
+			case live:
+				d.mirrorNow()
+			case wasLive:
+				// Bypass the throttle for the final frame: the debounce could
+				// swallow it, and nothing else writes once everything is idle.
+				if err := activity.WriteMirror(d.mirrorPath, d.board.Snapshot(), d.board.WatcherNote()); err != nil {
+					logStatus("watch mirror: %v", err)
+				}
+			}
+			wasLive = live
+		}
+	}
+}
+
+// anyLive reports whether the board has an unfinished agent or the registry
+// a queued/running task.
+func (d *conductorDeps) anyLive() bool {
+	for _, s := range d.board.Snapshot() {
+		if !s.Done {
+			return true
+		}
+	}
+	for _, tk := range d.reg.Snapshot() {
+		if tk.State == taskQueued || tk.State == taskRunning {
+			return true
+		}
+	}
+	return false
 }
 
 // capPctFor returns the routing.toml cap_pct for a channel (0 = no cap).
@@ -392,7 +450,10 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 		{
 			Name: "dispatch",
 			Description: "Send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task. " +
-				"risk: read|edit|ship. ship requires the confirm_token handshake.",
+				"By default this WAITS: live progress streams while the agent works and the result returns inline — " +
+				"use it for anything the user is waiting on. background:true detaches instead (returns a task_id; " +
+				"collect fetches the result) — only when the user explicitly wants to keep working meanwhile. " +
+				"For several agents at once use dispatch_parallel. risk: read|edit|ship. ship requires the confirm_token handshake.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -505,22 +566,17 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					Model: model, Risk: in.Risk, Signals: dispatchSignals(in.Message),
 					Start: start,
 				}
+				spec := agent.DispatchSpec{
+					Thread: in.Thread, CLI: in.CLI, Model: model,
+					Message: in.Message, ExtraRoots: in.ExtraRoots,
+					ReadOnly: in.Risk == "read",
+				}
 				if in.Background {
-					spec := agent.DispatchSpec{
-						Thread: in.Thread, CLI: in.CLI, Model: model,
-						Message: in.Message, ExtraRoots: in.ExtraRoots,
-						ReadOnly: in.Risk == "read",
-					}
 					runFn := func(bctx context.Context, id string) (map[string]any, error) {
 						// bctx is the server's root context: the task survives
 						// this tool call returning and dies with the server.
-						// No progress notifications mid-flight (this call's
-						// JSON-RPC exchange is long gone); completion
-						// bookkeeping is the same finishDispatch as sync. There
-						// is no onEvent here (nil below) to drive the mirror
-						// mid-flight, so bracket the dispatch with explicit
-						// calls: one so `styx watch` shows the task starting,
-						// one to flush its Board.Done state on completion.
+						// The mechanical pulse mirrors mid-run; these brackets
+						// keep the start/end frames prompt.
 						bmeta := meta
 						bmeta.Background = true
 						bmeta.TaskID = id
@@ -535,45 +591,38 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}, runFn)
 					return map[string]any{"task_id": id, "thread": thread, "cli": in.CLI, "status": state}, nil
 				}
-				if blocker, busy := d.reg.Busy(m.mgr.ProjectID, thread, in.Risk); busy {
-					return nil, fmt.Errorf("thread %q is busy with background task %s — collect it, wait, or use another thread", thread, blocker)
+				// Awaited (the default): spawn through the same registry as
+				// background work — the ordering rules queue a thread collision
+				// instead of erroring — and observe until terminal, streaming
+				// board-derived progress. Cancellation (host Esc) detaches: the
+				// task keeps running and stays collectible; work is never lost
+				// (spec: awaited = observed background).
+				if d.reg == nil {
+					return nil, fmt.Errorf("dispatch unavailable (no task registry)")
 				}
-				notify, hasNotify := mcpserver.ProgressFn(ctx)
-				var events int
-				onEvent := func(ev agent.Event) {
-					events++
-					// Drive the disk mirror (Task 9) on every event, ahead of
-					// the streaming-chatter throttle below — d.mirror is
-					// itself debounced, so this is cheap and keeps a second
-					// `styx watch` process current during the dispatch.
+				runFn := func(bctx context.Context, id string) (map[string]any, error) {
+					ameta := meta
+					ameta.TaskID = id
 					d.mirrorNow()
-					var msg string
-					switch ev.Type {
-					case agent.EventInit:
-						msg = in.CLI + ": session started"
-					case agent.EventText:
-						if events%5 != 0 { // throttle streaming chatter
-							return
-						}
-						msg = fmt.Sprintf("%s: streaming (%d events)", in.CLI, events)
-					case agent.EventResult:
-						msg = in.CLI + ": finishing"
-					}
-					if msg == "" {
-						return
-					}
-					logStatus("dispatch %s", msg)
-					if hasNotify {
-						notify(float64(events), msg)
-					}
+					res, derr := m.mgr.Dispatch(bctx, spec, nil)
+					d.mirrorNow()
+					return d.finishDispatch(bctx, ameta, res, derr)
 				}
-				res, err := m.mgr.Dispatch(ctx, agent.DispatchSpec{
-					Thread: in.Thread, CLI: in.CLI, Model: model,
-					Message: in.Message, ExtraRoots: in.ExtraRoots,
-					ReadOnly: in.Risk == "read",
-				}, onEvent)
-				d.mirrorNow() // final flush attempt: reflect Board.Done before returning
-				return d.finishDispatch(ctx, meta, res, err)
+				id, _ := d.reg.Spawn(taskSpec{
+					Project: in.Project, ProjectID: m.mgr.ProjectID, Thread: thread,
+					CLI: in.CLI, Model: model, Risk: in.Risk,
+				}, runFn)
+				notify, _ := mcpserver.ProgressFn(ctx)
+				out := d.awaitTasks(ctx, []string{id}, notify)
+				if out.Detached {
+					return map[string]any{"detached": true, "task_id": id,
+						"note": "await interrupted; the task keeps running — collect fetches its result"}, nil
+				}
+				r := out.Results[0]
+				if r["status"] != taskDone {
+					return nil, fmt.Errorf("%v", r["error"])
+				}
+				return r, nil
 			},
 		},
 		{
@@ -663,6 +712,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 		},
 		{
 			Name:        "pipeline_run",
+			Serial:      true,
 			Description: "Run a styx pipeline: research | review | intel | auto. auto ships (branch→push→PR) and requires the confirm_token handshake.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
 				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto"}},
@@ -793,6 +843,128 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}
 				}
 				return map[string]any{"results": results, "pending": pending}, nil
+			},
+		},
+		{
+			Name: "dispatch_parallel",
+			Description: "Run several agent dispatches in parallel and WAIT for all of them: live combined " +
+				"progress streams while they work and every result returns inline, in input order. This is the " +
+				"default for multi-agent work the user is waiting on. read|edit risk only (no ship, no ollama); " +
+				"thread/project collisions queue per the ordering rules. Cancelling detaches: tasks keep running, " +
+				"collect fetches their results.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"tasks": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"project":     map[string]any{"type": "string", "description": "registered project alias; empty = the project styx was launched in"},
+								"thread":      map[string]any{"type": "string", "description": "thread name; empty = cli name"},
+								"cli":         map[string]any{"type": "string", "enum": []string{"claude", "codex", "agy"}},
+								"message":     map[string]any{"type": "string"},
+								"model":       map[string]any{"type": "string", "description": "tier (opus|sonnet|haiku) or raw model id; empty = channel default"},
+								"risk":        map[string]any{"type": "string", "enum": []string{"read", "edit"}},
+								"extra_roots": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							},
+							"required": []string{"cli", "message", "risk"},
+						},
+					},
+				},
+				"required": []string{"tasks"},
+			},
+			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
+				var in struct {
+					Tasks []dispatchArgs `json:"tasks"`
+				}
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return nil, fmt.Errorf("dispatch_parallel args: %w", err)
+				}
+				if len(in.Tasks) == 0 {
+					return nil, fmt.Errorf("tasks is required (at least one)")
+				}
+				if d.reg == nil {
+					return nil, fmt.Errorf("dispatch_parallel unavailable (no task registry)")
+				}
+				results := make([]map[string]any, len(in.Tasks))
+				var ids []string
+				idIndex := map[string]int{}
+				for i, tin := range in.Tasks {
+					fail := func(err error) {
+						results[i] = map[string]any{"status": taskError, "error": err.Error(),
+							"cli": tin.CLI, "thread": tin.Thread}
+					}
+					switch tin.CLI {
+					case "claude", "codex", "agy":
+					default:
+						fail(fmt.Errorf("unknown cli %q (claude|codex|agy — ollama one-shots and ship risk are single-dispatch only)", tin.CLI))
+						continue
+					}
+					if tin.Message == "" {
+						fail(fmt.Errorf("message is required"))
+						continue
+					}
+					if tin.Risk != "read" && tin.Risk != "edit" {
+						fail(fmt.Errorf("risk must be read|edit in a parallel dispatch, got %q", tin.Risk))
+						continue
+					}
+					if err := d.spawnBudgetCheck(ctx, tin.CLI); err != nil {
+						fail(err)
+						continue
+					}
+					m, err := d.managerFor(tin.Project)
+					if err != nil {
+						fail(err)
+						continue
+					}
+					model := tin.Model
+					if resolved, ok := d.a.routing.Tiers[model]; ok {
+						model = resolved
+					}
+					thread := tin.Thread
+					if thread == "" {
+						thread = tin.CLI
+					}
+					meta := dispatchMeta{
+						ProjectID: m.mgr.ProjectID, Thread: thread, CLI: tin.CLI,
+						Model: model, Risk: tin.Risk, Signals: dispatchSignals(tin.Message),
+						Start: time.Now(),
+					}
+					spec := agent.DispatchSpec{
+						Thread: tin.Thread, CLI: tin.CLI, Model: model,
+						Message: tin.Message, ExtraRoots: tin.ExtraRoots,
+						ReadOnly: tin.Risk == "read",
+					}
+					mgr := m.mgr
+					runFn := func(bctx context.Context, id string) (map[string]any, error) {
+						ameta := meta
+						ameta.TaskID = id
+						d.mirrorNow()
+						res, derr := mgr.Dispatch(bctx, spec, nil)
+						d.mirrorNow()
+						return d.finishDispatch(bctx, ameta, res, derr)
+					}
+					id, _ := d.reg.Spawn(taskSpec{
+						Project: tin.Project, ProjectID: m.mgr.ProjectID, Thread: thread,
+						CLI: tin.CLI, Model: model, Risk: tin.Risk,
+					}, runFn)
+					ids = append(ids, id)
+					idIndex[id] = i
+				}
+				if len(ids) == 0 {
+					return map[string]any{"results": results, "detached": false}, nil
+				}
+				notify, _ := mcpserver.ProgressFn(ctx)
+				out := d.awaitTasks(ctx, ids, notify)
+				if out.Detached {
+					return map[string]any{"detached": true, "task_ids": ids, "results": results,
+						"note": "await interrupted; tasks keep running — collect fetches their results"}, nil
+				}
+				for j, id := range ids {
+					results[idIndex[id]] = out.Results[j]
+				}
+				return map[string]any{"results": results, "detached": false}, nil
 			},
 		},
 	}

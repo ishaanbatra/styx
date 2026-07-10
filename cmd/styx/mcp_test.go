@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -240,24 +242,76 @@ func TestHandleChannelHealth_AllAndSingle(t *testing.T) {
 	}
 }
 
+// syncBuffer is a concurrency-safe bytes.Buffer. Since Task 1
+// (concurrent tools/call), a Serve response can land while the test's input
+// writer is still running on another goroutine, so tests that peek at
+// output before Serve returns need a safe accessor.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func TestMCPTools_EndToEndChannelHealth(t *testing.T) {
 	r, tr := testRouterAndTracker(t)
 	a := &app{router: r, tracker: tr}
 	srv := mcpserver.New("styx", "test", mcpTools(a))
-	in := strings.Join([]string{
-		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"channel_health","arguments":{}}}`,
-	}, "\n") + "\n"
-	var out bytes.Buffer
-	if err := srv.Serve(context.Background(), strings.NewReader(in), &out); err != nil {
+
+	// channel_health's handler runs a real, ctx-aware sqlite query. Since
+	// Task 1, tools/call runs on its own goroutine and EOF cancels every
+	// in-flight call, so writing the whole script and closing the reader
+	// immediately (as a plain strings.Reader would) races the dispatched
+	// goroutine and can cancel the query before it starts — a real host's
+	// stdin pipe would instead block until it actually disconnects. Model
+	// that here with io.Pipe: keep it open until the response is observed,
+	// then close it (EOF) to let Serve return.
+	pr, pw := io.Pipe()
+	out := &syncBuffer{}
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(context.Background(), pr, out) }()
+
+	go func() {
+		for _, line := range []string{
+			`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+			`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"channel_health","arguments":{}}}`,
+		} {
+			if _, err := io.WriteString(pw, line+"\n"); err != nil {
+				return
+			}
+		}
+	}()
+
+	deadline := time.After(5 * time.Second)
+	for !strings.Contains(out.String(), `"id":2`) {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for channel_health response")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	pw.Close()
+	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+
 	// The tools/call payload is JSON-marshaled and then embedded as a "text"
 	// string field, so the outer encoder escapes its quotes (e.g. \"circuit_open\").
 	// Match the bare field name, consistent with TestMCPTools_EndToEndRoute's
 	// same workaround for tool-call (not tools/list) output.
-	if !strings.Contains(out.String(), "circuit_open") || !strings.Contains(out.String(), "error_kinds") {
-		t.Fatalf("channel_health output missing fields:\n%s", out.String())
+	s := out.String()
+	if !strings.Contains(s, "circuit_open") || !strings.Contains(s, "error_kinds") {
+		t.Fatalf("channel_health output missing fields:\n%s", s)
 	}
 }
 

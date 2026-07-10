@@ -7,6 +7,12 @@ author: styx (brainstormed with ishaanbatra)
 
 # Live Dispatch Observability for Styx
 
+> **Update (2026-07-08):** the Task-9 deferred limitation (disk mirror frozen
+> between a background task's start and end) is closed by the awaited-dispatch
+> design — see `2026-07-08-styx-awaited-dispatch-design.md`: a mechanical
+> pulse in the conductor refreshes the mirror every second while anything is
+> live, and dispatches now await by default with inline results.
+
 ## Problem
 
 When a styx session dispatches work to agent CLIs — especially a parallel

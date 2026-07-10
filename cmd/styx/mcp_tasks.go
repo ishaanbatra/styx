@@ -182,31 +182,6 @@ func (r *taskRegistry) execute(t *bgTask) {
 	r.startEligibleLocked()
 }
 
-// Busy reports the live (queued or running) task that would collide with a
-// SYNCHRONOUS dispatch on (projectID, thread, risk) — the same two ordering
-// rules, checked so a sync turn never interleaves with background work on a
-// stateful session. Nil-safe.
-func (r *taskRegistry) Busy(projectID, thread, risk string) (string, bool) {
-	if r == nil {
-		return "", false
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, id := range r.order {
-		o := r.tasks[id]
-		if o.State != taskRunning && o.State != taskQueued {
-			continue
-		}
-		if o.Spec.ProjectID == projectID && o.Spec.Thread == thread {
-			return o.ID, true
-		}
-		if risk != "read" && o.Spec.Risk != "read" && o.Spec.ProjectID == projectID {
-			return o.ID, true
-		}
-	}
-	return "", false
-}
-
 // Get returns a copy of the task (safe to read without the lock).
 func (r *taskRegistry) Get(id string) (bgTask, bool) {
 	if r == nil {

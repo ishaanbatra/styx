@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func nonEmptyLines(s string) []string {
@@ -213,5 +215,89 @@ func TestServe_ToolHandlerErrorIsToolResult(t *testing.T) {
 	// A failing handler is a tool result with isError=true, NOT a protocol error.
 	if !strings.Contains(lines[0], `"isError":true`) || strings.Contains(lines[0], `"error":{`) {
 		t.Fatalf("handler error should be an isError tool result: %s", lines[0])
+	}
+}
+
+// TestConcurrentToolCalls proves two tools/call requests run at once: the
+// slow tool (sent first) blocks until the fast tool — which the serial
+// server would never reach — releases it. Completing at all is the
+// concurrency proof; once the gate opens both goroutines race to the
+// encoder, so response ORDER is deliberately not asserted.
+func TestConcurrentToolCalls(t *testing.T) {
+	gate := make(chan struct{})
+	slow := Tool{Name: "slow", Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+		<-gate
+		return map[string]any{"who": "slow"}, nil
+	}}
+	fast := Tool{Name: "fast", Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+		close(gate)
+		return map[string]any{"who": "fast"}, nil
+	}}
+	lines := serve(t, New("t", "0", []Tool{slow, fast}),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fast","arguments":{}}}`)
+	if len(lines) != 2 {
+		t.Fatalf("want 2 responses, got %d: %v", len(lines), lines)
+	}
+	joined := strings.Join(lines, "\n")
+	for _, want := range []string{`"id":1`, `"id":2`, "slow", "fast"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("responses must cover both calls (missing %q): %v", want, lines)
+		}
+	}
+}
+
+// TestCancelledNotificationCancelsCall: notifications/cancelled must cancel
+// the matching in-flight call's context — this is how a host-side interrupt
+// (Esc in Claude Code) reaches a long-running handler.
+func TestCancelledNotificationCancelsCall(t *testing.T) {
+	slow := Tool{Name: "slow", Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+		<-ctx.Done()
+		return map[string]any{"cancelled": true}, nil
+	}}
+	lines := serve(t, New("t", "0", []Tool{slow}),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow","arguments":{}}}`,
+		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
+	// callTool wraps the handler's result in an escaped, indented JSON string
+	// inside content[].text, so the literal on the wire is `\"cancelled\": true`.
+	if len(lines) != 1 || !strings.Contains(lines[0], `\"cancelled\": true`) {
+		t.Fatalf("cancelled call must unblock and answer, got: %v", lines)
+	}
+}
+
+// TestEOFCancelsInflightCalls: when the host closes stdin, Serve cancels
+// every in-flight call, waits for handlers to wind down, and still writes
+// their responses before returning.
+func TestEOFCancelsInflightCalls(t *testing.T) {
+	slow := Tool{Name: "slow", Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+		<-ctx.Done()
+		return map[string]any{"detached": true}, nil
+	}}
+	lines := serve(t, New("t", "0", []Tool{slow}),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow","arguments":{}}}`)
+	// See TestCancelledNotificationCancelsCall: the wire literal is escaped.
+	if len(lines) != 1 || !strings.Contains(lines[0], `\"detached\": true`) {
+		t.Fatalf("EOF must cancel and drain in-flight calls, got: %v", lines)
+	}
+}
+
+// TestSerialToolsDoNotOverlap: Tool.Serial handlers share one lane.
+func TestSerialToolsDoNotOverlap(t *testing.T) {
+	var active, overlaps atomic.Int32
+	mk := func(name string) Tool {
+		return Tool{Name: name, Serial: true, Handler: func(context.Context, json.RawMessage) (any, error) {
+			if active.Add(1) > 1 {
+				overlaps.Add(1)
+			}
+			time.Sleep(20 * time.Millisecond)
+			active.Add(-1)
+			return "ok", nil
+		}}
+	}
+	serve(t, New("t", "0", []Tool{mk("a"), mk("b")}),
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"b","arguments":{}}}`)
+	if overlaps.Load() != 0 {
+		t.Fatalf("Serial tools overlapped %d time(s)", overlaps.Load())
 	}
 }
