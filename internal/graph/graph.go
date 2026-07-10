@@ -12,7 +12,9 @@
 package graph
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -132,4 +134,106 @@ func gitHead(repo string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// ErrBuildInProgress is returned when another styx process holds the build lock.
+var ErrBuildInProgress = errors.New("graph build already in progress")
+
+// Available reports whether the graphify integration is active: the external
+// CLI is on PATH and the STYX_GRAPHIFY=off escape hatch is not set. This is
+// the feature's entire configuration surface — no routing.toml key.
+func Available() (string, bool) {
+	if os.Getenv("STYX_GRAPHIFY") == "off" {
+		return "", false
+	}
+	bin, err := exec.LookPath("graphify")
+	if err != nil {
+		return "", false
+	}
+	return bin, true
+}
+
+// LogPath returns the build log location for narration.
+func LogPath(proj config.Project) (string, error) {
+	d, err := StateDir(proj)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "build.log"), nil
+}
+
+// tryLock takes the per-project build lock. A lock file older than
+// BuildTimeout belongs to a dead build and is reclaimed.
+func tryLock(dir string) (release func(), err error) {
+	lock := filepath.Join(dir, "build.lock")
+	f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if os.IsExist(err) {
+		fi, serr := os.Stat(lock)
+		if serr == nil && time.Since(fi.ModTime()) > BuildTimeout {
+			if rerr := os.Remove(lock); rerr == nil {
+				return tryLock(dir) // one retry after reclaiming
+			}
+		}
+		return nil, ErrBuildInProgress
+	}
+	if err != nil {
+		return nil, fmt.Errorf("take build lock: %w", err)
+	}
+	fmt.Fprintf(f, "%d", os.Getpid())
+	f.Close()
+	return func() { os.Remove(lock) }, nil
+}
+
+// graphShape is the minimal structure a valid graph.json must parse into.
+type graphShape struct {
+	Nodes []json.RawMessage `json:"nodes"`
+	Edges []json.RawMessage `json:"edges"`
+}
+
+// Build runs `<bin> . --update` inside the repo, streaming output to
+// state/graph/<id>/build.log, then validates graphify-out/graph.json and
+// records the built HEAD. ctx bounds the subprocess (callers pass a
+// BuildTimeout-derived context).
+func Build(ctx context.Context, proj config.Project, bin string) error {
+	d, err := StateDir(proj)
+	if err != nil {
+		return err
+	}
+	if err := paths.EnsureDir(d); err != nil {
+		return fmt.Errorf("ensure graph state dir: %w", err)
+	}
+	release, err := tryLock(d)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	logPath := filepath.Join(d, "build.log")
+	logF, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("open build log: %w", err)
+	}
+	defer logF.Close()
+
+	head := gitHead(proj.Path) // record BEFORE the build: commits landing mid-build re-trigger next check
+	cmd := exec.CommandContext(ctx, bin, ".", "--update")
+	cmd.Dir = proj.Path
+	cmd.Stdout, cmd.Stderr = logF, logF
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("graphify build failed (log: %s): %w", logPath, err)
+	}
+
+	raw, err := os.ReadFile(GraphPath(proj))
+	if err != nil {
+		return fmt.Errorf("graphify produced no graph.json (log: %s): %w", logPath, err)
+	}
+	var shape graphShape
+	if err := json.Unmarshal(raw, &shape); err != nil {
+		return fmt.Errorf("graph.json is not valid JSON (log: %s): %w", logPath, err)
+	}
+	if len(shape.Nodes) == 0 {
+		return fmt.Errorf("graph.json has zero nodes — refusing to record build (log: %s)", logPath)
+	}
+
+	return SaveMeta(proj, &Meta{SchemaVersion: SchemaVersion, BuiltAt: time.Now().UTC(), GitHead: head})
 }

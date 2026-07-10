@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -134,5 +136,103 @@ func TestIsStale_EmptyProjectID(t *testing.T) {
 	stale, _ := IsStale(proj)
 	if stale {
 		t.Error("empty-ID (unregistered) project must never be reported stale")
+	}
+}
+
+// fakeGraphify writes a scripted stand-in for the graphify CLI and returns its
+// path. The script emulates `graphify . --update`: writes graphify-out/graph.json
+// in the cwd. Behavior variants via mode: "ok", "fail" (exit 1), "badjson".
+func fakeGraphify(t *testing.T, mode string) string {
+	t.Helper()
+	dir := t.TempDir()
+	var body string
+	switch mode {
+	case "ok":
+		body = "#!/bin/sh\n[ \"$1\" = \".\" ] && [ \"$2\" = \"--update\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\nmkdir -p graphify-out\nprintf '{\"nodes\":[{\"id\":\"a\"}],\"edges\":[]}' > graphify-out/graph.json\n"
+	case "fail":
+		body = "#!/bin/sh\n[ \"$1\" = \".\" ] && [ \"$2\" = \"--update\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\necho boom >&2\nexit 1\n"
+	case "badjson":
+		body = "#!/bin/sh\n[ \"$1\" = \".\" ] && [ \"$2\" = \"--update\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\nmkdir -p graphify-out\nprintf 'not json' > graphify-out/graph.json\n"
+	default:
+		t.Fatalf("unknown mode %q", mode)
+	}
+	p := filepath.Join(dir, "graphify")
+	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestBuild(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		wantErr bool
+	}{
+		{"success writes meta", "ok", false},
+		{"nonzero exit surfaces error", "fail", true},
+		{"unparseable graph.json surfaces error", "badjson", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			proj := newTestRepo(t)
+			bin := fakeGraphify(t, tt.mode)
+			err := Build(context.Background(), proj, bin)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Build err = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				if _, lerr := LoadMeta(proj); lerr == nil {
+					t.Error("failed build must not write meta")
+				}
+				return
+			}
+			m, lerr := LoadMeta(proj)
+			if lerr != nil {
+				t.Fatalf("LoadMeta after build: %v", lerr)
+			}
+			if m.GitHead != gitHead(proj.Path) {
+				t.Error("meta.GitHead must record the built HEAD")
+			}
+			if stale, reason := IsStale(proj); stale {
+				t.Errorf("freshly built project reported stale: %s", reason)
+			}
+		})
+	}
+}
+
+func TestBuild_LockBlocksConcurrent(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	proj := newTestRepo(t)
+	d, err := StateDir(proj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an in-flight build: fresh lock file.
+	if err := os.WriteFile(filepath.Join(d, "build.lock"), []byte("pid"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = Build(context.Background(), proj, fakeGraphify(t, "ok"))
+	if !errors.Is(err, ErrBuildInProgress) {
+		t.Fatalf("want ErrBuildInProgress, got %v", err)
+	}
+	// An expired lock (older than BuildTimeout) is reclaimed.
+	old := time.Now().Add(-BuildTimeout - time.Minute)
+	if err := os.Chtimes(filepath.Join(d, "build.lock"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := Build(context.Background(), proj, fakeGraphify(t, "ok")); err != nil {
+		t.Fatalf("expired lock should be reclaimed, got %v", err)
+	}
+}
+
+func TestAvailable_EnvOff(t *testing.T) {
+	t.Setenv("STYX_GRAPHIFY", "off")
+	if _, ok := Available(); ok {
+		t.Error("STYX_GRAPHIFY=off must disable the feature")
 	}
 }
