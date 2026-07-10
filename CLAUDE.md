@@ -41,6 +41,9 @@ no docs. A PostToolUse hook in `.claude/settings.json` reminds you after every
   message windows, cooldowns, circuit-breaker query
 - **Intel** (`internal/intel/`): per-project codebase index rendered to
   `<project>/.claude/context.md`
+- **Graph** (`internal/graph/`): per-project graphify knowledge-graph
+  freshness — wraps the external `graphify` CLI, artifacts in-repo at
+  `graphify-out/`, HEAD-drift staleness, auto-built on conductor launch
 - **Pipeline** (`internal/pipeline/` + `cmd/styx/auto.go`): resumable 7-stage
   auto flow (research → intel → plan → execute → test → review → ship)
 - **Research** (`internal/research/` + `internal/brief/`): drafter/critic

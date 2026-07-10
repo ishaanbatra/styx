@@ -86,6 +86,8 @@ restarting the session.
 |---|---|
 | `intel <project>` | Build/refresh the codebase intel index |
 | `intel ls` | List cached intel indexes + freshness state |
+| `graphify <project> [--force]` | Build/refresh the graphify knowledge graph for a repo (wraps the external `graphify` CLI; skipped if not installed) |
+| `graphify ls` | List knowledge-graph freshness per registered project |
 | `context show` | Print rendered `.claude/context.md` for the current project |
 | `runs ls` | List pipeline runs for the current project |
 | `runs show <run-id>` | Show JSON state of a specific run |
