@@ -140,7 +140,7 @@ func TestIsStale_EmptyProjectID(t *testing.T) {
 }
 
 // fakeGraphify writes a scripted stand-in for the graphify CLI and returns its
-// path. The script emulates `graphify . --update`: writes graphify-out/graph.json
+// path. The script emulates `graphify update .`: writes graphify-out/graph.json
 // in the cwd. Behavior variants via mode: "ok", "fail" (exit 1), "badjson".
 func fakeGraphify(t *testing.T, mode string) string {
 	t.Helper()
@@ -148,11 +148,11 @@ func fakeGraphify(t *testing.T, mode string) string {
 	var body string
 	switch mode {
 	case "ok":
-		body = "#!/bin/sh\n[ \"$1\" = \".\" ] && [ \"$2\" = \"--update\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\nmkdir -p graphify-out\nprintf '{\"nodes\":[{\"id\":\"a\"}],\"edges\":[]}' > graphify-out/graph.json\n"
+		body = "#!/bin/sh\n[ \"$1\" = \"update\" ] && [ \"$2\" = \".\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\nmkdir -p graphify-out\nprintf '{\"nodes\":[{\"id\":\"a\"}],\"edges\":[]}' > graphify-out/graph.json\n"
 	case "fail":
-		body = "#!/bin/sh\n[ \"$1\" = \".\" ] && [ \"$2\" = \"--update\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\necho boom >&2\nexit 1\n"
+		body = "#!/bin/sh\n[ \"$1\" = \"update\" ] && [ \"$2\" = \".\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\necho boom >&2\nexit 1\n"
 	case "badjson":
-		body = "#!/bin/sh\n[ \"$1\" = \".\" ] && [ \"$2\" = \"--update\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\nmkdir -p graphify-out\nprintf 'not json' > graphify-out/graph.json\n"
+		body = "#!/bin/sh\n[ \"$1\" = \"update\" ] && [ \"$2\" = \".\" ] || { echo \"unexpected argv: $@\" >&2; exit 2; }\nmkdir -p graphify-out\nprintf 'not json' > graphify-out/graph.json\n"
 	default:
 		t.Fatalf("unknown mode %q", mode)
 	}

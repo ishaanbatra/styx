@@ -348,7 +348,7 @@ func TestEnsureGraphsFresh(t *testing.T) {
 	gitRun("add", ".")
 	gitRun("commit", "-q", "-m", "init")
 
-	// Fake graphify that emulates `graphify . --update`, recording each
+	// Fake graphify that emulates `graphify update .`, recording each
 	// invocation (Build sets cmd.Dir to the repo, so the marker lands there).
 	binDir := t.TempDir()
 	bin := filepath.Join(binDir, "graphify")

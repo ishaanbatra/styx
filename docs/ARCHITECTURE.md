@@ -788,13 +788,15 @@ with `STYX_GRAPHIFY=off`. No routing.toml surface.
   (schema_version, built_at, git_head; atomic write), `build.log`,
   `build.lock` (O_EXCL; expired after BuildTimeout=10m and reclaimed).
 - **Staleness:** HEAD-exact — stale iff meta or artifact missing, or current
-  git HEAD != recorded head. No age/commit-count tolerance: `graphify --update`
+  git HEAD != recorded head. No age/commit-count tolerance: `graphify update .`
   is an incremental SHA256-cached pass, so rebuilds are cheap (unlike intel's
   LLM-priced builds). Empty-ID projects (unregistered plain dirs) are never
   stale.
-- **Build:** `graphify . --update` in the repo, ctx-bounded, output to
-  build.log; graph.json must parse with ≥1 node before meta is recorded, so a
-  failed build re-triggers on the next check.
+- **Build:** `graphify update .` in the repo, ctx-bounded, output to
+  build.log; this command bootstraps the initial build via pure AST parsing
+  (no LLM/API key needed) and runs incremental updates on subsequent calls.
+  graph.json must parse with ≥1 node before meta is recorded, so a failed
+  build re-triggers on the next check.
 - **Entry points:** `styx graphify <target> [--force]` / `styx graphify ls`
   (cmd/styx/graphify.go, synchronous); conductor launch auto-build
   (cmd/styx/launch.go `ensureGraphsFresh`, background goroutine, silent after

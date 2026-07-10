@@ -1,12 +1,12 @@
 // Package graph keeps per-project graphify knowledge graphs fresh. It wraps
 // the external `graphify` CLI (tree-sitter code knowledge graphs, installed
-// separately via `uv tool install graphifyy`). Builds run `graphify . --update`
+// separately via `uv tool install graphifyy`). Builds run `graphify update .`
 // inside the repo; artifacts stay in the repo's graphify-out/ directory (the
 // CLI's only output location, and where graphify's own Claude Code skill and
 // hooks expect them). Styx records only build metadata under
 // ~/.config/styx/state/graph/<project-id>/ to decide when a rebuild is due:
 // a graph is stale when the repo's git HEAD has moved since the last build or
-// the artifact is missing. Rebuilds are cheap (graphify --update is an
+// the artifact is missing. Rebuilds are cheap (graphify update . is an
 // incremental, SHA256-cached AST pass), which is why staleness is HEAD-exact
 // rather than intel's tolerant 5-commit/7-day rule.
 package graph
@@ -190,7 +190,7 @@ type graphShape struct {
 	Edges []json.RawMessage `json:"edges"`
 }
 
-// Build runs `<bin> . --update` inside the repo, streaming output to
+// Build runs `<bin> update .` inside the repo, streaming output to
 // state/graph/<id>/build.log, then validates graphify-out/graph.json and
 // records the built HEAD. ctx bounds the subprocess (callers pass a
 // BuildTimeout-derived context).
@@ -216,7 +216,7 @@ func Build(ctx context.Context, proj config.Project, bin string) error {
 	defer logF.Close()
 
 	head := gitHead(proj.Path) // record BEFORE the build: commits landing mid-build re-trigger next check
-	cmd := exec.CommandContext(ctx, bin, ".", "--update")
+	cmd := exec.CommandContext(ctx, bin, "update", ".")
 	cmd.Dir = proj.Path
 	cmd.Stdout, cmd.Stderr = logF, logF
 	if err := cmd.Run(); err != nil {
