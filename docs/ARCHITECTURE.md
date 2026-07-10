@@ -112,7 +112,8 @@ Shared pieces:
   launcher as `Opts.ExtraRepos` (rendered as `--add-dir` flags on the Claude
   Code session) and folded into the guidance as a note telling the brain to
   also pass them as the MCP `dispatch` tool's `extra_roots` so dispatched
-  agent threads get the same access — loads `internal/guidance.Load(project.Path)`,
+  agent threads get the same access → fire background graph builds for stale bound repos
+  (`ensureGraphsFresh`, see Graph section) → loads `internal/guidance.Load(project.Path)`,
   appends `recallRoutingPrefs(a)` output when non-empty, resolves the running
   `styx` binary via `os.Executable()`, and calls
   `(&launcher.ClaudeHost{}).Launch(ctx, launcher.Opts{...})`.
@@ -802,6 +803,8 @@ with `STYX_GRAPHIFY=off`. No routing.toml surface.
   (cmd/styx/launch.go `ensureGraphsFresh`, background goroutine, silent after
   the host owns the TTY — build output goes only to build.log). A build killed
   by session exit leaves stale meta and retries next launch.
+  Graph artifacts land in the target repository's working tree (`graphify-out/`);
+  users should add this directory to the repo's `.gitignore` or their global git excludes.
 
 ## Memory (internal/memory)
 
