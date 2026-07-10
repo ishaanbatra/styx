@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/ishaanbatra/styx/internal/graph"
 	"github.com/ishaanbatra/styx/internal/guidance"
 	"github.com/ishaanbatra/styx/internal/launcher"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -41,6 +43,40 @@ func cmdResume(a *app, sessionID string) error {
 	return launchConductor(a, nil, extraArgs)
 }
 
+// ensureGraphsFresh fires a background graphify build for every stale bound
+// repo. All narration happens HERE, before the host owns the TTY — the
+// goroutines are silent (build output goes to state/graph/<id>/build.log)
+// because a stderr write mid-session would corrupt the Claude Code TUI.
+// The returned channel closes when all builds finish; launchConductor ignores
+// it (builds race the session and die with the process — meta is only written
+// on success, so an interrupted build simply retries next launch).
+func ensureGraphsFresh(bin string, projs []project.Project) <-chan struct{} {
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, p := range projs {
+		stale, reason := graph.IsStale(p)
+		if !stale {
+			continue
+		}
+		logPath, lerr := graph.LogPath(p)
+		if lerr != nil {
+			logStatus("graph build skipped for %s: %v", p.Name, lerr)
+			continue
+		}
+		logStatus("knowledge graph for %s is stale (%s) — rebuilding in background (log: %s)", p.Name, reason, logPath)
+		wg.Add(1)
+		go func(p project.Project) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), graph.BuildTimeout)
+			defer cancel()
+			// Errors land in build.log via Build; nothing to stderr from here.
+			_ = graph.Build(ctx, p, bin)
+		}(p)
+	}
+	go func() { wg.Wait(); close(done) }()
+	return done
+}
+
 // launchConductor is the shared guidance-assembly + host-launch path behind
 // cmdLaunch and cmdResume; extraArgs are passed through to the host CLI after
 // its standard flags.
@@ -58,6 +94,7 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 	if len(repos) > 1 {
 		extraTail = repos[1:]
 	}
+	graphProjects := []project.Project{p}
 	for _, name := range extraTail {
 		ep, rerr := target.Resolve(target.Spec{Alias: name})
 		if rerr != nil {
@@ -65,6 +102,10 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 		}
 		extras = append(extras, ep.Path)
 		fmt.Fprintf(&extraNote, "- %s: %s (pass in dispatch extra_roots to give threads access)\n", ep.Name, ep.Path)
+		graphProjects = append(graphProjects, ep)
+	}
+	if bin, ok := graph.Available(); ok {
+		ensureGraphsFresh(bin, graphProjects) // background; dies with the session
 	}
 	guide, err := guidance.Load(p.Path)
 	if err != nil {
