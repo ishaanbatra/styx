@@ -63,7 +63,10 @@ touching any of these.
 - Routing is a transparent, user-edited rules table (`routing.toml`), not an
   LLM router. The coming REPL brain is additive; the table stays.
 - SQLite via `modernc.org/sqlite` (pure Go, no cgo). Don't switch drivers.
-- macOS-first: Keychain for secrets, `open -a Ollama` auto-launch.
+- Tiered platform support: macOS first-class (Keychain secrets, ollama
+  auto-launch), Windows native (Credential Manager secrets, no auto-launch),
+  Linux best-effort (no secret store). Platform code goes behind build tags
+  or `runtime.GOOS` checks — never inline `exec` of OS-specific tools.
 - State is files on disk (TOML/JSON/SQLite under `~/.config/styx/`), atomic
   tmp+rename writes. No daemons.
 
