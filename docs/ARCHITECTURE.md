@@ -1885,12 +1885,25 @@ otherwise, no-op when quiet. One `Tracker` per invocation; `Stage` lifecycle
 is Done/Fail/Info, opening a stage implicitly closes the previous one. All
 lines prefixed `[styx]` on stderr.
 
-## Secrets (internal/config/secrets.go)
+## Secrets (internal/config/secrets*.go)
 
-macOS Keychain under service `styx`; `migrate-secrets` verb moves plaintext env
-vars out of shell rc files. For each secret-shaped export (matching
+`internal/config/secrets.go` is the portable front: name validation, the
+`ErrSecretNotFound` / `ErrSecretsUnsupported` sentinels, `SecretStoreName()`,
+and the public `Secret`/`SetSecret`/`DeleteSecret` API, which delegate to
+per-OS backends. `secrets_darwin.go` talks to the macOS Keychain via the
+`security` CLI (service `styx`); `secrets_windows.go` talks to the Windows
+Credential Manager via `danieljoos/wincred` (pure Go, target prefix `styx/`);
+`secrets_other.go` fails every call with `ErrSecretsUnsupported` — secrets are
+**never** written to disk or env as a fallback. Each backend defines a
+`secretStore` name constant ("macOS Keychain" / "Windows Credential Manager" /
+"") surfaced by `SecretStoreName()`.
+
+The `migrate-secrets` verb moves plaintext env vars out of shell rc files into
+the platform store; it errors immediately (`ErrSecretsUnsupported`) on
+platforms with no store, and its prompts/summary name the platform store. For
+each secret-shaped export (matching
 `_API_KEY|_TOKEN|_SECRET`), the verb prompts the user to confirm, stores the value
-in Keychain, **deletes the line entirely** from the rc file (no commented copy;
+in the platform store, **deletes the line entirely** from the rc file (no commented copy;
 removal is per-occurrence — a declined duplicate of an identical line survives),
 writes a one-time `<rc>.styx-bak` backup (0600) if not already present, and sets
 the rc file to 0600 perms (atomic tmp+rename). After successful migration, prints

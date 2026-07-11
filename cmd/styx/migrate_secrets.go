@@ -14,6 +14,10 @@ import (
 var secretShapedRE = regexp.MustCompile(`^export\s+([A-Z][A-Z0-9_]*(?:_API_KEY|_TOKEN|_SECRET))="?([^"]+)"?\s*$`)
 
 func cmdMigrateSecrets() error {
+	store := config.SecretStoreName()
+	if store == "" {
+		return fmt.Errorf("migrate-secrets: %w", config.ErrSecretsUnsupported)
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -32,7 +36,7 @@ func cmdMigrateSecrets() error {
 		}
 		moved += n
 	}
-	fmt.Printf("Migrated %d secret(s) to the macOS Keychain (service=styx).\n", moved)
+	fmt.Printf("Migrated %d secret(s) to the %s (service=styx).\n", moved, store)
 	if moved > 0 {
 		fmt.Println("Note: the old values may survive in shell history and Time Machine; consider rotating the migrated keys.")
 	}
@@ -57,7 +61,7 @@ func migrateOne(path string) (int, error) {
 		}
 		name := strings.ToLower(m[1])
 		value := m[2]
-		fmt.Printf("%s -> %s — move to Keychain? [Y/n] ", path, name)
+		fmt.Printf("%s -> %s — move to %s? [Y/n] ", path, name, config.SecretStoreName())
 		reader := bufio.NewReader(os.Stdin)
 		ans, _ := reader.ReadString('\n')
 		ans = strings.TrimSpace(strings.ToLower(ans))
