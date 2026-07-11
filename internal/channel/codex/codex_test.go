@@ -2,7 +2,9 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -92,5 +94,31 @@ func TestCodexArgs_ExtraRoots(t *testing.T) {
 	want := []string{"exec", "--add-dir", "/a", "--add-dir", "/b", "hi"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("args = %v, want %v", got, want)
+	}
+}
+
+func TestClassifyExecError_DeadContextIsTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := exec.Command("false").Run() // produce a real *exec.ExitError
+	got := classifyExecError(ctx, err)
+	var ce *channel.ClassifiedError
+	if !errors.As(got, &ce) {
+		t.Fatalf("expected ClassifiedError, got %v", got)
+	}
+	if ce.Kind != channel.ErrKindTimeout {
+		t.Errorf("dead context must classify as timeout, got kind %q", ce.Kind)
+	}
+}
+
+func TestClassifyExecError_LiveContextNonzeroExitIsOther(t *testing.T) {
+	err := exec.Command("false").Run()
+	got := classifyExecError(context.Background(), err)
+	var ce *channel.ClassifiedError
+	if !errors.As(got, &ce) {
+		t.Fatalf("expected ClassifiedError, got %v", got)
+	}
+	if ce.Kind != channel.ErrKindOther {
+		t.Errorf("plain exit must classify as other, got kind %q", ce.Kind)
 	}
 }

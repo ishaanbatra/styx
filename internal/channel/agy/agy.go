@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 
 	"github.com/ishaanbatra/styx/internal/channel"
 )
@@ -63,7 +62,7 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 	}
 	out, err := cmd.Output()
 	if err != nil {
-		return channel.Response{}, classifyExecError(err)
+		return channel.Response{}, classifyExecError(ctx, err)
 	}
 	text := strings.TrimRight(string(out), "\n")
 	return channel.Response{
@@ -75,16 +74,19 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 
 func estimateTokens(s string) int { return len(s) / 4 }
 
-func classifyExecError(err error) error {
+func classifyExecError(ctx context.Context, err error) error {
 	if errors.Is(err, exec.ErrNotFound) {
 		return &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: fmt.Errorf("agy CLI not found on PATH (install: curl -fsSL https://antigravity.google/cli/install.sh | bash): %w", err)}
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
-		if status, ok := ee.Sys().(syscall.WaitStatus); ok {
-			if status.Signal() == syscall.SIGKILL || status.Signal() == syscall.SIGTERM {
-				return &channel.ClassifiedError{Kind: channel.ErrKindTimeout, Err: err}
-			}
+		if channel.KilledBySignal(ee) {
+			return &channel.ClassifiedError{Kind: channel.ErrKindTimeout, Err: err}
+		}
+		if ctx.Err() != nil {
+			// No kill signals on Windows: a dead context is the timeout
+			// signature there (exec.CommandContext killed the child).
+			return &channel.ClassifiedError{Kind: channel.ErrKindTimeout, Err: fmt.Errorf("%w (context: %v)", err, ctx.Err())}
 		}
 		return &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: fmt.Errorf("agy exited %d: %s", ee.ExitCode(), strings.TrimSpace(string(ee.Stderr)))}
 	}

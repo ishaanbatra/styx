@@ -15,9 +15,10 @@ Antigravity (agy / Gemini), and Ollama via a hand-curated rules table.
   enables knowledge graphs. Run `styx doctor` to see what's wired up.
 
 styx rides your existing CLI subscriptions — there are no API keys to
-configure. macOS is the primary target (secrets use the Keychain, ollama is
-auto-launched via `open -a`); Linux mostly works minus those two; native
-Windows is unsupported.
+configure. Platform support is tiered: macOS is the primary target (secrets
+in the Keychain, ollama auto-launched); Windows is supported natively
+(secrets in the Windows Credential Manager; start ollama yourself); Linux
+works minus a secret store (no `migrate-secrets`) and ollama auto-launch.
 
 ## Install (one shot)
 
@@ -129,7 +130,7 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 | `project scan [root] [--depth N]` | Walk down from `root` (default `~`), find git repos, bulk-register them (prunes node_modules/vendor; depth default 4) |
 | `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0) exposing fourteen tools to OpenClaw, Claude Code, and any MCP host (see [`docs/openclaw-integration.md`](docs/openclaw-integration.md)): `route` — pick a channel for a task (budget-aware, capability-floor-aware, with fallback chain); `budget_status` — per-channel usage/limits/cooldowns; `record_usage` — log usage a consumer ran outside styx; `channel_health` — circuit-breaker state, recent failures, error-kind buckets, cooldown; `get_intel` — read the per-project codebase intel index (or one section), with staleness; `refresh_intel` — rebuild that index; `recall` — semantic top-k recall over project + global long-term memory; plus the conductor dispatch surface: `dispatch` — send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task, awaited by default (or, with `background: true`, as a task you `collect` later); `dispatch_parallel` — fan out an array of dispatches at once, awaited together, per-task results in input order; `thread_status` — list this project's persistent agent threads with turn counts and context usage, plus live/unclaimed background tasks; `collect` — fetch background dispatch results by `task_id` or everything finished (claims them); `memory_save` — persist a durable fact, decision, todo, or routing preference to styx memory; `pipeline_run` — run a styx pipeline (research/review/intel/auto), with a confirm-token handshake for `auto`'s ship step; `rate_dispatch` — rate a recent dispatch outcome good/bad to feed styx's learning loop |
 | `hook <event>` | Internal plumbing — the route-gate hook the launcher installs into conductor sessions (Claude Code invokes it, not you); denies inline WebSearch/WebFetch/Task/external-curl + MCP web tools and redirects to dispatch/pipeline_run, per `[conductor] route_gate` |
-| `migrate-secrets` | Move env-var secrets to macOS Keychain |
+| `migrate-secrets` | Move env-var secrets to the platform secret store (macOS Keychain / Windows Credential Manager) |
 | `upgrade` | Re-run routing migrations manually (v0.1->v0.2 gemini->agy; v0.3 adds the `implement` verb) |
 | `version` / `styx --version` | Print the styx version and exit |
 
@@ -154,7 +155,8 @@ tool-call timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 - `~/.config/styx/state/intel/<id>/index.json` — per-project codebase intel, keyed by stable project id
 - `<project>/.claude/context.md` — rendered intel (Claude Code auto-loads this)
 - `<project>/.styx/runs/<run-id>/` — pipeline state per run
-- Secrets live in macOS Keychain under service `styx`.
+- Secrets live in the platform secret store (macOS Keychain service `styx` /
+  Windows Credential Manager target prefix `styx/`).
 
 ## Deps
 

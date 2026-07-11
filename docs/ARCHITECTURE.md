@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-10
+last_verified: 2026-07-11
 ---
 
 # Styx Architecture
@@ -281,7 +281,11 @@ counts in `Response` are `len/4` estimates.
 
 - Subprocess adapters (claude, codex, agy) classify exec failures into
   `channel.ClassifiedError{Kind: timeout|429|5xx|other}` so the router/budget
-  can label them. agy is headless-only and always passes
+  can label them. Classification is platform-split: SIGKILL/SIGTERM detection
+  lives in build-tagged `internal/channel/exit_unix.go` / `exit_other.go`
+  (`channel.KilledBySignal`), and each adapter's `classifyExecError` is
+  context-aware so on Windows (no POSIX signals) a dead context classifies the
+  killed subprocess as a timeout. agy is headless-only and always passes
   `--dangerously-skip-permissions`.
 - `Write` requests grant autonomous file access: claude prepends
   `--dangerously-skip-permissions`; codex runs `exec --sandbox workspace-write`.
@@ -291,8 +295,10 @@ counts in `Response` are `len/4` estimates.
   passes `-c model_reasoning_effort=<effort>`.
 - Claude one-shot requests keep `--model <alias>` when routed to a class alias
   and pass `--effort <effort>` when `Request.Effort` is set.
-- `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the macOS
-  Ollama app with a 20s wait if it's down. Every chat request carries
+- `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the Ollama
+  app (`open -a Ollama`, then a 20s poll) only on darwin, gated by a stubable
+  package `goos` variable. Off-macOS, a down ollama fails fast with a "start it
+  manually" `ClassifiedError` instead of waiting 20s. Every chat request carries
   `keep_alive: "30m"` (ollama's default 5-minute idle unload otherwise forces
   a 3-10s cold reload on the next call); when the estimated prompt tokens
   (`len(prompt+system)/4`) plus 1024 headroom exceed ollama's 4096-token
@@ -1069,8 +1075,9 @@ it, and inline self-handling never crosses the MCP boundary (this is why
 `ship`, a styx tool call, *can* be gated but inline research cannot from the
 MCP side). The one seam that observes the host's native tools is Claude Code's
 hook system, and since styx launches Claude Code, the launcher installs
-`styx hook` as a hook (scoped to conductor sessions only — the settings file
-lives in styx's state dir, never the user's `~/.claude`).
+`styx hook` as a shell-free exec-form hook (`command` is the styx binary path;
+`args` is `["hook", "<event>"]`) scoped to conductor sessions only — the
+settings file lives in styx's state dir, never the user's `~/.claude`.
 
 `styx hook <event>` is dispatched **before `loadApp()`** (no SQLite/config load)
 so it stays fast on the per-tool-call hot path. It reads Claude Code's hook JSON
@@ -1116,7 +1123,11 @@ Guidance, RouteGate, ExtraRepos, ExtraArgs}` is everything a host needs.
    to `<stateDir>/conductor-mcp.json` via atomic tmp+rename;
 2b. unless `RouteGate == "off"`, writes `<stateDir>/conductor-settings.json`
    (the routing-gate hooks — see the `styx hook` section) via atomic tmp+rename
-   and passes it as `--settings`. We deliberately do NOT pass
+   and passes it as `--settings`. Each command hook uses Claude Code's exec form:
+   `command` is the styx binary path and `args` is `["hook", "<event>"]`, with
+   no shell or quoting on any platform. Native-Windows shell-form hooks run
+   under Git Bash with a PowerShell fallback, whose incompatible quoting rules
+   make one portable command string impossible. We deliberately do NOT pass
    `--strict-mcp-config`: the user's other MCP servers stay available and the
    hook's matcher catches MCP web tools by name instead;
 3. execs `claude --mcp-config <path> [--settings <path>] --append-system-prompt <Guidance>`
@@ -1874,12 +1885,25 @@ otherwise, no-op when quiet. One `Tracker` per invocation; `Stage` lifecycle
 is Done/Fail/Info, opening a stage implicitly closes the previous one. All
 lines prefixed `[styx]` on stderr.
 
-## Secrets (internal/config/secrets.go)
+## Secrets (internal/config/secrets*.go)
 
-macOS Keychain under service `styx`; `migrate-secrets` verb moves plaintext env
-vars out of shell rc files. For each secret-shaped export (matching
+`internal/config/secrets.go` is the portable front: name validation, the
+`ErrSecretNotFound` / `ErrSecretsUnsupported` sentinels, `SecretStoreName()`,
+and the public `Secret`/`SetSecret`/`DeleteSecret` API, which delegate to
+per-OS backends. `secrets_darwin.go` talks to the macOS Keychain via the
+`security` CLI (service `styx`); `secrets_windows.go` talks to the Windows
+Credential Manager via `danieljoos/wincred` (pure Go, target prefix `styx/`);
+`secrets_other.go` fails every call with `ErrSecretsUnsupported` — secrets are
+**never** written to disk or env as a fallback. Each backend defines a
+`secretStore` name constant ("macOS Keychain" / "Windows Credential Manager" /
+"") surfaced by `SecretStoreName()`.
+
+The `migrate-secrets` verb moves plaintext env vars out of shell rc files into
+the platform store; it errors immediately (`ErrSecretsUnsupported`) on
+platforms with no store, and its prompts/summary name the platform store. For
+each secret-shaped export (matching
 `_API_KEY|_TOKEN|_SECRET`), the verb prompts the user to confirm, stores the value
-in Keychain, **deletes the line entirely** from the rc file (no commented copy;
+in the platform store, **deletes the line entirely** from the rc file (no commented copy;
 removal is per-occurrence — a declined duplicate of an identical line survives),
 writes a one-time `<rc>.styx-bak` backup (0600) if not already present, and sets
 the rc file to 0600 perms (atomic tmp+rename). After successful migration, prints
