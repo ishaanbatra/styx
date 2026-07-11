@@ -25,8 +25,37 @@ func TestBuildConductorSettingsBlock(t *testing.T) {
 	if !strings.Contains(string(raw), "mcp__") {
 		t.Errorf("matcher must include mcp__ funnel; got %s", raw)
 	}
-	if !strings.Contains(string(raw), "styx' hook pretooluse") {
-		t.Errorf("PreToolUse command must call styx hook pretooluse; got %s", raw)
+	// Exec form: bin + args array, no shell, no quoting — portable to
+	// Windows where hooks otherwise run under Git Bash/PowerShell.
+	if strings.Contains(string(raw), "styx' hook") {
+		t.Errorf("hook must use exec form (args array), not a shell-quoted string; got %s", raw)
+	}
+	if !strings.Contains(string(raw), `"command":"/usr/local/bin/styx"`) {
+		t.Errorf("hook command must be the bare binary path; got %s", raw)
+	}
+	if !strings.Contains(string(raw), `"args":["hook","pretooluse"]`) {
+		t.Errorf("PreToolUse hook must carry args [hook pretooluse]; got %s", raw)
+	}
+}
+
+func TestHookMatcherExecFormSurvivesSpecialPaths(t *testing.T) {
+	cases := []struct{ name, bin string }{
+		{"spaces", "/Users/dev name/bin/styx"},
+		{"single quote", "/Users/o'brien/bin/styx"},
+		{"windows backslashes", `C:\Users\dev\bin\styx.exe`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := hookMatcher("Bash", c.bin, "posttooluse")
+			hook := m["hooks"].([]any)[0].(map[string]any)
+			if hook["command"] != c.bin {
+				t.Errorf("command = %q, want the untouched bin path %q", hook["command"], c.bin)
+			}
+			args, ok := hook["args"].([]string)
+			if !ok || len(args) != 2 || args[0] != "hook" || args[1] != "posttooluse" {
+				t.Errorf("args = %v, want [hook posttooluse]", hook["args"])
+			}
+		})
 	}
 }
 

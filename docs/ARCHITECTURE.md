@@ -1073,8 +1073,9 @@ it, and inline self-handling never crosses the MCP boundary (this is why
 `ship`, a styx tool call, *can* be gated but inline research cannot from the
 MCP side). The one seam that observes the host's native tools is Claude Code's
 hook system, and since styx launches Claude Code, the launcher installs
-`styx hook` as a hook (scoped to conductor sessions only — the settings file
-lives in styx's state dir, never the user's `~/.claude`).
+`styx hook` as a shell-free exec-form hook (`command` is the styx binary path;
+`args` is `["hook", "<event>"]`) scoped to conductor sessions only — the
+settings file lives in styx's state dir, never the user's `~/.claude`.
 
 `styx hook <event>` is dispatched **before `loadApp()`** (no SQLite/config load)
 so it stays fast on the per-tool-call hot path. It reads Claude Code's hook JSON
@@ -1120,7 +1121,11 @@ Guidance, RouteGate, ExtraRepos, ExtraArgs}` is everything a host needs.
    to `<stateDir>/conductor-mcp.json` via atomic tmp+rename;
 2b. unless `RouteGate == "off"`, writes `<stateDir>/conductor-settings.json`
    (the routing-gate hooks — see the `styx hook` section) via atomic tmp+rename
-   and passes it as `--settings`. We deliberately do NOT pass
+   and passes it as `--settings`. Each command hook uses Claude Code's exec form:
+   `command` is the styx binary path and `args` is `["hook", "<event>"]`, with
+   no shell or quoting on any platform. Native-Windows shell-form hooks run
+   under Git Bash with a PowerShell fallback, whose incompatible quoting rules
+   make one portable command string impossible. We deliberately do NOT pass
    `--strict-mcp-config`: the user's other MCP servers stay available and the
    hook's matcher catches MCP web tools by name instead;
 3. execs `claude --mcp-config <path> [--settings <path>] --append-system-prompt <Guidance>`

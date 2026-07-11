@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/ishaanbatra/styx/internal/paths"
 )
@@ -130,22 +129,20 @@ func buildConductorSettings(styxBin, mode string) map[string]any {
 	return map[string]any{"hooks": hooks}
 }
 
-// hookMatcher builds one Claude Code hook matcher entry that pipes matched tool
-// calls to `styx hook <event>`.
+// hookMatcher builds one Claude Code hook matcher entry that pipes matched
+// tool calls to `styx hook <event>`. Exec form (command + args, no shell):
+// on native Windows shell-form hooks run under Git Bash or a PowerShell
+// fallback with incompatible quoting rules, and exec form sidesteps shell
+// parsing entirely on every platform.
 func hookMatcher(matcher, styxBin, event string) map[string]any {
 	return map[string]any{
 		"matcher": matcher,
 		"hooks": []any{map[string]any{
 			"type":    "command",
-			"command": shellQuote(styxBin) + " hook " + event,
+			"command": styxBin,
+			"args":    []string{"hook", event},
 		}},
 	}
-}
-
-// shellQuote single-quotes a path so a space or shell metacharacter in the styx
-// binary path can't break the hook command string.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // writeAtomic writes data via the repo-wide tmp+rename convention.
