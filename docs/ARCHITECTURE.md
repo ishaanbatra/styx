@@ -295,8 +295,10 @@ counts in `Response` are `len/4` estimates.
   passes `-c model_reasoning_effort=<effort>`.
 - Claude one-shot requests keep `--model <alias>` when routed to a class alias
   and pass `--effort <effort>` when `Request.Effort` is set.
-- `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the macOS
-  Ollama app with a 20s wait if it's down. Every chat request carries
+- `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the Ollama
+  app (`open -a Ollama`, then a 20s poll) only on darwin, gated by a stubable
+  package `goos` variable. Off-macOS, a down ollama fails fast with a "start it
+  manually" `ClassifiedError` instead of waiting 20s. Every chat request carries
   `keep_alive: "30m"` (ollama's default 5-minute idle unload otherwise forces
   a 3-10s cold reload on the next call); when the estimated prompt tokens
   (`len(prompt+system)/4`) plus 1024 headroom exceed ollama's 4096-token

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -19,6 +20,9 @@ import (
 )
 
 const defaultBaseURL = "http://localhost:11434"
+
+// goos is a package-level alias so tests can exercise non-darwin behavior.
+var goos = runtime.GOOS
 
 // Channel is the Ollama implementation.
 type Channel struct {
@@ -127,6 +131,11 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 func (c *Channel) ensureUp(ctx context.Context) error {
 	if c.ping(ctx) {
 		return nil
+	}
+	if goos != "darwin" {
+		// Only macOS has an app bundle styx can auto-launch; elsewhere the
+		// HTTP channel works iff ollama is already running.
+		return fmt.Errorf("ollama is not responding at %s — start it manually (e.g. `ollama serve`)", c.baseURL)
 	}
 	// Try to launch the Ollama desktop app (macOS).
 	_ = exec.CommandContext(ctx, "open", "-a", "Ollama").Run()

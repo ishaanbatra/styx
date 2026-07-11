@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/channel"
 )
@@ -81,6 +82,9 @@ func TestSend_SetsNumCtxForLargePrompts(t *testing.T) {
 }
 
 func TestSend_NetworkErrorIsClassified(t *testing.T) {
+	old := goos
+	goos = "linux" // skip the darwin auto-launch + 20s poll
+	defer func() { goos = old }()
 	c := NewWithBaseURL("http://127.0.0.1:1") // unreachable
 	_, err := c.Send(context.Background(), channel.Request{Model: "x", Prompt: "y"})
 	if err == nil {
@@ -89,6 +93,25 @@ func TestSend_NetworkErrorIsClassified(t *testing.T) {
 	var ce *channel.ClassifiedError
 	if !errors.As(err, &ce) {
 		t.Fatalf("expected ClassifiedError, got %v", err)
+	}
+}
+
+func TestEnsureUp_NonDarwinFailsFastWithoutLaunch(t *testing.T) {
+	for _, g := range []string{"linux", "windows"} {
+		t.Run(g, func(t *testing.T) {
+			old := goos
+			goos = g
+			defer func() { goos = old }()
+			c := NewWithBaseURL("http://127.0.0.1:1") // unreachable
+			start := time.Now()
+			_, err := c.Send(context.Background(), channel.Request{Model: "x", Prompt: "y"})
+			if err == nil || !strings.Contains(err.Error(), "start it manually") {
+				t.Fatalf("want manual-start error, got %v", err)
+			}
+			if time.Since(start) > 5*time.Second {
+				t.Errorf("non-darwin path must fail fast, took %v", time.Since(start))
+			}
+		})
 	}
 }
 
