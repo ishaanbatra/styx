@@ -44,6 +44,8 @@ VERBS
   migrate-secrets           One-time: move env-var secrets to macOS Keychain
   intel <p> [--force]       Build/refresh the codebase intel index
   intel ls                  List cached indexes + freshness state
+  graphify <p> [--force]    Build/refresh the graphify knowledge graph (needs graphify CLI)
+  graphify ls               List graph freshness per registered project
   context show              Print rendered .claude/context.md for current project
   auto <goal>               Full autonomous pipeline (research -> ship)
   auto --resume <run-id>    Resume an interrupted pipeline

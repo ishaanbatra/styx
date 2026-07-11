@@ -86,10 +86,14 @@ restarting the session.
 |---|---|
 | `intel <project>` | Build/refresh the codebase intel index |
 | `intel ls` | List cached intel indexes + freshness state |
+| `graphify <project> [--force]` | Build/refresh the graphify knowledge graph for a repo (wraps the external `graphify` CLI; errors if not installed; the conductor launch path skips instead) |
+| `graphify ls` | List knowledge-graph freshness per registered project |
 | `context show` | Print rendered `.claude/context.md` for the current project |
 | `runs ls` | List pipeline runs for the current project |
 | `runs show <run-id>` | Show JSON state of a specific run |
 | `styx watch [repo]` | Live dispatch board — per-agent heartbeat + stall flags, refreshed from a running session or `styx mcp`, in a second terminal. Defaults to the current-directory project; an explicit `repo` resolves by registered name/prefix/path the same way `styx repl [repo]` does, so `styx watch otherRepo` follows a `styx repl otherRepo` session launched from anywhere |
+
+Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`); recommend adding `graphify-out/` to each repository's `.gitignore` or your global git excludes.
 
 ### One-shots + admin
 

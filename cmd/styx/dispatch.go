@@ -312,6 +312,8 @@ func dispatch(verb string, args []string) error {
 		return cmdReview(a, args)
 	case "intel":
 		return cmdIntel(a, args)
+	case "graphify":
+		return cmdGraphify(a, args)
 	case "learn":
 		return cmdLearn(a, args)
 	case "mcp":

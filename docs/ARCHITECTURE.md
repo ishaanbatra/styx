@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-08
+last_verified: 2026-07-10
 ---
 
 # Styx Architecture
@@ -112,7 +112,8 @@ Shared pieces:
   launcher as `Opts.ExtraRepos` (rendered as `--add-dir` flags on the Claude
   Code session) and folded into the guidance as a note telling the brain to
   also pass them as the MCP `dispatch` tool's `extra_roots` so dispatched
-  agent threads get the same access — loads `internal/guidance.Load(project.Path)`,
+  agent threads get the same access → fire background graph builds for stale bound repos
+  (`ensureGraphsFresh`, see Graph section) → loads `internal/guidance.Load(project.Path)`,
   appends `recallRoutingPrefs(a)` output when non-empty, resolves the running
   `styx` binary via `os.Executable()`, and calls
   `(&launcher.ClaudeHost{}).Launch(ctx, launcher.Opts{...})`.
@@ -774,6 +775,36 @@ have a project, loading the index first. `render.go` renders the
 index to markdown and writes `<project>/.claude/context.md` (or
 `context.styx.md` + `@import` when a user-authored context.md exists) so
 Claude Code auto-loads project context.
+
+## Graph (`internal/graph/`)
+
+Keeps per-project **graphify** knowledge graphs fresh. Wraps the external
+`graphify` CLI (tree-sitter code knowledge graph; `uv tool install graphifyy`)
+— styx never parses code itself. Active iff `graphify` is on PATH; disable
+with `STYX_GRAPHIFY=off`. No routing.toml surface.
+
+- **Artifacts:** in-repo `graphify-out/graph.json` (graphify's only output
+  location, and where graphify's own Claude Code skill/hook expect it).
+- **State:** `~/.config/styx/state/graph/<project-id>/` — `meta.json`
+  (schema_version, built_at, git_head; atomic write), `build.log`,
+  `build.lock` (O_EXCL; expired after BuildTimeout=10m and reclaimed).
+- **Staleness:** HEAD-exact — stale iff meta or artifact missing, or current
+  git HEAD != recorded head. No age/commit-count tolerance: `graphify update .`
+  is an incremental SHA256-cached pass, so rebuilds are cheap (unlike intel's
+  LLM-priced builds). Empty-ID projects (unregistered plain dirs) are never
+  stale.
+- **Build:** `graphify update .` in the repo, ctx-bounded, output to
+  build.log; this command bootstraps the initial build via pure AST parsing
+  (no LLM/API key needed) and runs incremental updates on subsequent calls.
+  graph.json must parse with ≥1 node before meta is recorded, so a failed
+  build re-triggers on the next check.
+- **Entry points:** `styx graphify <target> [--force]` / `styx graphify ls`
+  (cmd/styx/graphify.go, synchronous); conductor launch auto-build
+  (cmd/styx/launch.go `ensureGraphsFresh`, background goroutine, silent after
+  the host owns the TTY — build output goes only to build.log). A build killed
+  by session exit leaves stale meta and retries next launch.
+  Graph artifacts land in the target repository's working tree (`graphify-out/`);
+  users should add this directory to the repo's `.gitignore` or their global git excludes.
 
 ## Memory (internal/memory)
 

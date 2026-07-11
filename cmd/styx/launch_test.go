@@ -3,13 +3,17 @@ package main
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ishaanbatra/styx/internal/config"
+	"github.com/ishaanbatra/styx/internal/graph"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
+	"github.com/ishaanbatra/styx/internal/project"
 )
 
 // fakeClaudeOnPath drops a stub `claude` script that records its argv to
@@ -311,5 +315,89 @@ func TestRecallPrefsViaTopByKind(t *testing.T) {
 	}
 	if got := recallUserPrefs(); !strings.Contains(got, "short summaries") || strings.Contains(got, "codex implements") {
 		t.Fatalf("user prefs must be kind-exact, got %q", got)
+	}
+}
+
+// TestEnsureGraphsFresh proves ensureGraphsFresh fires a background graphify
+// build for a stale registered project, skips an unregistered (empty-ID)
+// project, and returns a channel that closes once all builds finish. A
+// second call against an already-fresh graph must be a no-op — proven by an
+// invocation marker the fake binary appends per exec: exactly one line after
+// the first call, still exactly one after the second (the fresh path never
+// exec'd graphify at all, not merely "the graph stayed fresh").
+func TestEnsureGraphsFresh(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	// Repo with one commit.
+	dir := t.TempDir()
+	gitRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+			"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	gitRun("init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun("add", ".")
+	gitRun("commit", "-q", "-m", "init")
+
+	// Fake graphify that emulates `graphify update .`, recording each
+	// invocation (Build sets cmd.Dir to the repo, so the marker lands there).
+	binDir := t.TempDir()
+	bin := filepath.Join(binDir, "graphify")
+	script := "#!/bin/sh\necho run >> graphify-invocations\nmkdir -p graphify-out\nprintf '{\"nodes\":[{\"id\":\"a\"}],\"edges\":[]}' > graphify-out/graph.json\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	countInvocations := func() int {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(dir, "graphify-invocations"))
+		if err != nil {
+			t.Fatalf("read invocation marker: %v", err)
+		}
+		return strings.Count(string(raw), "\n")
+	}
+
+	registered := project.Project{ID: "feedcafe0123", Name: "r1", Path: dir}
+	unregistered := project.Project{Name: "plain", Path: t.TempDir()} // empty ID: must be skipped
+
+	done := ensureGraphsFresh(bin, []project.Project{registered, unregistered})
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("background builds did not finish")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "graphify-out", "graph.json")); err != nil {
+		t.Fatalf("graph artifact not built: %v", err)
+	}
+	if stale, reason := graph.IsStale(registered); stale {
+		t.Errorf("registered project still stale after ensureGraphsFresh: %s", reason)
+	}
+	if got := countInvocations(); got != 1 {
+		t.Fatalf("first ensure must exec graphify exactly once, got %d invocations", got)
+	}
+	// Second call on a fresh graph must not rebuild: the invocation marker
+	// must STILL have exactly one line — a direct observation that the fresh
+	// path never exec'd the fake (an IsStale check alone can't see a rebuild
+	// whose error is discarded by design).
+	done2 := ensureGraphsFresh(bin, []project.Project{registered})
+	select {
+	case <-done2:
+	case <-time.After(5 * time.Second):
+		t.Fatal("fresh-graph path should return immediately")
+	}
+	if got := countInvocations(); got != 1 {
+		t.Fatalf("fresh no-op must not exec graphify again, got %d invocations", got)
+	}
+	if stale, _ := graph.IsStale(registered); stale {
+		t.Error("fresh graph must stay fresh after a no-op ensure")
 	}
 }
