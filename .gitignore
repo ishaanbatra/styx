@@ -9,3 +9,5 @@
 graphify-out/
 # subagent-driven-development scratch (ledger, briefs, reports, review packages)
 .superpowers/
+# styx's own working artifacts when dogfooding itself (research briefs, plans, handoffs)
+/styx/
