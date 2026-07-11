@@ -3,6 +3,22 @@
 Personal multi-model dev orchestration CLI. Routes work between Claude, Codex,
 Antigravity (agy / Gemini), and Ollama via a hand-curated rules table.
 
+## Prerequisites
+
+- **Go 1.22+** — to build (no cgo; sqlite is pure Go).
+- **`claude` CLI** ([Claude Code](https://claude.com/claude-code)) with an
+  active subscription — the only hard requirement at runtime; the default
+  `styx` verb launches it as the conductor.
+- **Optional channels** — `codex` (OpenAI), `agy` (Antigravity), and `ollama`
+  add routing targets; missing ones degrade gracefully down the routing
+  table's fallback chains. `gh` enables PR creation in `auto`; `graphify`
+  enables knowledge graphs. Run `styx doctor` to see what's wired up.
+
+styx rides your existing CLI subscriptions — there are no API keys to
+configure. macOS is the primary target (secrets use the Keychain, ollama is
+auto-launched via `open -a`); Linux mostly works minus those two; native
+Windows is unsupported.
+
 ## Install (one shot)
 
     ./install.sh        # builds + drops binary at ~/bin/styx (backs up any existing one)
@@ -142,8 +158,8 @@ tool-call timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 
 ## Deps
 
-- `claude` CLI (Anthropic)
+- `claude` CLI (Anthropic) — **required**; everything else is optional
 - `codex` CLI (OpenAI, signed in via ChatGPT Plus)
 - `agy` CLI (Antigravity, replaces gemini-cli): `curl -fsSL https://antigravity.google/cli/install.sh | bash`
 - `ollama` (local)
-- `gh` (optional, for PR creation in `auto`)
+- `gh` (for PR creation in `auto`)
