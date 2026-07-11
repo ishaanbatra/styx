@@ -14,9 +14,9 @@ conversational REPL orchestrator (spec + plan in `docs/superpowers/`).
 Each doc declares `owns:` globs in its frontmatter and is the authority on
 those files:
 
-- `docs/ARCHITECTURE.md` — owns `cmd/styx/**`, `internal/**`, `testdata/**`:
-  all subsystems (channels, routing, budget, intel, pipelines, research,
-  execute, progress) and the on-disk layout
+- `docs/ARCHITECTURE.md` — owns `cmd/styx/**`, `internal/**`, `testdata/**`,
+  `eval/**`, `e2e/**`: all subsystems (channels, routing, budget, intel,
+  pipelines, research, execute, progress) and the on-disk layout
 - `README.md` — user-facing verb table, install, configuration paths
 - `docs/superpowers/specs/` — design specs (newest: REPL orchestrator)
 - `docs/superpowers/plans/` — task-by-task implementation plans for those specs
