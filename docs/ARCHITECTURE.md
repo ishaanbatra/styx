@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-10
+last_verified: 2026-07-11
 ---
 
 # Styx Architecture
@@ -281,7 +281,11 @@ counts in `Response` are `len/4` estimates.
 
 - Subprocess adapters (claude, codex, agy) classify exec failures into
   `channel.ClassifiedError{Kind: timeout|429|5xx|other}` so the router/budget
-  can label them. agy is headless-only and always passes
+  can label them. Classification is platform-split: SIGKILL/SIGTERM detection
+  lives in build-tagged `internal/channel/exit_unix.go` / `exit_other.go`
+  (`channel.KilledBySignal`), and each adapter's `classifyExecError` is
+  context-aware so on Windows (no POSIX signals) a dead context classifies the
+  killed subprocess as a timeout. agy is headless-only and always passes
   `--dangerously-skip-permissions`.
 - `Write` requests grant autonomous file access: claude prepends
   `--dangerously-skip-permissions`; codex runs `exec --sandbox workspace-write`.
