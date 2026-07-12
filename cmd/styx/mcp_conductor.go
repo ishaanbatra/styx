@@ -22,6 +22,7 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/agent"
+	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
@@ -431,6 +432,17 @@ func collectOne(reg *taskRegistry, tk bgTask) map[string]any {
 	}
 }
 
+// attributedMessage appends the styx commit-trailer instruction to
+// write-capable dispatch messages so agent commits credit styx.
+// Read-risk agents never commit; their messages pass through untouched.
+// (Ollama one-shots never route through here — they don't commit.)
+func attributedMessage(msg, risk string) string {
+	if risk == "read" {
+		return msg
+	}
+	return msg + "\n\n" + attribution.CommitInstruction
+}
+
 type dispatchArgs struct {
 	Project      string   `json:"project"`
 	Thread       string   `json:"thread"`
@@ -568,7 +580,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				}
 				spec := agent.DispatchSpec{
 					Thread: in.Thread, CLI: in.CLI, Model: model,
-					Message: in.Message, ExtraRoots: in.ExtraRoots,
+					Message: attributedMessage(in.Message, in.Risk), ExtraRoots: in.ExtraRoots,
 					ReadOnly: in.Risk == "read",
 				}
 				if in.Background {
@@ -933,7 +945,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}
 					spec := agent.DispatchSpec{
 						Thread: tin.Thread, CLI: tin.CLI, Model: model,
-						Message: tin.Message, ExtraRoots: tin.ExtraRoots,
+						Message: attributedMessage(tin.Message, tin.Risk), ExtraRoots: tin.ExtraRoots,
 						ReadOnly: tin.Risk == "read",
 					}
 					mgr := m.mgr
