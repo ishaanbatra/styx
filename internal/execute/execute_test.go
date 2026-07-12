@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/progress"
 )
@@ -16,6 +17,16 @@ import (
 type recordingChannel struct {
 	got  channel.Request
 	resp string
+}
+
+func TestBuildPromptIncludesAttribution(t *testing.T) {
+	p := buildPrompt("PLAN BODY")
+	if !strings.Contains(p, attribution.CommitInstruction) {
+		t.Error("buildPrompt missing attribution.CommitInstruction")
+	}
+	if !strings.Contains(p, "PLAN BODY") {
+		t.Error("buildPrompt missing plan content")
+	}
 }
 
 func (r *recordingChannel) Name() string { return "fake" }
@@ -262,5 +273,31 @@ func TestShip_NoPushSkipsPushAndPR(t *testing.T) {
 	}
 	if res.Pushed {
 		t.Error("expected Pushed=false with NoPush=true")
+	}
+}
+
+func TestPRBody(t *testing.T) {
+	tests := []struct {
+		name string
+		opts ShipOptions
+		want string
+	}{
+		{
+			name: "default body gets goal plus footer",
+			opts: ShipOptions{Goal: "add attribution"},
+			want: "Goal: add attribution\n\n" + attribution.PRFooter,
+		},
+		{
+			name: "custom body keeps content, gains footer",
+			opts: ShipOptions{PRBody: "Custom summary.\n"},
+			want: "Custom summary.\n\n" + attribution.PRFooter,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := prBody(tt.opts); got != tt.want {
+				t.Errorf("prBody() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/activity"
+	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
@@ -36,6 +37,33 @@ func callTool(t *testing.T, d *conductorDeps, name string, args any) (map[string
 	}
 	t.Fatalf("tool %q not registered", name)
 	return nil, nil
+}
+
+func TestAttributedMessage(t *testing.T) {
+	tests := []struct {
+		name, msg, risk string
+		wantDecorated   bool
+	}{
+		{"read untouched", "summarize the router", "read", false},
+		{"edit decorated", "fix the loader", "edit", true},
+		{"ship decorated", "ship the branch", "ship", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := attributedMessage(tt.msg, tt.risk)
+			decorated := strings.HasSuffix(got, attribution.CommitInstruction)
+			if decorated != tt.wantDecorated {
+				t.Errorf("attributedMessage(%q, %q): decorated = %v, want %v",
+					tt.msg, tt.risk, decorated, tt.wantDecorated)
+			}
+			if !strings.HasPrefix(got, tt.msg) {
+				t.Errorf("original message must be preserved as prefix, got %q", got)
+			}
+			if !tt.wantDecorated && got != tt.msg {
+				t.Errorf("read-risk message must pass through untouched, got %q", got)
+			}
+		})
+	}
 }
 
 func TestDispatchShipGate(t *testing.T) {
