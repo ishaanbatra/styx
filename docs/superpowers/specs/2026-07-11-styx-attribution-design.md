@@ -16,14 +16,17 @@ attribution is an instruction to those agents, plus a footer styx writes
 into PR bodies directly:
 
 - Commit trailer (exact line, verbatim):
-  `Co-Authored-By: styx <ishyinthepark@styx.trickster>`
+  `Co-Authored-By: styx-thetrickster[bot] <302670164+styx-thetrickster[bot]@users.noreply.github.com>`
 - PR footer (own paragraph at the end of the body):
-  `🤖 Generated with [styx](https://github.com/ishaanbatra/styx)`
+  `Generated with [styx](https://github.com/ishaanbatra/styx)`
 
-The email is intentionally unowned (no linked GitHub account): the name
-shows in commits and per-commit contributor lists with a generic avatar,
-same pattern as Claude Code's `noreply@anthropic.com`. Not configurable —
-it is one constant, trivially editable later if that changes.
+The identity is the bot user of the `styx-thetrickster` GitHub App
+(App ID 4275975, owned by @ishaanbatra; bot user ID 302670164). GitHub
+matches the trailer email to that bot, so commits and the Contributors
+sidebar render the app's avatar (the styx logo) — the same mechanism
+behind `dependabot[bot]`. The app holds no permissions and is never
+installed; it exists only so the identity does. Not configurable — it is
+one constant, trivially editable later if that changes.
 
 ## Design
 
