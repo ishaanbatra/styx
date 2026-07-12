@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/progress"
 )
@@ -16,6 +17,16 @@ import (
 type recordingChannel struct {
 	got  channel.Request
 	resp string
+}
+
+func TestBuildPromptIncludesAttribution(t *testing.T) {
+	p := buildPrompt("PLAN BODY")
+	if !strings.Contains(p, attribution.CommitInstruction) {
+		t.Error("buildPrompt missing attribution.CommitInstruction")
+	}
+	if !strings.Contains(p, "PLAN BODY") {
+		t.Error("buildPrompt missing plan content")
+	}
 }
 
 func (r *recordingChannel) Name() string { return "fake" }

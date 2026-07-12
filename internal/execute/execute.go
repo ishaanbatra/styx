@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/progress"
 )
@@ -97,7 +98,8 @@ func applyViaChannel(ctx context.Context, o Options, prompt string, prog *progre
 func buildPrompt(plan string) string {
 	return "Please implement this plan autonomously. Your project context is in .claude/context.md. " +
 		"Make all required code edits. Run any commands needed. Commit your work as you go using small, " +
-		"descriptive commits. When done, report what you did.\n\n--- PLAN ---\n" + plan
+		"descriptive commits. " + attribution.CommitInstruction + " " +
+		"When done, report what you did.\n\n--- PLAN ---\n" + plan
 }
 
 // errAs is errors.As without importing errors (kept inline so this file is self-contained).
