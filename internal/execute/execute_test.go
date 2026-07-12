@@ -275,3 +275,29 @@ func TestShip_NoPushSkipsPushAndPR(t *testing.T) {
 		t.Error("expected Pushed=false with NoPush=true")
 	}
 }
+
+func TestPRBody(t *testing.T) {
+	tests := []struct {
+		name string
+		opts ShipOptions
+		want string
+	}{
+		{
+			name: "default body gets goal plus footer",
+			opts: ShipOptions{Goal: "add attribution"},
+			want: "Goal: add attribution\n\n" + attribution.PRFooter,
+		},
+		{
+			name: "custom body keeps content, gains footer",
+			opts: ShipOptions{PRBody: "Custom summary.\n"},
+			want: "Custom summary.\n\n" + attribution.PRFooter,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := prBody(tt.opts); got != tt.want {
+				t.Errorf("prBody() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
