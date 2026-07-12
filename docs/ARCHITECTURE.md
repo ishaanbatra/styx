@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-11
+last_verified: 2026-07-12
 ---
 
 # Styx Architecture
@@ -220,8 +220,12 @@ Shared pieces:
   — the conductor tools are wrapped so every map result carries the background
   status line (see the Piggyback note under "Conductor MCP tools"). It
   logs readiness to stderr via `logStatus` (naming all fourteen tools), and runs
-  `srv.Serve(ctx, os.Stdin, os.Stdout)` — stdout carries the JSON-RPC protocol
-  only, nothing else. `const mcpServerVersion = "0.1.0"`. See the "MCP
+  `srv.Serve(ctx, os.Stdin, protocolOut)` where `protocolOut` is the real
+  stdout captured before `os.Stdout` is pointed at `os.Stderr` for the
+  server's lifetime — stdout carries the JSON-RPC protocol only, and the
+  redirect makes that structural: a stray `fmt.Printf` in any reused
+  REPL/CLI code path (a pipeline's "✓ Brief saved" line was being parsed by
+  the host as protocol frames) lands on stderr instead of the wire. `const mcpServerVersion = "0.1.0"`. See the "MCP
   server" and "Conductor MCP tools" sections below for the
   route-v2 field shapes and value-shape decisions consumers must know.
 
@@ -1259,11 +1263,23 @@ only channel for mid-call narration; `logStatus` stays on stderr.
 **Concurrent `tools/call`, cancellation, and the Serial lane.**
 `tools/call` requests run concurrently, one goroutine per call, tracked by
 request id; `notifications/cancelled` cancels the matching call's context
-(this is how a host-side Esc reaches a long-running handler). `initialize`
-and `tools/list` answer inline. On EOF the server cancels and drains every
-in-flight call before returning. Tools whose handlers are not audited for
-concurrent use set `Tool.Serial` and share a single lane (`pipeline_run`,
-`refresh_intel`).
+(this is how a host-side Esc reaches a long-running handler). Cancellation
+is cause-tagged (`context.WithCancelCause`): a client cancel uses
+`errClientCancelled`, EOF shutdown uses nil. A **client-cancelled call gets
+no response** — the host forgot the request id when it cancelled, and
+strict hosts (Claude Code) treat a late unknown-id response as a connection
+error and drop the transport (this bit us live: a 20-minute `pipeline_run`
+answered 4 minutes after its Esc and killed the styx connection). EOF-
+cancelled calls still answer best-effort. `initialize` and `tools/list`
+answer inline. On EOF the server cancels and drains every in-flight call
+before returning. Tools whose handlers are not audited for concurrent use
+set `Tool.Serial` and share a single lane (`pipeline_run`, `refresh_intel`)
+— a capacity-1 channel, not a mutex, so a queued call (a) narrates
+"queued: waiting for the running serial tool to finish" via ProgressFn when
+the host asked for progress, (b) honors cancellation while waiting, and
+(c) re-checks `ctx.Err()` after acquiring (the select picks randomly when
+the lane frees and the ctx fires together) so a cancelled retry never runs
+long after the host gave up on it.
 
 **`route` v2 additive fields.** `routeResult` gained five fields that v1
 consumers safely ignore (all `omitempty` except `blocked_by_budget`):
@@ -1530,11 +1546,24 @@ REPL loop.
   as `dispatch` risk=ship, keyed `"pipeline:auto"` — denied gates return the
   raw `shipgate.Result` for the brain to relay. The calls mirror the REPL's
   `pipelines` map (`cmd/styx/repl.go` around line 625) exactly: `research`
-  → `cmdResearch(d.a, []string{arg})` then, on success, `indexNewestBrief`
-  into the project's memory store (best-effort like the REPL's entry;
-  failures are narrated via `logStatus`, never fail the completed
-  research); `review` → `cmdReview(d.a, nil)`; `intel` → `cmdIntel(d.a,
-  []string{proj.Name})`; `auto` → `cmdAuto(d.a, []string{arg})`. Where the
+  → `cmdResearch(ctx, d.a, prog, []string{arg})` then, on success,
+  `indexNewestBrief` into the project's memory store (best-effort like the
+  REPL's entry; failures are narrated via `logStatus`, never fail the
+  completed research); `review` → `cmdReview(ctx, d.a, nil)`; `intel` →
+  `cmdIntel(ctx, d.a, []string{proj.Name})`; `auto` → `cmdAuto(ctx, d.a,
+  []string{arg})`. All four pipeline commands now take the caller's context
+  as their first parameter (CLI paths pass `context.Background()`; the REPL
+  passes its per-command ctx) — the handler passes its per-call ctx so a
+  host cancel actually kills the drafter/critic subprocesses via
+  `exec.CommandContext` instead of leaving a zombie pipeline burning
+  subscriptions with the Serial lane held. `prog` is `d.a.progress` unless
+  the host sent a `progressToken`, in which case it is a `progress.New`
+  tracker over `progressFnWriter` — an `io.Writer` that turns each non-TTY
+  narration line ("Round 2/6: critiquing draft") into a
+  `notifications/progress` message, so a 20-minute research run no longer
+  looks identical to a hang. `cmdResearch`'s completion lines ("✓ Brief
+  saved", "Status:") moved from `fmt.Printf` to `logStatus` — status
+  narration belongs on stderr, and in MCP mode stdout is the protocol. Where the
   REPL uses its focused project, `pipeline_run` uses the server's **cwd
   project** via `resolveGlobalTarget("")` (the launcher starts `styx mcp`
   in the project dir) — the same resolution research/review/auto perform

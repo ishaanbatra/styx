@@ -303,15 +303,15 @@ func dispatch(verb string, args []string) error {
 
 	switch verb {
 	case "research":
-		return cmdResearch(a, args)
+		return cmdResearch(context.Background(), a, nil, args)
 	case "plan":
 		return cmdPlan(a, args)
 	case "build":
 		return cmdBuild(a, args)
 	case "review":
-		return cmdReview(a, args)
+		return cmdReview(context.Background(), a, args)
 	case "intel":
-		return cmdIntel(a, args)
+		return cmdIntel(context.Background(), a, args)
 	case "graphify":
 		return cmdGraphify(a, args)
 	case "learn":
@@ -319,7 +319,7 @@ func dispatch(verb string, args []string) error {
 	case "mcp":
 		return cmdMCP(a, args)
 	case "auto":
-		return cmdAuto(a, args)
+		return cmdAuto(context.Background(), a, args)
 	case "grunt", "think", "explain", "summarize", "critique":
 		return cmdOneShot(a, verb, args)
 	case "repl": // classic v0.2 REPL, kept until the conductor reaches parity

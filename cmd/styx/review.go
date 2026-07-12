@@ -14,7 +14,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/router"
 )
 
-func cmdReview(a *app, args []string) error {
+func cmdReview(ctx context.Context, a *app, args []string) error {
 	proj, err := resolveGlobalTarget("")
 	if err != nil {
 		return err
@@ -27,7 +27,7 @@ func cmdReview(a *app, args []string) error {
 		return fmt.Errorf("no diff between current branch and default branch; nothing to review")
 	}
 	runID := pipeline.NewRunID("review")
-	text, err := runReviewSynthesized(a, context.Background(), a.progress, runID, proj.Path, diff)
+	text, err := runReviewSynthesized(a, ctx, a.progress, runID, proj.Path, diff)
 	if err != nil {
 		return err
 	}

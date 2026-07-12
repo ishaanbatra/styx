@@ -647,7 +647,13 @@ func cmdMCP(a *app, args []string) error {
 	srv := mcpserver.New("styx", mcpServerVersion, tools)
 	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, dispatch_parallel, thread_status, memory_save, pipeline_run, rate_dispatch, collect)")
 	go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake
-	err := srv.Serve(ctx, os.Stdin, os.Stdout)
+	// The server owns the real stdout; point os.Stdout at stderr so a stray
+	// fmt.Printf in a reused REPL/CLI code path (e.g. a pipeline's
+	// "✓ Brief saved" line) can never interleave with the JSON-RPC stream.
+	protocolOut := os.Stdout
+	os.Stdout = os.Stderr
+	defer func() { os.Stdout = protocolOut }()
+	err := srv.Serve(ctx, os.Stdin, protocolOut)
 	// Remove the watch mirror file on shutdown (mirrors the REPL's identical
 	// cleanup) so a later `styx watch` shows the "no live activity" nudge
 	// instead of this server's stale final frame.

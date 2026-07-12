@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -42,11 +43,11 @@ type Server struct {
 	mu  sync.Mutex    // serializes writes to enc
 	enc *json.Encoder // set for the duration of Serve
 
-	serialMu sync.Mutex // shared lane for Tool.Serial handlers
+	serial chan struct{} // shared lane (capacity 1) for Tool.Serial handlers; ctx-aware, unlike a mutex
 
 	callsMu sync.Mutex
-	calls   map[string]context.CancelFunc // in-flight tools/call by request id
-	wg      sync.WaitGroup                // outstanding tools/call goroutines
+	calls   map[string]context.CancelCauseFunc // in-flight tools/call by request id
+	wg      sync.WaitGroup                     // outstanding tools/call goroutines
 }
 
 func (s *Server) write(v any) error {
@@ -70,7 +71,8 @@ func ProgressFn(ctx context.Context) (func(progress float64, message string), bo
 func New(name, version string, tools []Tool) *Server {
 	s := &Server{name: name, version: version, tools: tools,
 		byName: make(map[string]Tool, len(tools)),
-		calls:  map[string]context.CancelFunc{}}
+		serial: make(chan struct{}, 1),
+		calls:  map[string]context.CancelCauseFunc{}}
 	for _, t := range tools {
 		s.byName[t.Name] = t
 	}
@@ -139,12 +141,17 @@ func (s *Server) Serve(ctx context.Context, in io.Reader, out io.Writer) error {
 	return scanner.Err()
 }
 
+// errClientCancelled marks a call the host explicitly abandoned via
+// notifications/cancelled — as opposed to EOF shutdown, where a best-effort
+// response write is still correct.
+var errClientCancelled = errors.New("client cancelled")
+
 // startCall runs one tools/call on its own goroutine, tracked by request id
 // for notifications/cancelled. The response write error is deliberately
 // dropped: a failed write means the host hung up, and the read loop is about
 // to see EOF and return on its own.
 func (s *Server) startCall(ctx context.Context, req rpcRequest) {
-	callCtx, cancel := context.WithCancel(ctx)
+	callCtx, cancel := context.WithCancelCause(ctx)
 	key := string(req.ID)
 	s.callsMu.Lock()
 	s.calls[key] = cancel
@@ -155,10 +162,18 @@ func (s *Server) startCall(ctx context.Context, req rpcRequest) {
 			s.callsMu.Lock()
 			delete(s.calls, key)
 			s.callsMu.Unlock()
-			cancel()
+			cancel(nil)
 			s.wg.Done()
 		}()
 		result, rpcErr := s.callTool(callCtx, req.Params)
+		// A client-cancelled call gets no response: the host forgot this
+		// request id when it sent notifications/cancelled, and answering it
+		// anyway (possibly much later, when the handler finally winds down)
+		// makes strict hosts treat the unknown-id response as a connection
+		// error and drop the transport.
+		if errors.Is(context.Cause(callCtx), errClientCancelled) {
+			return
+		}
 		_ = s.write(rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: result, Error: rpcErr})
 	}()
 }
@@ -182,7 +197,7 @@ func (s *Server) handleNotification(req rpcRequest) {
 	cancel, ok := s.calls[string(p.RequestID)]
 	s.callsMu.Unlock()
 	if ok {
-		cancel()
+		cancel(errClientCancelled)
 	}
 }
 
@@ -191,7 +206,7 @@ func (s *Server) cancelInflight() {
 	s.callsMu.Lock()
 	defer s.callsMu.Unlock()
 	for _, cancel := range s.calls {
-		cancel()
+		cancel(nil)
 	}
 }
 
@@ -249,10 +264,6 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *rpcEr
 	if !ok {
 		return nil, &rpcError{Code: -32602, Message: "unknown tool: " + p.Name}
 	}
-	if tool.Serial {
-		s.serialMu.Lock()
-		defer s.serialMu.Unlock()
-	}
 	if len(p.Meta.ProgressToken) > 0 && string(p.Meta.ProgressToken) != "null" {
 		tok := p.Meta.ProgressToken
 		ctx = context.WithValue(ctx, progressKey{}, func(progress float64, message string) {
@@ -266,6 +277,33 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (any, *rpcEr
 				},
 			})
 		})
+	}
+	if tool.Serial {
+		// Acquire the shared lane ctx-aware: a queued call must still honor
+		// notifications/cancelled instead of running long after the host gave
+		// up on it, and the host should hear WHY nothing is happening yet.
+		cancelled := map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "cancelled while queued behind a running serial tool"}},
+			"isError": true,
+		}
+		select {
+		case s.serial <- struct{}{}:
+		default:
+			if fn, ok := ProgressFn(ctx); ok {
+				fn(0, "queued: waiting for the running serial tool to finish")
+			}
+			select {
+			case s.serial <- struct{}{}:
+			case <-ctx.Done():
+				return cancelled, nil
+			}
+		}
+		defer func() { <-s.serial }()
+		// The select above picks randomly when the lane frees at the same
+		// moment the ctx fires — re-check so a cancelled call never runs.
+		if ctx.Err() != nil {
+			return cancelled, nil
+		}
 	}
 	result, err := tool.Handler(ctx, p.Arguments)
 	if err != nil {

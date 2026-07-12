@@ -1,5 +1,7 @@
 package main
 
+import "context"
+
 func cmdDeepResearch(args []string) error {
 	logStatus("'deep-research' is now 'research --deep' in v0.2 — forwarding")
 	a, err := loadApp()
@@ -8,5 +10,5 @@ func cmdDeepResearch(args []string) error {
 	}
 	defer a.tracker.Close()
 	forwarded := append([]string{"--deep"}, args...)
-	return cmdResearch(a, forwarded)
+	return cmdResearch(context.Background(), a, nil, forwarded)
 }

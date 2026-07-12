@@ -804,16 +804,16 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 	// pipelines must be assigned after s is constructed because closures
 	// reference s.proj(), s.mem(), etc. at call time.
 	s.pipelines = map[string]func(ctx context.Context, arg string) error{
-		"research": func(_ context.Context, arg string) error {
-			err := cmdResearch(a, []string{arg})
+		"research": func(ctx context.Context, arg string) error {
+			err := cmdResearch(ctx, a, nil, []string{arg})
 			if err == nil {
 				indexNewestBrief(context.Background(), s.mem(), s.emb, filepath.Join(s.proj().Path, s.proj().ResearchDir))
 			}
 			return err
 		},
-		"auto":   func(_ context.Context, arg string) error { return cmdAuto(a, []string{arg}) },
-		"review": func(_ context.Context, _ string) error { return cmdReview(a, nil) },
-		"intel":  func(_ context.Context, _ string) error { return cmdIntel(a, []string{s.proj().Name}) },
+		"auto":   func(ctx context.Context, arg string) error { return cmdAuto(ctx, a, []string{arg}) },
+		"review": func(ctx context.Context, _ string) error { return cmdReview(ctx, a, nil) },
+		"intel":  func(ctx context.Context, _ string) error { return cmdIntel(ctx, a, []string{s.proj().Name}) },
 	}
 
 	// cleanup cancels the session context (stopping the watcher goroutine),

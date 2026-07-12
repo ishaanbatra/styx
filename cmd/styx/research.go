@@ -8,13 +8,23 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/brief"
 	"github.com/ishaanbatra/styx/internal/channel"
+	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/research"
 	"github.com/ishaanbatra/styx/internal/router"
 )
 
-func cmdResearch(a *app, args []string) error {
+// cmdResearch runs the drafter/critic convergence loop. ctx must be the
+// caller's live context: the MCP server cancels it on notifications/cancelled
+// (host-side Esc) and the channel layer kills the drafter/critic subprocesses
+// via exec.CommandContext — a Background() here turns host cancellation into a
+// zombie pipeline that keeps burning subscriptions invisibly. prog overrides
+// a.progress for per-call narration (MCP progress forwarding); nil = a.progress.
+func cmdResearch(ctx context.Context, a *app, prog *progress.Tracker, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: styx research [--deep] <query>")
+	}
+	if prog == nil {
+		prog = a.progress
 	}
 	deep := false
 	queryParts := []string{}
@@ -36,11 +46,11 @@ func cmdResearch(a *app, args []string) error {
 	}
 
 	// Resolve drafter (verb=research) and critic (verb=research.critic) channels via router.
-	drafterDec, err := a.router.Route(context.Background(), router.Request{Verb: "research", Args: queryParts})
+	drafterDec, err := a.router.Route(ctx, router.Request{Verb: "research", Args: queryParts})
 	if err != nil {
 		return fmt.Errorf("route research: %w", err)
 	}
-	criticDec, err := a.router.Route(context.Background(), router.Request{Verb: "research.critic", Args: queryParts})
+	criticDec, err := a.router.Route(ctx, router.Request{Verb: "research.critic", Args: queryParts})
 	if err != nil {
 		return fmt.Errorf("route research.critic: %w", err)
 	}
@@ -60,7 +70,7 @@ func cmdResearch(a *app, args []string) error {
 		drafterDec.Channel, drafterDec.Model, criticDec.Channel, criticDec.Model,
 		mapStr(deep, " (--deep)"))
 
-	b, err := research.Loop(context.Background(), query, drafter, critic, a.progress)
+	b, err := research.Loop(ctx, query, drafter, critic, prog)
 	if err != nil {
 		return fmt.Errorf("convergence loop: %w", err)
 	}
@@ -75,7 +85,7 @@ func cmdResearch(a *app, args []string) error {
 		urls := research.ExtractURLs(body)
 		if len(urls) > 0 {
 			summarizer := research.AgySummarizer(drafter)
-			sources, _ := research.ChaseSources(context.Background(), urls, summarizer, a.progress)
+			sources, _ := research.ChaseSources(ctx, urls, summarizer, prog)
 			b.Sources = sources
 		}
 	}
@@ -95,8 +105,11 @@ func cmdResearch(a *app, args []string) error {
 		return err
 	}
 	rel, _ := filepath.Rel(proj.Path, out)
-	fmt.Printf("✓ Brief saved: %s\n", rel)
-	fmt.Printf("  Status: %s (%d rounds)\n", b.Status, len(b.Critiques))
+	// Status narration, not command output: stderr via logStatus. In MCP mode
+	// stdout is the JSON-RPC channel, and these two lines were being parsed
+	// (and rejected) by the host as protocol frames.
+	logStatus("✓ Brief saved: %s", rel)
+	logStatus("  Status: %s (%d rounds)", b.Status, len(b.Critiques))
 	return nil
 }
 
