@@ -27,7 +27,7 @@ func (a *agyAdapter) Send(ctx context.Context, prompt, workingDir string) (strin
 	return resp.Text, nil
 }
 
-func cmdIntel(a *app, args []string) error {
+func cmdIntel(ctx context.Context, a *app, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: styx intel <project-alias-or-path> | styx intel ls")
 	}
@@ -64,7 +64,7 @@ func cmdIntel(a *app, args []string) error {
 	if !ok {
 		return errors.New("agy channel not registered")
 	}
-	idx, err := intel.Build(context.Background(), proj, &agyAdapter{ch: rawChannel(ag)}, a.progress)
+	idx, err := intel.Build(ctx, proj, &agyAdapter{ch: rawChannel(ag)}, a.progress)
 	if err != nil {
 		return fmt.Errorf("build: %w", err)
 	}

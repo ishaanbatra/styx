@@ -20,7 +20,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/signals"
 )
 
-func cmdAuto(a *app, args []string) error {
+func cmdAuto(ctx context.Context, a *app, args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: styx auto [--deep] [--no-pr] [--no-push] [--resume <run-id>] <goal>")
 	}
@@ -67,7 +67,6 @@ func cmdAuto(a *app, args []string) error {
 
 	r := buildRunner(a, proj, runID, strings.Join(goal, " "), deep, noPR, noPush)
 
-	ctx := context.Background()
 	if resumeID != "" {
 		logStatus("resuming run %s", runID)
 		return pipeline.Resume(ctx, r)

@@ -8,6 +8,7 @@ package main
 // MCP tools" and the conductor spec (docs/superpowers/specs/).
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -30,6 +31,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/pipeline"
+	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/shipgate"
 	"github.com/ishaanbatra/styx/internal/signals"
@@ -194,6 +196,34 @@ func (d *conductorDeps) anyLive() bool {
 		}
 	}
 	return false
+}
+
+// progressFnWriter adapts an MCP progress emitter into the io.Writer a
+// progress.Tracker narrates to (non-TTY mode: one plain line per event).
+// Each complete line becomes one notifications/progress message, so the host
+// sees "Round 2/6: critiquing draft" instead of a silent multi-minute call.
+// The count is dimensionless but monotonic, as MCP progress requires.
+type progressFnWriter struct {
+	fn  func(progress float64, message string)
+	buf []byte
+	n   float64
+}
+
+func (w *progressFnWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		line := strings.TrimSpace(strings.TrimPrefix(string(w.buf[:i]), "[styx] "))
+		w.buf = w.buf[i+1:]
+		if line == "" {
+			continue
+		}
+		w.n++
+		w.fn(w.n, line)
+	}
 }
 
 // capPctFor returns the routing.toml cap_pct for a channel (0 = no cap).
@@ -750,9 +780,16 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 						return res, nil // brain reads token+message from the result
 					}
 				}
+				// Long pipelines narrate rounds to the host when it asked for
+				// progress (params._meta.progressToken) — a 20-minute research
+				// run must not look identical to a hang.
+				prog := d.a.progress
+				if fn, ok := mcpserver.ProgressFn(ctx); ok {
+					prog = progress.New(&progressFnWriter{fn: fn}, false, false)
+				}
 				switch in.Pipeline { // same calls as the REPL pipelines map (repl.go:625)
 				case "research":
-					if err := cmdResearch(d.a, []string{in.Arg}); err != nil {
+					if err := cmdResearch(ctx, d.a, prog, []string{in.Arg}); err != nil {
 						return nil, fmt.Errorf("pipeline research: %w", err)
 					}
 					// Mirror the REPL's research entry: index the newest brief
@@ -767,7 +804,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 						indexNewestBrief(ctx, m.mem, d.emb, filepath.Join(proj.Path, proj.ResearchDir))
 					}
 				case "review":
-					if err := cmdReview(d.a, nil); err != nil {
+					if err := cmdReview(ctx, d.a, nil); err != nil {
 						return nil, fmt.Errorf("pipeline review: %w", err)
 					}
 				case "intel":
@@ -780,11 +817,11 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					if err != nil {
 						return nil, fmt.Errorf("pipeline intel: %w", err)
 					}
-					if err := cmdIntel(d.a, []string{proj.Name}); err != nil {
+					if err := cmdIntel(ctx, d.a, []string{proj.Name}); err != nil {
 						return nil, fmt.Errorf("pipeline intel: %w", err)
 					}
 				case "auto":
-					if err := cmdAuto(d.a, []string{in.Arg}); err != nil {
+					if err := cmdAuto(ctx, d.a, []string{in.Arg}); err != nil {
 						return nil, fmt.Errorf("pipeline auto: %w", err)
 					}
 				}

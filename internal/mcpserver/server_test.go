@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -249,19 +250,27 @@ func TestConcurrentToolCalls(t *testing.T) {
 
 // TestCancelledNotificationCancelsCall: notifications/cancelled must cancel
 // the matching in-flight call's context — this is how a host-side interrupt
-// (Esc in Claude Code) reaches a long-running handler.
+// (Esc in Claude Code) reaches a long-running handler — and the cancelled
+// call must get NO response: the host forgot the request id when it
+// cancelled, and strict hosts treat an unknown-id response as a connection
+// error and drop the transport (MCP spec: SHOULD NOT respond once cancelled).
 func TestCancelledNotificationCancelsCall(t *testing.T) {
+	unblocked := make(chan struct{})
 	slow := Tool{Name: "slow", Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
 		<-ctx.Done()
+		close(unblocked)
 		return map[string]any{"cancelled": true}, nil
 	}}
 	lines := serve(t, New("t", "0", []Tool{slow}),
 		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"slow","arguments":{}}}`,
 		`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1}}`)
-	// callTool wraps the handler's result in an escaped, indented JSON string
-	// inside content[].text, so the literal on the wire is `\"cancelled\": true`.
-	if len(lines) != 1 || !strings.Contains(lines[0], `\"cancelled\": true`) {
-		t.Fatalf("cancelled call must unblock and answer, got: %v", lines)
+	select {
+	case <-unblocked:
+	default:
+		t.Fatal("cancel notification must unblock the handler")
+	}
+	if len(lines) != 0 {
+		t.Fatalf("client-cancelled call must get no response, got: %v", lines)
 	}
 }
 
@@ -299,5 +308,51 @@ func TestSerialToolsDoNotOverlap(t *testing.T) {
 		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"b","arguments":{}}}`)
 	if overlaps.Load() != 0 {
 		t.Fatalf("Serial tools overlapped %d time(s)", overlaps.Load())
+	}
+}
+
+// TestSerialCancelWhileQueued: a Serial call queued behind a running Serial
+// call must honor notifications/cancelled instead of running long after the
+// host gave up on it (the retry-behind-a-zombie failure mode).
+func TestSerialCancelWhileQueued(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var secondRan atomic.Bool
+	first := Tool{Name: "first", Serial: true, Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+		close(started)
+		<-release
+		return map[string]any{"who": "first"}, nil
+	}}
+	second := Tool{Name: "second", Serial: true, Handler: func(ctx context.Context, _ json.RawMessage) (any, error) {
+		secondRan.Store(true)
+		return map[string]any{"who": "second"}, nil
+	}}
+	s := New("t", "0", []Tool{first, second})
+	in, inW := io.Pipe()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(context.Background(), in, &out) }()
+	writeLine := func(l string) {
+		if _, err := inW.Write([]byte(l + "\n")); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	}
+	writeLine(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"first","arguments":{}}}`)
+	<-started // call 1 owns the lane before call 2 arrives
+	writeLine(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"second","arguments":{}}}`)
+	time.Sleep(50 * time.Millisecond) // let call 2 reach the serial queue
+	writeLine(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":2}}`)
+	time.Sleep(50 * time.Millisecond) // let the cancel land before the lane frees
+	close(release)                    // finish call 1
+	inW.Close()                       // EOF: Serve drains and returns
+	if err := <-done; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	if secondRan.Load() {
+		t.Fatal("cancelled queued call must not run once the lane frees")
+	}
+	lines := nonEmptyLines(out.String())
+	if len(lines) != 1 || !strings.Contains(lines[0], `"id":1`) {
+		t.Fatalf("want only call 1's response, got: %v", lines)
 	}
 }
