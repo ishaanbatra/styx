@@ -1060,6 +1060,20 @@ the built-in claude path (`--dangerously-skip-permissions -p`), which streams
 claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 `--no-pr`/`--no-push`.
 
+## Attribution (internal/attribution)
+
+The single identity styx stamps onto work that lands in git, as three
+constants: `Trailer` (the `Co-Authored-By: styx-thetrickster[bot] <…>`
+line — the styx GitHub App's bot user, so commits and the Contributors
+sidebar render the styx logo avatar), `CommitInstruction` (the sentence
+embedded in write-capable agent prompts so agents end every commit with
+the trailer), and `PRFooter` (the "Generated with styx" link appended to
+PR bodies). Three consumers: `execute.buildPrompt` (auto-pipeline
+implementers), `execute.Ship` via `prBody` (PR bodies, default and
+caller-supplied), and the conductor's `dispatch`/`dispatch_parallel`
+via `attributedMessage` (edit/ship-risk messages; read-risk dispatches
+and ollama one-shots pass through untouched).
+
 ## Shipgate (internal/shipgate)
 
 Server-side confirmation for ship-risk MCP actions — commit/push/PR — before the MCP server executes them. The gate is isolated from styx business logic (stdlib only) so it holds for any MCP host. Supports three modes: `handshake` (default) relays a single-use token through the brain for user confirmation; `tty` prompts on `/dev/tty` directly, bypassing the brain; `off` allows all actions (scripting). Tokens expire after 10 minutes and are bound to their action — reuse is denied, and a token for one action does not unlock another. See conductor spec §6.

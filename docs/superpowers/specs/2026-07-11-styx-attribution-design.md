@@ -30,13 +30,13 @@ one constant, trivially editable later if that changes.
 
 ## Design
 
-New package `internal/attribution` with three exported helpers and no
+New package `internal/attribution` with three exported constants and no
 dependencies:
 
-- `Trailer() string` — the `Co-Authored-By` line above.
-- `CommitInstruction() string` — one sentence telling an agent to end
-  every commit message with that exact trailer.
-- `PRFooter() string` — the footer line above.
+- `Trailer` — the `Co-Authored-By` line above.
+- `CommitInstruction` — one sentence telling an agent to end every
+  commit message with that exact trailer.
+- `PRFooter` — the footer line above.
 
 Three consumers:
 
