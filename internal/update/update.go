@@ -205,7 +205,7 @@ func MaybeNotify(w io.Writer) error {
 	if comparison <= 0 {
 		return nil
 	}
-	_, err = fmt.Fprintf(w, "[styx] a new, littler, trickier styx is available: %s (run 'styx update')\n", displayVersion(latest.Version))
+	_, err = fmt.Fprintf(w, "[styx] a new, litter, trickier styx is available: %s (run 'styx update')\n", displayVersion(latest.Version))
 	if err != nil {
 		return fmt.Errorf("write update notice: %w", err)
 	}

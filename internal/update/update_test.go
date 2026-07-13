@@ -203,7 +203,7 @@ func TestMaybeNotify(t *testing.T) {
 	if err := MaybeNotify(&output); err != nil {
 		t.Fatalf("MaybeNotify: %v", err)
 	}
-	want := "[styx] a new, littler, trickier styx is available: v1.7.0 (run 'styx update')\n"
+	want := "[styx] a new, litter, trickier styx is available: v1.7.0 (run 'styx update')\n"
 	if got := output.String(); got != want {
 		t.Fatalf("notice = %q, want %q", got, want)
 	}
