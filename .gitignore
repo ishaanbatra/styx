@@ -11,3 +11,5 @@ graphify-out/
 .superpowers/
 # styx's own working artifacts when dogfooding itself (research briefs, plans, handoffs)
 /styx/
+# generated at release time by the workflow (extra release asset)
+/latest.json
