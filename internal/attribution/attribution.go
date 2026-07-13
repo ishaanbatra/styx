@@ -3,8 +3,10 @@
 // dispatches do — so commit attribution is an instruction embedded in
 // write-capable agent prompts, plus a footer styx appends to PR bodies
 // it creates. The email belongs to the styx-thetrickster GitHub App's
-// bot user (ID 302670164), so GitHub renders the app's avatar on
-// commits and in the Contributors sidebar.
+// bot user (ID 302670164), so GitHub links the co-author and renders the
+// app's avatar on each commit and in the repo home Contributors sidebar.
+// Insights → Contributors and the contributors API count commit authors,
+// not co-authors, so this trailer does not make the bot appear there.
 package attribution
 
 // Trailer is the exact Co-Authored-By line agents must end every commit

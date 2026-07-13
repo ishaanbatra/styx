@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-12
+last_verified: 2026-07-13
 ---
 
 # Styx Architecture
@@ -1068,15 +1068,19 @@ claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 
 The single identity styx stamps onto work that lands in git, as three
 constants: `Trailer` (the `Co-Authored-By: styx-thetrickster[bot] <…>`
-line — the styx GitHub App's bot user, so commits and the Contributors
-sidebar render the styx logo avatar), `CommitInstruction` (the sentence
+line — the styx GitHub App's bot user, so each commit and the repo home
+Contributors sidebar render the styx logo avatar; Insights → Contributors
+and the contributors API are author-only and do not count co-authors),
+`CommitInstruction` (the sentence
 embedded in write-capable agent prompts so agents end every commit with
 the trailer), and `PRFooter` (the "Generated with styx" link appended to
-PR bodies). Three consumers: `execute.buildPrompt` (auto-pipeline
+PR bodies). Four consumers: `execute.buildPrompt` (auto-pipeline
 implementers), `execute.Ship` via `prBody` (PR bodies, default and
 caller-supplied), and the conductor's `dispatch`/`dispatch_parallel`
 via `attributedMessage` (edit/ship-risk messages; read-risk dispatches
-and ollama one-shots pass through untouched).
+and ollama one-shots pass through untouched), plus `conductorGuidance`,
+which embeds `CommitInstruction` in Claude Code's appended system prompt so
+commits made directly by the conductor carry the styx trailer.
 
 ## Shipgate (internal/shipgate)
 
@@ -1119,7 +1123,9 @@ hook bug or malformed payload can never brick a session (which always has
 
 Controlled by `[conductor] route_gate` (block | audit | off, default block):
 `block` installs both hooks; `audit` installs only the PostToolUse recorder
-(never blocks); `off` writes no settings file. The launcher's
+(never blocks); `off` installs no hooks. The launcher always writes its
+settings file because it also disables Claude Code's built-in attribution;
+route-gate mode controls only the hooks object. The launcher's
 `buildConductorSettings` is fail-closed on an unrecognized mode — anything but
 `audit`/`off` installs the full block gate. The gate flips the model's default
 (inline now costs more than dispatch for high-signal cases) but cannot make a
@@ -1139,16 +1145,19 @@ Guidance, RouteGate, ExtraRepos, ExtraArgs}` is everything a host needs.
 1. resolves `paths.StateDir()` and `paths.EnsureDir`s it;
 2. writes `{"mcpServers": {"styx": {"command": StyxBin, "args": ["mcp"]}}}`
    to `<stateDir>/conductor-mcp.json` via atomic tmp+rename;
-2b. unless `RouteGate == "off"`, writes `<stateDir>/conductor-settings.json`
-   (the routing-gate hooks — see the `styx hook` section) via atomic tmp+rename
-   and passes it as `--settings`. Each command hook uses Claude Code's exec form:
+2b. always writes `<stateDir>/conductor-settings.json` via atomic tmp+rename
+   and passes it as `--settings`. The top-level `includeCoAuthoredBy: false`
+   disables Claude Code's built-in Claude co-author trailer for this styx-owned
+   session; `RouteGate` controls only the routing hooks (`off` omits `hooks`,
+   `audit` installs PostToolUse, and block/unknown installs PreToolUse plus
+   PostToolUse — see the `styx hook` section). Each command hook uses Claude Code's exec form:
    `command` is the styx binary path and `args` is `["hook", "<event>"]`, with
    no shell or quoting on any platform. Native-Windows shell-form hooks run
    under Git Bash with a PowerShell fallback, whose incompatible quoting rules
    make one portable command string impossible. We deliberately do NOT pass
    `--strict-mcp-config`: the user's other MCP servers stay available and the
    hook's matcher catches MCP web tools by name instead;
-3. execs `claude --mcp-config <path> [--settings <path>] --append-system-prompt <Guidance>`
+3. execs `claude --mcp-config <path> --settings <path> --append-system-prompt <Guidance>`
    (plus `--add-dir <repo>` per `ExtraRepos`, then any `ExtraArgs` verbatim —
    `styx resume` uses this for `--resume <id>` / `--continue`) via
    `exec.CommandContext` with
@@ -1174,7 +1183,10 @@ brain knows what to pass as `project` on `dispatch`/`thread_status`/
 above), then a note about any extra repos, then two learned-preference
 sections — `## Routing preferences (learned)` from `recallRoutingPrefs()`
 and, after it, `## User preferences (learned)` from `recallUserPrefs()` —
-each omitted entirely when empty. Both helpers call the shared
+each omitted entirely when empty — followed by `## Commit attribution`,
+which embeds `attribution.CommitInstruction` in the appended system prompt so
+the conductor ends commits with the styx trailer after its built-in Claude
+trailer has been disabled in the conductor settings. Both helpers call the shared
 `topLearnedPrefs(kind memory.Kind) string`, which opens `global.db` and
 renders `Store.TopByKind(ctx, kind, 5)` (confidence × recency ranking, no
 embedding involved) as a bullet list. This replaced an earlier
