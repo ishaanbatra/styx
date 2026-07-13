@@ -327,7 +327,8 @@ counts in `Response` are `len/4` estimates.
 - `ollama` speaks `/api/chat`, pings `/api/tags`, and auto-launches the Ollama
   app (`open -a Ollama`, then a 20s poll) only on darwin, gated by a stubable
   package `goos` variable. Off-macOS, a down ollama fails fast with a "start it
-  manually" `ClassifiedError` instead of waiting 20s. Every chat request carries
+  manually" `ClassifiedError` instead of waiting 20s; an already-cancelled
+  context wins over that message on every platform. Every chat request carries
   `keep_alive: "30m"` (ollama's default 5-minute idle unload otherwise forces
   a 3-10s cold reload on the next call); when the estimated prompt tokens
   (`len(prompt+system)/4`) plus 1024 headroom exceed ollama's 4096-token

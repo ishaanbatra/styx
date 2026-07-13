@@ -132,6 +132,9 @@ func (c *Channel) ensureUp(ctx context.Context) error {
 	if c.ping(ctx) {
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("ollama ping: %w", err)
+	}
 	if goos != "darwin" {
 		// Only macOS has an app bundle styx can auto-launch; elsewhere the
 		// HTTP channel works iff ollama is already running.
