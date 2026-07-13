@@ -1,5 +1,7 @@
 # Styx
 
+[![latest release](https://img.shields.io/github/v/release/ishaanbatra/styx)](https://github.com/ishaanbatra/styx/releases/latest)
+
 Personal multi-model dev orchestration CLI. Routes work between Claude, Codex,
 Antigravity (agy / Gemini), and Ollama via a hand-curated rules table.
 
