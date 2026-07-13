@@ -92,6 +92,7 @@ func main() {
 		globalVerbose = verbose
 		globalProjectAlias = projectAlias
 		globalDirArg = dirArg
+		runLaunchUpdateChecks()
 		if err := ensureFirstRun(); err != nil {
 			fmt.Fprintf(os.Stderr, "styx: setup error: %v\n", err)
 			os.Exit(1)

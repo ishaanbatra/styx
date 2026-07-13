@@ -22,6 +22,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/target"
+	styxupdate "github.com/ishaanbatra/styx/internal/update"
 )
 
 // globalQuiet and globalVerbose are set by main() after parseGlobalFlags.
@@ -256,6 +257,8 @@ func (b *budgetSource) Broken(ctx context.Context, ch string) bool {
 }
 
 func dispatch(verb string, args []string) error {
+	runLaunchUpdateChecks()
+
 	switch verb {
 	case "help", "-h", "--help":
 		printHelp()
@@ -267,6 +270,8 @@ func dispatch(verb string, args []string) error {
 		return cmdMigrateSecrets()
 	case "upgrade":
 		return cmdUpgrade()
+	case "update":
+		return cmdUpdate(args)
 	case "project":
 		return cmdProject(args)
 	case "route":
@@ -342,6 +347,25 @@ func dispatch(verb string, args []string) error {
 	}
 	utterance := strings.TrimSpace(strings.Join(tokens, " "))
 	return cmdBrainTurn(a, utterance)
+}
+
+// runLaunchUpdateChecks is deliberately best-effort: cached notice failures
+// and detached-process failures can never change a command's result.
+func runLaunchUpdateChecks() {
+	styxupdate.ConfigureLaunch(styxDisplayVersion(), globalQuiet)
+	if err := styxupdate.MaybeNotify(os.Stderr); err != nil {
+		debugUpdateCheck("read cached update notice: %v", err)
+	}
+	if err := styxupdate.SpawnBackgroundCheck(); err != nil {
+		debugUpdateCheck("spawn background update check: %v", err)
+	}
+}
+
+func debugUpdateCheck(format string, args ...any) {
+	if !globalVerbose {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[styx] update check debug: "+format+"\n", args...)
 }
 
 // allReposResolve reports whether every token names a resolvable project; if so

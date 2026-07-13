@@ -61,7 +61,9 @@ Shared pieces:
   resolves its display value in this order: a non-development linker stamp,
   the Go build info's tagged module version (for `go install ...@latest`), a
   `dev-<short-revision>` value with an optional `-dirty` suffix, then the
-  development default.
+  development default. Both bare-conductor and normal verb launch paths run
+  the best-effort update hooks before doing command work; hook failures are
+  visible only with `--verbose` and can never change the command result.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first (including `help`/`-h`/`--help` and `version`/`--version`/`-V`,
   which prints `"styx " + styxDisplayVersion()` and returns immediately — no
@@ -87,6 +89,12 @@ Shared pieces:
   utterance, not an error) handled by `cmdBrainTurn`. `mcp` is also an app
   verb (needs the full `app{router, tracker}` from `loadApp()`) and is
   dispatched in the second switch alongside `auto`, `research`, etc.
+- `update.go` — the first-tier `styx update` verb rejects development builds
+  and Scoop/WinGet-owned executables, then uses `go-selfupdate` to replace the
+  current binary from `ishaanbatra/styx` releases after verifying its archive
+  against `checksums.txt`. The hidden `--check-only` form is the detached
+  launch-check entry point. The routing-migration `styx upgrade` verb remains
+  separate and unchanged.
 - `launch.go` — `cmdLaunch(a *app, repos ...string) error`, the conductor
   front door, and `cmdResume(a *app, sessionID string) error`, which
   relaunches the conductor resuming a Claude Code session: `--resume <id>`
@@ -1935,6 +1943,27 @@ and never fails cleanup. The conductor mirrors this: `conductorDeps` carries
 `d.removeMirror()` right after `srv.Serve(...)` returns, before propagating
 its error — so the file is gone whether the server exits cleanly or the host
 closes stdin.
+
+## Updates (internal/update)
+
+- **Update checks** (`internal/update/`): launch-time checks read only
+  `$STYX_UPDATE_CACHE_DIR/latest.json` (or the platform user cache's
+  `styx/latest.json`) and notify on stderr only when stdin, stdout, and stderr
+  are all TTYs. `--quiet`, `STYX_NO_UPDATE_CHECK`, `DO_NOT_TRACK=1`, and
+  development builds suppress notices. A stale or missing 24-hour cache starts
+  a fully detached `styx update --check-only` child with null stdio and a
+  recursion-guard environment variable; the child fetches the GitHub release
+  CDN's `latest.json` with a two-second timeout. Atomic cache replacement is
+  serialized by a non-blocking advisory `latest.lock`, with freshness checked
+  again after lock acquisition. Scoop and WinGet path detection resolves
+  executable symlinks before deciding that the package manager owns updates.
+- **Self-update**: `SelfUpdate` rejects development builds (`-dev`/`dev-`
+  strings, VCS pseudo-versions, and `+dirty` stamps — source builds are never
+  nagged or replaced) and package-manager-owned builds, then asks
+  `go-selfupdate` for the newest `ishaanbatra/styx` GitHub
+  release and replaces the resolved executable only after the selected archive
+  matches `checksums.txt`. `cmd/styx/update.go` gives explicit updates a
+  five-minute context and the hidden cache-refresh child a two-second context.
 
 ## Progress (internal/progress)
 
