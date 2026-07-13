@@ -4,11 +4,51 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 )
 
-// styxVersion is printed by `styx version`. Bump on tagged releases.
-const styxVersion = "0.4.0-dev"
+// styxVersion is printed by `styx version`. Release builds stamp it via ldflags.
+var styxVersion = "0.4.0-dev"
+
+func styxDisplayVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return resolveStyxDisplayVersion(styxVersion, debug.BuildInfo{})
+	}
+	return resolveStyxDisplayVersion(styxVersion, *info)
+}
+
+func resolveStyxDisplayVersion(version string, info debug.BuildInfo) string {
+	if !strings.HasSuffix(version, "-dev") {
+		return version
+	}
+
+	if info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	var revision string
+	modified := false
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			revision = setting.Value
+		case "vcs.modified":
+			modified = setting.Value == "true"
+		}
+	}
+	if revision == "" {
+		return version
+	}
+	if len(revision) > 7 {
+		revision = revision[:7]
+	}
+	if modified {
+		revision += "-dirty"
+	}
+	return "dev-" + revision
+}
 
 // parseGlobalFlags strips global flags from argv (long form only), returning
 // the remaining tokens plus the parsed values.

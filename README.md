@@ -24,6 +24,11 @@ works minus a secret store (no `migrate-secrets`) and ollama auto-launch.
 
     ./install.sh        # builds + drops binary at ~/bin/styx (backs up any existing one)
 
+Tagged releases also publish prebuilt Linux, macOS, and Windows binaries on
+the [GitHub Releases page](https://github.com/ishaanbatra/styx/releases). The
+one-shot script still builds from source for now; the release-asset installer
+will replace it in a follow-up.
+
 Then migrate any plaintext secrets out of your shell rc:
 
     styx migrate-secrets

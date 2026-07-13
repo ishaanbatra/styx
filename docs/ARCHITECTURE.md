@@ -57,12 +57,15 @@ Shared pieces:
   `styx` constructs the app and calls `cmdLaunch(a)`, handing off to the
   Claude Code conductor (see "Launcher" below) — `styx repl` is the only way
   to reach the classic v0.2 REPL loop now; errors exit 1 with a `styx:`
-  prefix. Declares `const styxVersion = "0.4.0-dev"`, printed by the `version`
-  verb (bump on tagged releases).
+  prefix. Declares the linker-stampable `var styxVersion = "0.4.0-dev"` and
+  resolves its display value in this order: a non-development linker stamp,
+  the Go build info's tagged module version (for `go install ...@latest`), a
+  `dev-<short-revision>` value with an optional `-dirty` suffix, then the
+  development default.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first (including `help`/`-h`/`--help` and `version`/`--version`/`-V`,
-  which prints `"styx " + styxVersion` and returns immediately — no app, no
-  conductor); the rest construct `app{routing, tracker, router, channels,
+  which prints `"styx " + styxDisplayVersion()` and returns immediately — no
+  app, no conductor); the rest construct `app{routing, tracker, router, channels,
   progress}` via `loadApp()`. `loadApp()` runs a best-effort model refresh when
   `models.json` is stale and reloads routing if a de-pin migration ran, then
   shares the budget tracker with the router for both cap checks and

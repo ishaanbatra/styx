@@ -1,0 +1,134 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Force a SemVer tag (for example, v0.4.0)
+        required: false
+        type: string
+
+concurrency:
+  group: release
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@e24998b8b67b290c2fa8b7c14fcfa7de2c5c9b8c # v7.1.0
+        with:
+          distribution: goreleaser
+          version: v2.22.0
+          install-only: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Check GoReleaser configuration
+        run: goreleaser check
+
+      - name: Build release snapshot
+        run: goreleaser release --snapshot --clean
+
+  release:
+    name: Tag and release
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Compute next tag
+        id: tagger
+        if: github.event_name != 'workflow_dispatch' || inputs.tag_name == ''
+        uses: mathieudutour/github-tag-action@a22cf08638b34d5badda920f9daf6e72c477b07b # v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+          dry_run: true
+
+      - name: Determine target tag
+        id: target
+        env:
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+          NEW_TAG: ${{ steps.tagger.outputs.new_tag }}
+        run: |
+          semver_regex='^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?(\+[0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*)?$'
+          target_tag="${INPUT_TAG_NAME:-$NEW_TAG}"
+          if [ -z "$target_tag" ]; then
+            echo "Error: no release tag was supplied or computed" >&2
+            exit 1
+          fi
+          if [[ ! "$target_tag" =~ $semver_regex ]]; then
+            echo "Error: invalid SemVer tag: $target_tag" >&2
+            exit 1
+          fi
+          echo "tag=$target_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        env:
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          git fetch origin main --tags
+
+          latest_tag=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n 1)
+          if [ -n "$latest_tag" ] && git merge-base --is-ancestor HEAD "$latest_tag"; then
+            latest_sha=$(git rev-parse "$latest_tag^{commit}")
+            head_sha=$(git rev-parse HEAD)
+            if [ "$latest_sha" != "$head_sha" ]; then
+              echo "Error: HEAD $head_sha is an ancestor of already-released $latest_tag ($latest_sha); refusing an out-of-order release" >&2
+              exit 1
+            fi
+          fi
+
+          if git ls-remote --exit-code --tags origin "refs/tags/$TARGET_TAG" >/dev/null 2>&1; then
+            tag_sha=$(git rev-parse "$TARGET_TAG^{commit}")
+            head_sha=$(git rev-parse HEAD)
+            if [ "$tag_sha" != "$head_sha" ]; then
+              echo "Error: tag $TARGET_TAG points to $tag_sha, not HEAD $head_sha" >&2
+              exit 1
+            fi
+            echo "Tag $TARGET_TAG already points to HEAD; skipping push."
+          else
+            git tag "$TARGET_TAG"
+            git push origin "refs/tags/$TARGET_TAG"
+          fi
+
+          git checkout --detach "refs/tags/$TARGET_TAG"
+
+      - name: Generate latest.json
+        env:
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
+        run: printf '{"version":"%s"}\n' "$TARGET_TAG" > latest.json
+
+      - name: Release with GoReleaser
+        uses: goreleaser/goreleaser-action@e24998b8b67b290c2fa8b7c14fcfa7de2c5c9b8c # v7.1.0
+        with:
+          distribution: goreleaser
+          version: v2.22.0
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
