@@ -53,6 +53,7 @@ VERBS
   runs ls                   List pipeline runs for current project
   runs show <run-id>        Show JSON state of a specific run
   runs unlock               Force-release a stale pipeline lock (after a crash)
+  update                    Update styx to the latest verified release
   help                      Show this menu
   version                   Print the styx version
 

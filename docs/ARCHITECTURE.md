@@ -25,7 +25,8 @@ Styx is a Go CLI that routes dev work between four AI channels — claude
 argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir)
               │ bare `styx` launches the conductor (`styx repl` for the
               │ classic REPL); otherwise ensureFirstRun():
-              │ seed ~/.config/styx/routing.toml, v0.1→v0.2 upgrade
+              │ first-run onboard/seed ~/.config/styx/routing.toml,
+              │ then unchanged v0.1→v0.2 upgrade checks
               ▼
         cmd/styx/dispatch.go
               │ no-app verbs (help, doctor, project, route, budget, check, runs, execute…)
@@ -57,12 +58,17 @@ Shared pieces:
   `styx` constructs the app and calls `cmdLaunch(a)`, handing off to the
   Claude Code conductor (see "Launcher" below) — `styx repl` is the only way
   to reach the classic v0.2 REPL loop now; errors exit 1 with a `styx:`
-  prefix. Declares `const styxVersion = "0.4.0-dev"`, printed by the `version`
-  verb (bump on tagged releases).
+  prefix. Declares the linker-stampable `var styxVersion = "0.4.0-dev"` and
+  resolves its display value in this order: a non-development linker stamp,
+  the Go build info's tagged module version (for `go install ...@latest`), a
+  `dev-<short-revision>` value with an optional `-dirty` suffix, then the
+  development default. Both bare-conductor and normal verb launch paths run
+  the best-effort update hooks before doing command work; hook failures are
+  visible only with `--verbose` and can never change the command result.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first (including `help`/`-h`/`--help` and `version`/`--version`/`-V`,
-  which prints `"styx " + styxVersion` and returns immediately — no app, no
-  conductor); the rest construct `app{routing, tracker, router, channels,
+  which prints `"styx " + styxDisplayVersion()` and returns immediately — no
+  app, no conductor); the rest construct `app{routing, tracker, router, channels,
   progress}` via `loadApp()`. `loadApp()` runs a best-effort model refresh when
   `models.json` is stale and reloads routing if a de-pin migration ran, then
   shares the budget tracker with the router for both cap checks and
@@ -84,6 +90,12 @@ Shared pieces:
   utterance, not an error) handled by `cmdBrainTurn`. `mcp` is also an app
   verb (needs the full `app{router, tracker}` from `loadApp()`) and is
   dispatched in the second switch alongside `auto`, `research`, etc.
+- `update.go` — the first-tier `styx update` verb rejects development builds
+  and Scoop/WinGet-owned executables, then uses `go-selfupdate` to replace the
+  current binary from `ishaanbatra/styx` releases after verifying its archive
+  against `checksums.txt`. The hidden `--check-only` form is the detached
+  launch-check entry point. The routing-migration `styx upgrade` verb remains
+  separate and unchanged.
 - `launch.go` — `cmdLaunch(a *app, repos ...string) error`, the conductor
   front door, and `cmdResume(a *app, sessionID string) error`, which
   relaunches the conductor resuming a Claude Code session: `--resume <id>`
@@ -123,6 +135,19 @@ Shared pieces:
   with `"\n- "`. It is a pure enhancement: any failure (store open, recall) is
   narrated via `logStatus` and yields `""` rather than blocking the launch.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
+- `internal/onboard` — first-run routing setup called only from
+  `ensureFirstRun`'s absent-`routing.toml` branch. It requires stdin, stdout,
+  and stderr TTYs with `CI` and `STYX_NO_WIZARD` both unset; every other path
+  atomically writes `defaultRoutingTOML` byte-for-byte, preserving scripted
+  and e2e behavior. The interactive path probes `claude`/`codex`/`agy` via
+  `exec.LookPath` and Ollama via its local `/api/tags` endpoint, preselects a
+  `huh` subscription multi-select, and atomically writes a comment-preserving,
+  hand-editable tailored routing file. Its pure `TailorRouting` filters or
+  promotes targets around unavailable channels (including parallel review
+  synthesis); installer confirms are default-off and use bounded
+  `exec.CommandContext` argument vectors with streamed I/O, never shell
+  interpolation or `sudo`. Routing migrations remain owned exclusively by
+  `config.UpgradeRoutingFile` and run afterward unchanged.
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
   attempt in the budget DB with a classified error kind.
@@ -1932,6 +1957,27 @@ and never fails cleanup. The conductor mirrors this: `conductorDeps` carries
 `d.removeMirror()` right after `srv.Serve(...)` returns, before propagating
 its error — so the file is gone whether the server exits cleanly or the host
 closes stdin.
+
+## Updates (internal/update)
+
+- **Update checks** (`internal/update/`): launch-time checks read only
+  `$STYX_UPDATE_CACHE_DIR/latest.json` (or the platform user cache's
+  `styx/latest.json`) and notify on stderr only when stdin, stdout, and stderr
+  are all TTYs. `--quiet`, `STYX_NO_UPDATE_CHECK`, `DO_NOT_TRACK=1`, and
+  development builds suppress notices. A stale or missing 24-hour cache starts
+  a fully detached `styx update --check-only` child with null stdio and a
+  recursion-guard environment variable; the child fetches the GitHub release
+  CDN's `latest.json` with a two-second timeout. Atomic cache replacement is
+  serialized by a non-blocking advisory `latest.lock`, with freshness checked
+  again after lock acquisition. Scoop and WinGet path detection resolves
+  executable symlinks before deciding that the package manager owns updates.
+- **Self-update**: `SelfUpdate` rejects development builds (`-dev`/`dev-`
+  strings, VCS pseudo-versions, and `+dirty` stamps — source builds are never
+  nagged or replaced) and package-manager-owned builds, then asks
+  `go-selfupdate` for the newest `ishaanbatra/styx` GitHub
+  release and replaces the resolved executable only after the selected archive
+  matches `checksums.txt`. `cmd/styx/update.go` gives explicit updates a
+  five-minute context and the hidden cache-refresh child a two-second context.
 
 ## Progress (internal/progress)
 

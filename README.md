@@ -5,7 +5,7 @@ Antigravity (agy / Gemini), and Ollama via a hand-curated rules table.
 
 ## Prerequisites
 
-- **Go 1.22+** — to build (no cgo; sqlite is pure Go).
+- **Go 1.25.12+** — to build (no cgo; sqlite is pure Go).
 - **`claude` CLI** ([Claude Code](https://claude.com/claude-code)) with an
   active subscription — the only hard requirement at runtime; the default
   `styx` verb launches it as the conductor.
@@ -20,9 +20,39 @@ in the Keychain, ollama auto-launched); Windows is supported natively
 (secrets in the Windows Credential Manager; start ollama yourself); Linux
 works minus a secret store (no `migrate-secrets`) and ollama auto-launch.
 
-## Install (one shot)
+## Install
 
-    ./install.sh        # builds + drops binary at ~/bin/styx (backs up any existing one)
+macOS or Linux:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ishaanbatra/styx/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/ishaanbatra/styx/main/install.ps1 | iex
+```
+
+With Go:
+
+```sh
+go install github.com/ishaanbatra/styx/cmd/styx@latest
+```
+
+Tagged releases are also available on the
+[GitHub Releases page](https://github.com/ishaanbatra/styx/releases). Run
+`styx update` to stay current when you installed a release directly.
+
+### From source
+
+Contributors can keep the local build-and-install workflow:
+
+```sh
+git clone https://github.com/ishaanbatra/styx.git
+cd styx
+./install.sh --from-source
+```
 
 Then migrate any plaintext secrets out of your shell rc:
 
@@ -31,12 +61,27 @@ Then migrate any plaintext secrets out of your shell rc:
 If you're upgrading from v0.1 with `gemini:*` references in routing.toml, styx
 auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 
+## First run
+
+On its first interactive terminal run, styx detects `claude`, `codex`, and
+`agy` on `PATH` plus a reachable local Ollama server, then opens a short wizard.
+Choose the subscriptions you have; styx writes a plain, hand-editable
+`~/.config/styx/routing.toml` whose fallback chains avoid unavailable channels.
+For a selected subscription whose CLI is missing, the wizard can run that
+tool's official installer only after an explicit, default-off confirmation.
+It never uses `sudo`.
+
+The wizard runs only when stdin, stdout, and stderr are all terminals. CI,
+pipes, redirected commands, and `STYX_NO_WIZARD=1` keep the previous behavior:
+the standard routing file is seeded silently and unchanged. After setup, run
+`styx doctor` to verify the selected tools and local models.
+
 ## Build manually
 
     make build       # produces ./bin/styx
     make test        # runs all tests
     make e2e         # hermetic JSON-RPC regression net against `styx mcp` (fake CLIs, no quota)
-    make install     # same as install.sh
+    make install     # builds and installs the local checkout to ~/bin/styx
 
 ## Verbs
 
@@ -131,6 +176,7 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 | `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0) exposing fourteen tools to OpenClaw, Claude Code, and any MCP host (see [`docs/openclaw-integration.md`](docs/openclaw-integration.md)): `route` — pick a channel for a task (budget-aware, capability-floor-aware, with fallback chain); `budget_status` — per-channel usage/limits/cooldowns; `record_usage` — log usage a consumer ran outside styx; `channel_health` — circuit-breaker state, recent failures, error-kind buckets, cooldown; `get_intel` — read the per-project codebase intel index (or one section), with staleness; `refresh_intel` — rebuild that index; `recall` — semantic top-k recall over project + global long-term memory; plus the conductor dispatch surface: `dispatch` — send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task, awaited by default (or, with `background: true`, as a task you `collect` later); `dispatch_parallel` — fan out an array of dispatches at once, awaited together, per-task results in input order; `thread_status` — list this project's persistent agent threads with turn counts and context usage, plus live/unclaimed background tasks; `collect` — fetch background dispatch results by `task_id` or everything finished (claims them); `memory_save` — persist a durable fact, decision, todo, or routing preference to styx memory; `pipeline_run` — run a styx pipeline (research/review/intel/auto), with a confirm-token handshake for `auto`'s ship step; `rate_dispatch` — rate a recent dispatch outcome good/bad to feed styx's learning loop |
 | `hook <event>` | Internal plumbing — the route-gate hook the launcher installs into conductor sessions (Claude Code invokes it, not you); denies inline WebSearch/WebFetch/Task/external-curl + MCP web tools and redirects to dispatch/pipeline_run, per `[conductor] route_gate` |
 | `migrate-secrets` | Move env-var secrets to the platform secret store (macOS Keychain / Windows Credential Manager) |
+| `update` | Replace styx with the latest GitHub release after SHA-256 verification; Scoop/WinGet installs stay package-manager-owned |
 | `upgrade` | Re-run routing migrations manually (v0.1->v0.2 gemini->agy; v0.3 adds the `implement` verb) |
 | `version` / `styx --version` | Print the styx version and exit |
 

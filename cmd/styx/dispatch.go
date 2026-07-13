@@ -17,11 +17,13 @@ import (
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/modelsync"
+	"github.com/ishaanbatra/styx/internal/onboard"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/target"
+	styxupdate "github.com/ishaanbatra/styx/internal/update"
 )
 
 // globalQuiet and globalVerbose are set by main() after parseGlobalFlags.
@@ -256,17 +258,21 @@ func (b *budgetSource) Broken(ctx context.Context, ch string) bool {
 }
 
 func dispatch(verb string, args []string) error {
+	runLaunchUpdateChecks()
+
 	switch verb {
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
 	case "version", "--version", "-V":
-		fmt.Println("styx " + styxVersion)
+		fmt.Println("styx " + styxDisplayVersion())
 		return nil
 	case "migrate-secrets":
 		return cmdMigrateSecrets()
 	case "upgrade":
 		return cmdUpgrade()
+	case "update":
+		return cmdUpdate(args)
 	case "project":
 		return cmdProject(args)
 	case "route":
@@ -344,6 +350,25 @@ func dispatch(verb string, args []string) error {
 	return cmdBrainTurn(a, utterance)
 }
 
+// runLaunchUpdateChecks is deliberately best-effort: cached notice failures
+// and detached-process failures can never change a command's result.
+func runLaunchUpdateChecks() {
+	styxupdate.ConfigureLaunch(styxDisplayVersion(), globalQuiet)
+	if err := styxupdate.MaybeNotify(os.Stderr); err != nil {
+		debugUpdateCheck("read cached update notice: %v", err)
+	}
+	if err := styxupdate.SpawnBackgroundCheck(); err != nil {
+		debugUpdateCheck("spawn background update check: %v", err)
+	}
+}
+
+func debugUpdateCheck(format string, args ...any) {
+	if !globalVerbose {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "[styx] update check debug: "+format+"\n", args...)
+}
+
 // allReposResolve reports whether every token names a resolvable project; if so
 // it returns the tokens so the caller can launch the conductor bound to them.
 func allReposResolve(tokens []string) ([]string, bool) {
@@ -375,7 +400,7 @@ func ensureFirstRun() error {
 		return err
 	}
 	if _, err := os.Stat(routingPath); os.IsNotExist(err) {
-		if err := os.WriteFile(routingPath, []byte(defaultRoutingTOML), 0o644); err != nil {
+		if err := onboard.SeedRouting(routingPath, defaultRoutingTOML); err != nil {
 			return fmt.Errorf("seed default routing.toml: %w", err)
 		}
 		logStatus("wrote default routing.toml to %s", routingPath)
