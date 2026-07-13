@@ -81,7 +81,7 @@ func Loop(ctx context.Context, query string, drafter, critic Channel, prog *prog
 
 		critSummary := fmt.Sprintf("%d BLOCKING, %d IMPORTANT, %d NITs", len(c.Blocking), len(c.Important), len(c.Nits))
 		if c.Converged() {
-			stCrit.Done(critSummary + " -> converged")
+			stCrit.Done("%s -> converged", critSummary)
 			b.Status = "converged"
 			b.EndedAt = time.Now().UTC()
 			return b, nil
@@ -93,14 +93,14 @@ func Loop(ctx context.Context, query string, drafter, critic Channel, prog *prog
 		// (Equivalent to checking after generation; this saves a model call.)
 		if len(b.Drafts) >= 3 {
 			if hash(b.Drafts[len(b.Drafts)-1]) == hash(b.Drafts[len(b.Drafts)-3]) {
-				stCrit.Done(critSummary + " -> oscillating")
+				stCrit.Done("%s -> oscillating", critSummary)
 				b.Status = "oscillating"
 				b.EndedAt = time.Now().UTC()
 				return b, nil
 			}
 		}
 
-		stCrit.Done(critSummary)
+		stCrit.Done("%s", critSummary)
 
 		stRevise := prog.Stage(fmt.Sprintf("Round %d/%d: revising draft", round, MaxRounds))
 		newDraft, err := drafter.Send(ctx, revisePrompt(currentDraft, c))
