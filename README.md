@@ -20,14 +20,39 @@ in the Keychain, ollama auto-launched); Windows is supported natively
 (secrets in the Windows Credential Manager; start ollama yourself); Linux
 works minus a secret store (no `migrate-secrets`) and ollama auto-launch.
 
-## Install (one shot)
+## Install
 
-    ./install.sh        # builds + drops binary at ~/bin/styx (backs up any existing one)
+macOS or Linux:
 
-Tagged releases also publish prebuilt Linux, macOS, and Windows binaries on
-the [GitHub Releases page](https://github.com/ishaanbatra/styx/releases). The
-one-shot script still builds from source for now; the release-asset installer
-will replace it in a follow-up.
+```sh
+curl -fsSL https://raw.githubusercontent.com/ishaanbatra/styx/main/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/ishaanbatra/styx/main/install.ps1 | iex
+```
+
+With Go:
+
+```sh
+go install github.com/ishaanbatra/styx/cmd/styx@latest
+```
+
+Tagged releases are also available on the
+[GitHub Releases page](https://github.com/ishaanbatra/styx/releases). Run
+`styx update` to stay current when you installed a release directly.
+
+### From source
+
+Contributors can keep the local build-and-install workflow:
+
+```sh
+git clone https://github.com/ishaanbatra/styx.git
+cd styx
+./install.sh --from-source
+```
 
 Then migrate any plaintext secrets out of your shell rc:
 
@@ -41,7 +66,7 @@ auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
     make build       # produces ./bin/styx
     make test        # runs all tests
     make e2e         # hermetic JSON-RPC regression net against `styx mcp` (fake CLIs, no quota)
-    make install     # same as install.sh
+    make install     # builds and installs the local checkout to ~/bin/styx
 
 ## Verbs
 
