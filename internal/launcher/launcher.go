@@ -77,15 +77,13 @@ func (h *ClaudeHost) Launch(ctx context.Context, o Opts) error {
 	return nil
 }
 
-// claudeArgs assembles the claude CLI argv. --settings is inserted only when a
-// conductor settings file was written (route_gate != off). We deliberately do
+// claudeArgs assembles the claude CLI argv. --settings always points at the
+// styx-owned conductor settings file, which is scoped to sessions styx launches
+// and leaves the user's normal Claude Code usage untouched. We deliberately do
 // NOT pass --strict-mcp-config: the user's other MCP servers stay available and
 // the styx hook's matcher catches MCP web tools by name instead.
 func claudeArgs(cfgPath, settingsPath string, o Opts) []string {
-	args := []string{"--mcp-config", cfgPath}
-	if settingsPath != "" {
-		args = append(args, "--settings", settingsPath)
-	}
+	args := []string{"--mcp-config", cfgPath, "--settings", settingsPath}
 	args = append(args, "--append-system-prompt", o.Guidance)
 	for _, r := range o.ExtraRepos {
 		args = append(args, "--add-dir", r)
@@ -93,15 +91,13 @@ func claudeArgs(cfgPath, settingsPath string, o Opts) []string {
 	return append(args, o.ExtraArgs...)
 }
 
-// writeConductorSettings writes the styx-owned Claude Code settings file that
-// installs the routing hooks for a conductor session, and returns its path.
-// mode "off" writes nothing and returns "". The file lives in styx's state dir
-// (not the user's repo .claude/), so enforcement is scoped to sessions styx
-// launches and never touches the user's normal Claude Code usage.
+// writeConductorSettings writes the styx-owned Claude Code settings file for a
+// conductor session and returns its path. The file always disables Claude
+// Code's built-in co-author attribution; mode controls only which routing hooks
+// are present. It lives in styx's state dir (not the user's repo .claude/), so
+// it is scoped to sessions styx launches and never touches the user's normal
+// Claude Code usage.
 func writeConductorSettings(stateDir, styxBin, mode string) (string, error) {
-	if mode == "off" {
-		return "", nil
-	}
 	settings := buildConductorSettings(styxBin, mode)
 	raw, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
@@ -115,18 +111,25 @@ func writeConductorSettings(stateDir, styxBin, mode string) (string, error) {
 }
 
 // buildConductorSettings returns the Claude Code settings object for a route
-// gate mode. "audit" installs only the PostToolUse recorder; anything else
-// (i.e. "block") also installs the PreToolUse deny — a fail-closed default so
-// an unrecognized mode still enforces rather than silently disabling the gate.
-// The matcher is a coarse funnel; `styx hook` makes the fine-grained decision.
+// gate mode. Every mode disables Claude Code's built-in co-author attribution.
+// "off" installs no hooks; "audit" installs only the PostToolUse recorder;
+// anything else (i.e. "block") also installs the PreToolUse deny — a
+// fail-closed default so an unrecognized mode still enforces rather than
+// silently disabling the gate. The matcher is a coarse funnel; `styx hook`
+// makes the fine-grained decision.
 func buildConductorSettings(styxBin, mode string) map[string]any {
+	settings := map[string]any{"includeCoAuthoredBy": false}
+	if mode == "off" {
+		return settings
+	}
 	post := hookMatcher("Read|Grep|Bash|WebSearch|WebFetch|Task|mcp__", styxBin, "posttooluse")
 	hooks := map[string]any{"PostToolUse": []any{post}}
 	if mode != "audit" {
 		pre := hookMatcher("WebSearch|WebFetch|Task|Bash|mcp__", styxBin, "pretooluse")
 		hooks["PreToolUse"] = []any{pre}
 	}
-	return map[string]any{"hooks": hooks}
+	settings["hooks"] = hooks
+	return settings
 }
 
 // hookMatcher builds one Claude Code hook matcher entry that pipes matched

@@ -8,25 +8,49 @@ import (
 	"testing"
 )
 
-func TestBuildConductorSettingsBlock(t *testing.T) {
-	s := buildConductorSettings("/usr/local/bin/styx", "block")
-	hooks, ok := s["hooks"].(map[string]any)
-	if !ok {
-		t.Fatalf("no hooks map: %v", s)
+func TestBuildConductorSettingsModes(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     string
+		wantPre  bool
+		wantPost bool
+	}{
+		{name: "off", mode: "off"},
+		{name: "audit", mode: "audit", wantPost: true},
+		{name: "block", mode: "block", wantPre: true, wantPost: true},
+		{name: "unknown fails closed", mode: "surprise", wantPre: true, wantPost: true},
 	}
-	if _, ok := hooks["PreToolUse"]; !ok {
-		t.Errorf("block mode must install PreToolUse")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := buildConductorSettings("/usr/local/bin/styx", tt.mode)
+			if got, ok := s["includeCoAuthoredBy"].(bool); !ok || got {
+				t.Fatalf("includeCoAuthoredBy = %v, want false", s["includeCoAuthoredBy"])
+			}
+			hooks, hasHooks := s["hooks"].(map[string]any)
+			if !tt.wantPre && !tt.wantPost {
+				if hasHooks {
+					t.Fatalf("mode %q must omit hooks, got %v", tt.mode, hooks)
+				}
+				return
+			}
+			if !hasHooks {
+				t.Fatalf("mode %q has no hooks map: %v", tt.mode, s)
+			}
+			if _, ok := hooks["PreToolUse"]; ok != tt.wantPre {
+				t.Errorf("PreToolUse present = %v, want %v", ok, tt.wantPre)
+			}
+			if _, ok := hooks["PostToolUse"]; ok != tt.wantPost {
+				t.Errorf("PostToolUse present = %v, want %v", ok, tt.wantPost)
+			}
+		})
 	}
-	if _, ok := hooks["PostToolUse"]; !ok {
-		t.Errorf("block mode must install PostToolUse")
-	}
-	// The PreToolUse matcher must funnel MCP tools (so MCP web tools reach styx hook).
-	raw, _ := json.Marshal(s)
+
+	// The block-mode PreToolUse matcher must funnel MCP tools (so MCP web
+	// tools reach styx hook) and use shell-free exec form.
+	raw, _ := json.Marshal(buildConductorSettings("/usr/local/bin/styx", "block"))
 	if !strings.Contains(string(raw), "mcp__") {
 		t.Errorf("matcher must include mcp__ funnel; got %s", raw)
 	}
-	// Exec form: bin + args array, no shell, no quoting — portable to
-	// Windows where hooks otherwise run under Git Bash/PowerShell.
 	if strings.Contains(string(raw), "styx' hook") {
 		t.Errorf("hook must use exec form (args array), not a shell-quoted string; got %s", raw)
 	}
@@ -59,28 +83,28 @@ func TestHookMatcherExecFormSurvivesSpecialPaths(t *testing.T) {
 	}
 }
 
-func TestBuildConductorSettingsAudit(t *testing.T) {
-	s := buildConductorSettings("/usr/local/bin/styx", "audit")
-	hooks := s["hooks"].(map[string]any)
-	if _, ok := hooks["PreToolUse"]; ok {
-		t.Errorf("audit mode must NOT install PreToolUse (never blocks)")
-	}
-	if _, ok := hooks["PostToolUse"]; !ok {
-		t.Errorf("audit mode must install PostToolUse")
-	}
-}
-
-func TestWriteConductorSettingsOffWritesNothing(t *testing.T) {
+func TestWriteConductorSettingsOffWritesAttributionOnly(t *testing.T) {
 	dir := t.TempDir()
 	path, err := writeConductorSettings(dir, "/bin/styx", "off")
 	if err != nil {
 		t.Fatalf("off mode: %v", err)
 	}
-	if path != "" {
-		t.Errorf("off mode returned path %q, want empty", path)
+	if path != filepath.Join(dir, "conductor-settings.json") {
+		t.Errorf("off mode returned path %q, want conductor settings path", path)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "conductor-settings.json")); !os.IsNotExist(err) {
-		t.Errorf("off mode must not write a settings file")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(b, &parsed); err != nil {
+		t.Fatalf("settings not valid JSON: %v", err)
+	}
+	if got, ok := parsed["includeCoAuthoredBy"].(bool); !ok || got {
+		t.Fatalf("includeCoAuthoredBy = %v, want false", parsed["includeCoAuthoredBy"])
+	}
+	if _, ok := parsed["hooks"]; ok {
+		t.Fatalf("off mode must omit hooks, got %v", parsed["hooks"])
 	}
 }
 
@@ -103,15 +127,26 @@ func TestWriteConductorSettingsBlockWritesFile(t *testing.T) {
 	}
 }
 
-func TestClaudeArgsSettingsAndNoStrict(t *testing.T) {
+func TestClaudeArgsSettingsInAllModesAndNoStrict(t *testing.T) {
 	o := Opts{Guidance: "guide", ExtraRepos: []string{"/repo2"}, ExtraArgs: []string{"--continue"}}
 
-	// With a settings path, --settings is present.
+	for _, mode := range []string{"off", "audit", "block", "unknown"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			settingsPath, err := writeConductorSettings(dir, "/bin/styx", mode)
+			if err != nil {
+				t.Fatalf("write settings: %v", err)
+			}
+			args := claudeArgs("/cfg.json", settingsPath, o)
+			joined := strings.Join(args, " ")
+			if !strings.Contains(joined, "--settings "+settingsPath) {
+				t.Errorf("expected --settings in argv, got %v", args)
+			}
+		})
+	}
+
 	args := claudeArgs("/cfg.json", "/settings.json", o)
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "--settings /settings.json") {
-		t.Errorf("expected --settings in argv, got %v", args)
-	}
 	if !strings.Contains(joined, "--mcp-config /cfg.json") {
 		t.Errorf("expected --mcp-config in argv, got %v", args)
 	}
@@ -124,10 +159,5 @@ func TestClaudeArgsSettingsAndNoStrict(t *testing.T) {
 	// Locked decision: we do NOT strip the user's other MCP servers.
 	if strings.Contains(joined, "--strict-mcp-config") {
 		t.Errorf("--strict-mcp-config must be absent, got %v", args)
-	}
-
-	// Without a settings path (off mode), --settings is absent.
-	if strings.Contains(strings.Join(claudeArgs("/cfg.json", "", o), " "), "--settings") {
-		t.Errorf("no --settings expected when settingsPath is empty")
 	}
 }

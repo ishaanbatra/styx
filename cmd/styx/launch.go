@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/graph"
 	"github.com/ishaanbatra/styx/internal/guidance"
 	"github.com/ishaanbatra/styx/internal/launcher"
@@ -128,7 +129,8 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 // conductorGuidance assembles the final --append-system-prompt content:
 // base guidance, the focus project's registry alias, extra-repo notes, and
 // the two learned-preference sections (the entire application mechanism of
-// styx learn — nothing else consumes learned state).
+// styx learn — nothing else consumes learned state), and the commit-attribution
+// instruction that replaces Claude Code's built-in co-author rule.
 func conductorGuidance(base, focusName, extraNote, prefs, userPrefs string) string {
 	g := base
 	g += "\n\n## This session's project\n" +
@@ -143,6 +145,7 @@ func conductorGuidance(base, focusName, extraNote, prefs, userPrefs string) stri
 	if userPrefs != "" {
 		g += "\n\n## User preferences (learned)\n" + userPrefs
 	}
+	g += "\n\n## Commit attribution\n" + attribution.CommitInstruction
 	return g
 }
 

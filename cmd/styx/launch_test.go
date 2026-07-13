@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/graph"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -263,6 +264,16 @@ func TestConductorGuidanceNamesFocusProject(t *testing.T) {
 		if !strings.Contains(withExtras, want) {
 			t.Fatalf("missing %q in:\n%s", want, withExtras)
 		}
+	}
+}
+
+func TestConductorGuidanceIncludesCommitAttribution(t *testing.T) {
+	got := conductorGuidance("BASE", "styx", "", "", "")
+	if !strings.Contains(got, "## Commit attribution") {
+		t.Fatalf("guidance must carry the commit-attribution section:\n%s", got)
+	}
+	if !strings.Contains(got, attribution.Trailer) {
+		t.Fatalf("guidance must contain attribution trailer verbatim:\n%s", got)
 	}
 }
 
