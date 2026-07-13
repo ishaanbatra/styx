@@ -61,6 +61,21 @@ Then migrate any plaintext secrets out of your shell rc:
 If you're upgrading from v0.1 with `gemini:*` references in routing.toml, styx
 auto-rewrites them to `agy:default` on first v0.2 startup (with a backup).
 
+## First run
+
+On its first interactive terminal run, styx detects `claude`, `codex`, and
+`agy` on `PATH` plus a reachable local Ollama server, then opens a short wizard.
+Choose the subscriptions you have; styx writes a plain, hand-editable
+`~/.config/styx/routing.toml` whose fallback chains avoid unavailable channels.
+For a selected subscription whose CLI is missing, the wizard can run that
+tool's official installer only after an explicit, default-off confirmation.
+It never uses `sudo`.
+
+The wizard runs only when stdin, stdout, and stderr are all terminals. CI,
+pipes, redirected commands, and `STYX_NO_WIZARD=1` keep the previous behavior:
+the standard routing file is seeded silently and unchanged. After setup, run
+`styx doctor` to verify the selected tools and local models.
+
 ## Build manually
 
     make build       # produces ./bin/styx

@@ -17,6 +17,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/modelsync"
+	"github.com/ishaanbatra/styx/internal/onboard"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/progress"
 	"github.com/ishaanbatra/styx/internal/project"
@@ -399,7 +400,7 @@ func ensureFirstRun() error {
 		return err
 	}
 	if _, err := os.Stat(routingPath); os.IsNotExist(err) {
-		if err := os.WriteFile(routingPath, []byte(defaultRoutingTOML), 0o644); err != nil {
+		if err := onboard.SeedRouting(routingPath, defaultRoutingTOML); err != nil {
 			return fmt.Errorf("seed default routing.toml: %w", err)
 		}
 		logStatus("wrote default routing.toml to %s", routingPath)

@@ -25,7 +25,8 @@ Styx is a Go CLI that routes dev work between four AI channels — claude
 argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir)
               │ bare `styx` launches the conductor (`styx repl` for the
               │ classic REPL); otherwise ensureFirstRun():
-              │ seed ~/.config/styx/routing.toml, v0.1→v0.2 upgrade
+              │ first-run onboard/seed ~/.config/styx/routing.toml,
+              │ then unchanged v0.1→v0.2 upgrade checks
               ▼
         cmd/styx/dispatch.go
               │ no-app verbs (help, doctor, project, route, budget, check, runs, execute…)
@@ -134,6 +135,19 @@ Shared pieces:
   with `"\n- "`. It is a pure enhancement: any failure (store open, recall) is
   narrated via `logStatus` and yields `""` rather than blocking the launch.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
+- `internal/onboard` — first-run routing setup called only from
+  `ensureFirstRun`'s absent-`routing.toml` branch. It requires stdin, stdout,
+  and stderr TTYs with `CI` and `STYX_NO_WIZARD` both unset; every other path
+  atomically writes `defaultRoutingTOML` byte-for-byte, preserving scripted
+  and e2e behavior. The interactive path probes `claude`/`codex`/`agy` via
+  `exec.LookPath` and Ollama via its local `/api/tags` endpoint, preselects a
+  `huh` subscription multi-select, and atomically writes a comment-preserving,
+  hand-editable tailored routing file. Its pure `TailorRouting` filters or
+  promotes targets around unavailable channels (including parallel review
+  synthesis); installer confirms are default-off and use bounded
+  `exec.CommandContext` argument vectors with streamed I/O, never shell
+  interpolation or `sudo`. Routing migrations remain owned exclusively by
+  `config.UpgradeRoutingFile` and run afterward unchanged.
 - `grunt.go` — `cmdOneShot` serves grunt/think/explain/summarize/critique;
   `sendWithFallback` walks the Decision's fallback chain, recording each
   attempt in the budget DB with a classified error kind.
