@@ -289,7 +289,7 @@ func TestLiveSmoke(t *testing.T) {
 }
 
 func TestBackgroundDispatchRoundtrip(t *testing.T) {
-	c, _ := startServer(t, "FAKEAGENT_SLEEP=2")
+	c, _ := startServer(t, "FAKEAGENT_SLEEP=1")
 
 	// Fire-and-return: immediate task handle.
 	disp, isErr := c.toolCall("dispatch", map[string]any{
@@ -313,22 +313,38 @@ func TestBackgroundDispatchRoundtrip(t *testing.T) {
 		t.Fatalf("bg piggyback must name the live task, got %v", ts["bg"])
 	}
 
-	// Collect: poll until done (fakeagent sleeps 2s; 30s budget).
-	deadline := time.Now().Add(30 * time.Second)
-	var got map[string]any
-	for {
-		if time.Now().After(deadline) {
-			t.Fatalf("task %s never finished; last collect: %v", taskID, got)
-		}
-		var isErr bool
-		got, isErr = c.toolCall("collect", map[string]any{"task_id": taskID})
-		if isErr {
-			t.Fatalf("collect errored: %v", got)
-		}
-		if got["status"] == "done" {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
+	// A synchronous dispatch on the same thread queues behind the background
+	// task. Its awaited return is therefore a deterministic completion barrier,
+	// with no timer or collect polling. The completed background task remains
+	// unclaimed and must be loud on this conductor-tool response.
+	barrier, isErr := c.toolCall("dispatch", map[string]any{
+		"cli": "claude", "message": "completion barrier", "risk": "read",
+	})
+	if isErr {
+		t.Fatalf("barrier dispatch errored: %v", barrier)
+	}
+	if done, _ := barrier["background_done"].(string); !strings.Contains(done, "DONE: "+taskID) {
+		t.Fatalf("conductor response missing loud completion notice: %v", barrier)
+	}
+
+	// Base MCP tools go through the same decoration path.
+	route, isErr := c.toolCall("route", map[string]any{
+		"task": "summarize the finished work", "verb": "explain",
+	})
+	if isErr {
+		t.Fatalf("route errored: %v", route)
+	}
+	if done, _ := route["background_done"].(string); !strings.Contains(done, "DONE: "+taskID) {
+		t.Fatalf("base-tool response missing loud completion notice: %v", route)
+	}
+
+	// Blocking collect returns the result inline and claims it. The task is
+	// already terminal at this point, so this also covers the immediate path.
+	got, isErr := c.toolCall("collect", map[string]any{
+		"task_id": taskID, "wait": true, "timeout_s": 30,
+	})
+	if isErr {
+		t.Fatalf("blocking collect errored: %v", got)
 	}
 	if got["text"] != "e2e-ok" {
 		t.Fatalf("collected result must carry the dispatch text, got %v", got)
@@ -344,6 +360,9 @@ func TestBackgroundDispatchRoundtrip(t *testing.T) {
 	}
 	if bg, ok := all["bg"]; ok {
 		t.Fatalf("no live/unclaimed tasks => no bg line, got %v", bg)
+	}
+	if done, ok := all["background_done"]; ok {
+		t.Fatalf("claimed task must not retain a done notice, got %v", done)
 	}
 }
 

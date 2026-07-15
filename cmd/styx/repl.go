@@ -797,6 +797,7 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 			Model:    s.watchModel(),
 			Board:    s.board,
 			Interval: s.watchInterval(),
+			Stall:    s.watchStall(),
 		}
 		go w.Run(s.ctx)
 	}

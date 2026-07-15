@@ -121,10 +121,46 @@ func TestSeedV3UpgradesToCurrent(t *testing.T) {
 	if got != Seed {
 		t.Fatal("an unmodified v3 seed must upgrade to the current Seed")
 	}
-	for _, want := range []string{"background: true", "collect", "rate_dispatch"} {
+	for _, want := range []string{"background:true", "collect", "rate_dispatch"} {
 		if !strings.Contains(Seed, want) {
 			t.Fatalf("current Seed must teach %q", want)
 		}
+	}
+}
+
+func TestSeedForbidsPolling(t *testing.T) {
+	for _, want := range []string{"NEVER set a timer or poll", "collect with wait:true", "timeout_s", "background_done", "DONE:"} {
+		if !strings.Contains(Seed, want) {
+			t.Fatalf("current Seed must teach %q", want)
+		}
+	}
+}
+
+func TestSeedV6UpgradesToCurrent(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	p, err := guidanceFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(seedV6), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != Seed {
+		t.Fatal("an unmodified v6 seed must upgrade to the current Seed")
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != Seed {
+		t.Fatal("v6 guidance file on disk must be rewritten to current Seed")
 	}
 }
 

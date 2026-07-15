@@ -643,7 +643,7 @@ func cmdMCP(a *app, args []string) error {
 			logStatus("%d background task(s) from a previous session were lost — collect reports them", len(orphans))
 		}
 	}
-	tools := append(mcpTools(a), withBackgroundStatus(conductorTools(d), d.reg)...)
+	tools := withBackgroundStatus(append(mcpTools(a), conductorTools(d)...), d.reg)
 	srv := mcpserver.New("styx", mcpServerVersion, tools)
 	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, dispatch_parallel, thread_status, memory_save, pipeline_run, rate_dispatch, collect)")
 	go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake

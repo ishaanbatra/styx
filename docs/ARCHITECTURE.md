@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-13
+last_verified: 2026-07-15
 ---
 
 # Styx Architecture
@@ -241,9 +241,11 @@ Shared pieces:
   (`ctx, cancel := context.WithCancel(...)`, `defer cancel()`), builds
   `d := newConductorDeps(a, ctx)` (rooting the background-task registry on that
   ctx — no daemons), and constructs the server via `mcpserver.New("styx",
-  mcpServerVersion, append(mcpTools(a), withBackgroundStatus(conductorTools(d), d.reg)...))`
-  — the conductor tools are wrapped so every map result carries the background
-  status line (see the Piggyback note under "Conductor MCP tools"). It
+  mcpServerVersion, withBackgroundStatus(append(mcpTools(a),
+  conductorTools(d)...), d.reg))` — the full tool set is wrapped so every
+  object-shaped successful result can carry live background status and a
+  distinct loud `background_done` completion notice (see the Piggyback note
+  under "Conductor MCP tools"). It
   logs readiness to stderr via `logStatus` (naming all fourteen tools), and runs
   `srv.Serve(ctx, os.Stdin, protocolOut)` where `protocolOut` is the real
   stdout captured before `os.Stdout` is pointed at `os.Stderr` for the
@@ -427,11 +429,13 @@ Data-driven routing guidance replacing the v0.2 brain's compiled-in preamble.
 A global guidance file is seeded at `~/.config/styx/guidance.md` on first call
 to `Load()` and is user-editable. User edits are never overwritten, but a file
 whose content exactly matches a previous seed version (the retained `seedV1`
-through `seedV5` constants — `seedV3` is the pre-async-dispatch seed, shipped
+through `seedV6` constants — `seedV3` is the pre-async-dispatch seed, shipped
 2026-07-07, kept verbatim from the live `Seed` at the moment background
 dispatch/collect/rate_dispatch were added; `seedV4` is the pre-route-gate seed,
 kept verbatim from before the "## Gated tools" section; `seedV5` is the
-route-gate-era seed, kept verbatim from before the learning-loop nudges below)
+route-gate-era seed, kept verbatim from before the learning-loop nudges; and
+`seedV6` is the learning-loop seed from before blocking collect and loud
+completion notices)
 is recognized as unmodified and transparently upgraded to the current `Seed`
 on load. `Load(projectPath string)` returns the global guidance with an
 optional per-repo override appended from `<repo>/styx/guidance.md` if it
@@ -449,10 +453,13 @@ channel best purposes (codex as primary implementer for well-scoped work,
 claude for ambiguous/architectural/refactor work, agy for large-file explains,
 ollama for trivial one-shots), model tier guidance, a background dispatch
 section (fire independent multi-minute work with `background: true` for an
-immediate `task_id` and keep working; call `collect` before synthesizing
-results or on user status requests; same-thread/same-project edit-risk tasks
-queue rather than parallelize; `risk=ship` never backgrounds; orphaned tasks
-are reported if the mcp session ends), a rating-outcomes section (call
+immediate `task_id` and keep working; never set timers or poll; either dispatch
+synchronously when the next step needs the result or call `collect` with
+`wait:true` and optional `task_id`/`timeout_s` for a blocking read that streams
+heartbeats; heed the distinct `background_done: "DONE: ... — call collect"`
+notice on later tool results; same-thread/same-project edit-risk tasks queue
+rather than parallelize; `risk=ship` never backgrounds; orphaned tasks are reported if the
+mcp session ends), a rating-outcomes section (call
 `rate_dispatch` with a thread/task id and one-line note on notably good or bad
 outcomes, feeding styx's learning loop), working style conventions (plan
 before dispatch, reuse threads, consult memory, check budget, and — new in
@@ -596,9 +603,14 @@ events carry the answer plus real usage (normal input, cache creation input,
 and cache-read input tokens). For codex (`ParseCodexEvent`): `thread.started`
 captures the resumable `thread_id`, `item.completed` `agent_message` items
 stream assistant text, any other non-empty `item.completed` type (e.g.
-`command_execution`, `file_change`, `mcp_tool_call`) surfaces as `EventTool`
-(`Tool` = the item type; `Text` = the item's `command` field, first line only,
-when present), `turn.completed` carries exact usage (`input_tokens` +
+`command_execution`, `file_change`, `mcp_tool_call`) surfaces as `EventTool`.
+Known command items normalize to `Tool: "Bash"` with the command's first line;
+known file changes normalize to `Tool: "Edit"` and take the target from
+`item.path`, `item.file_path`, or the first `changes[].path` emitted by
+different codex versions. Other item types retain their raw type plus a
+best-effort command target. This shared `"<tool>: <target>"` vocabulary makes
+board state and MCP await heartbeats name the actual command or file.
+`turn.completed` carries exact usage (`input_tokens` +
 `cached_input_tokens`, and `output_tokens`) but no text, and `turn.failed`
 surfaces an error result. Context size is metered against each adapter's real
 context window rather than rough character estimates. Hook and malformed
@@ -1273,8 +1285,9 @@ a previous `styx mcp` lifetime, feeds them to `d.reg.adoptOrphans(orphans)`
 and narrates the count via `logStatus` — a crashed or killed prior process's
 in-flight/finished-but-uncollected background tasks resurface as `o1`, `o2`,
 … entries in this session's `collect`/status line instead of vanishing
-silently. Finally `cmdMCP` builds the tool set as `append(mcpTools(a),
-conductorTools(d)...)`. Before `srv.Serve`, `cmdMCP` fires
+silently. Finally `cmdMCP` builds the full tool set as
+`withBackgroundStatus(append(mcpTools(a), conductorTools(d)...), d.reg)`.
+Before `srv.Serve`, `cmdMCP` fires
 `go preloadOllamaModels(a)`: a fire-and-forget, 20s-timeout best-effort call
 to `/api/generate` with `keep_alive: "30m"` for `a.routing.Brain.Model` and
 `a.routing.Brain.EmbedModel`, so the first real dispatch/recall doesn't pay a
@@ -1392,7 +1405,9 @@ REPL loop.
   lifetime, not any single tool call's, and the registry can read each running
   task's last board action for its piggyback line. `newConductorDeps` also
   starts an `activity.Watcher` goroutine off `rootCtx` gated on
-  `routing.Watch.OllamaEnabled` (dies with the server; best-effort), and wires
+  `routing.Watch.OllamaEnabled`, with `Stall` sourced from the existing
+  `routing.Watch.StallThreshold()` setting (dies with the server;
+  best-effort), and wires
   `d.mirror` via `activity.MirrorThrottle(board, <StateDir>/watch/<projectID>.json,
   2*time.Second)`, keyed by `resolveGlobalTarget("")`'s project ID — the same
   cwd-based resolution `managerFor("")` and a `styx watch` process invoked
@@ -1622,32 +1637,48 @@ REPL loop.
   `Rating: "good"`, `false` writes `"bad"`; `note` is freeform and optional.
   Guidance baked into the tool description: rate only notable outcomes, not
   every dispatch. Returns `{rated: true, outcome_id, target}`.
-- `collect(task_id?)` — the read side of async dispatch (Task 8), backed by
-  the shared `collectOne(reg *taskRegistry, tk bgTask) map[string]any`
-  helper. Two call shapes:
-  - **With `task_id`**: `d.reg.Get(task_id)` first — an unknown id is a loud
-    `fmt.Errorf`, never a silent empty result. Live tasks (`taskQueued`/
-    `taskRunning`) return `{task_id, status, elapsed_s}` (`elapsed_s` since
-    `Created`, rounded to 0.1s) plus `queued_behind` when the task names a
-    specific blocker; nothing is claimed. Terminal tasks are **claimed as a
-    side effect of being collected**: `taskDone` returns a fresh
-    `map[string]any` seeded with `task_id`/`status: "done"` and every key
-    from `tk.Result` copied in (`for k, v := range tk.Result { out[k] = v
-    }` — a read of the registry-shared `Result` map, never a mutation of
-    it) before calling `reg.Claim(tk.ID)`; `taskError`/`taskOrphaned`
-    return `{task_id, status, error: tk.Err, thread, cli}` (the orphan
-    payload's `error` is the "lost when styx mcp exited" message set at
-    adoption time) and likewise claim. Once claimed, a task stops appearing
-    in `thread_status.tasks` and in a no-`task_id` `collect` call — but
-    remains fetchable by id from `Snapshot`/`Get` for the process lifetime.
-  - **Without `task_id`**: iterates `d.reg.Snapshot()` once. Live tasks are
-    summarized via `taskLine(tk)` into `pending` (no claim — a live task
-    can't be claimed); every unclaimed terminal task is passed through
-    `collectOne` into `results` (claiming each). Returns `{results:
-    []map[string]any, pending: []string}`, both initialized to empty
-    slices (never nil) so the JSON shape is always `{"results": [],
-    "pending": []}` at minimum — repeat calls after everything is claimed
-    return empty `results` rather than repeating prior payloads.
+- `collect(task_id?, wait?, timeout_s?)` — the read side of async dispatch,
+  backed by the shared `collectOne(reg *taskRegistry, tk bgTask)
+  map[string]any` helper. The optional fields are additive; omitting `wait`
+  preserves the original cheap read exactly:
+  - **Non-waiting with `task_id`**: `d.reg.Get(task_id)` first — an unknown id
+    is a loud `fmt.Errorf`, never a silent empty result. Live tasks
+    (`taskQueued`/`taskRunning`) return `{task_id, status, elapsed_s}`
+    (`elapsed_s` since `Created`, rounded to 0.1s) plus `queued_behind` when
+    the task names a specific blocker; nothing is claimed. Terminal tasks
+    are **claimed as a side effect of being collected**: `taskDone` returns a
+    fresh map seeded with `task_id`/`status: "done"` and every key copied
+    from `tk.Result`; `taskError`/`taskOrphaned` return `{task_id, status,
+    error, thread, cli}` and likewise claim. Claimed tasks stop appearing in
+    the unfiltered surfaces but remain fetchable by id for the process
+    lifetime.
+  - **Non-waiting without `task_id`**: iterates `d.reg.Snapshot()` once. Live
+    tasks are summarized via `taskLine(tk)` into `pending`; every unclaimed
+    terminal task is passed through `collectOne` into `results` and claimed.
+    Both slices are initialized, so the minimum shape is always
+    `{"results": [], "pending": []}`.
+  - **`wait: true` with `task_id`**: validates the id, then reuses
+    `awaitTasks` to block until that task is terminal while streaming the
+    same board-derived MCP heartbeats as an awaited dispatch. Success returns
+    the single `collectOne` result inline and claims it. A positive integer
+    `timeout_s` bounds only the observation: expiry returns the task's current
+    status plus `timed_out: true`; the task remains unclaimed and keeps
+    running on the registry root context. Host cancellation returns
+    `{detached: true, task_id, note}` with the same keep-running semantics.
+  - **`wait: true` without `task_id`**: snapshots the ids of every queued or
+    running task once and waits for that fixed set. Tasks spawned concurrently
+    after the snapshot are deliberately outside this call. When the snapshot
+    contains no live work, `collect` falls through to the ordinary bare sweep,
+    returning finished-unclaimed results immediately instead of blocking.
+    Successful waits return `{results: [...], pending: []}` and claim every
+    awaited task. A timeout/cancel runs the ordinary sweep so work that did
+    finish is returned while unfinished work stays in `pending`, then adds
+    `timed_out: true` or `detached: true` respectively.
+  - Blocking `collect` is not `Serial`: it only uses the registry's guarded
+    `Get`/`Snapshot`/`Claim` operations, so it cannot hold the shared pipeline
+    lane for minutes. Two overlapping waits on the same id may both observe
+    and deliver the result before either claims it; duplicate delivery is
+    acceptable, while result loss is not.
   - `taskLine(t bgTask)` (`cmd/styx/mcp_tasks.go`) is the one-line renderer
     shared by `collect`'s `pending` list and `thread_status.tasks`:
     `taskRunning` → `"<id> running (<cli>, thread <thread>, <elapsed>)"`;
@@ -1663,30 +1694,29 @@ REPL loop.
   read|edit only; ship and ollama stay single-dispatch.
 - **Piggyback (Task 9)** — `withBackgroundStatus(tools []mcpserver.Tool, reg
   *taskRegistry) []mcpserver.Tool` (`cmd/styx/mcp_tasks.go`) is the single
-  decoration point that keeps background work from being forgotten: it wraps
-  every conductor tool's `Handler`, runs the inner handler unchanged, and on
-  success — only when `reg.StatusLine()` is non-empty (live or unclaimed
-  tasks exist) AND the result is a `map[string]any` — sets `m["bg"]` to that
-  status line before returning. `StatusLine`'s running-task entries are
-  enriched (Task 8) with the task's last board action: when `reg.board` is set
-  (nil-safe), it matches `board.Snapshot()` state by the project-qualified key
-  `agent.BoardLabel(Spec.ProjectID, Spec.Thread)` (NOT the bare thread — the
-  board is shared across projects, so matching on thread alone would
-  cross-attribute two projects' like-named tasks) and appends `— <last>` so the
-  piggyback line carries what each agent is *doing*,
-  not just its elapsed clock. Errors pass straight through untouched
-  (never decorated); non-map results (e.g. the raw `shipgate.Result` token
-  relay from a denied `risk: ship`/`pipeline_run` gate) also pass through
-  untouched, since there's no map to add a key to. An idle registry
-  (`StatusLine() == ""`) adds no `bg` field at all — the common case, where
-  nothing background is outstanding, is byte-for-byte what the tool would
-  have returned anyway. `cmdMCP` wires it as `append(mcpTools(a),
-  withBackgroundStatus(conductorTools(d), d.reg)...)` — only the conductor
-  tools get the decoration; the base `mcpTools(a)` (route, budget_status,
-  etc.) are not wrapped, since they have no registry context and aren't part
-  of the async-dispatch surface. The JSON-RPC transport itself is untouched:
-  this only augments the map-shaped result payload a handler already
-  returns, it never emits a notification or writes to stdout directly.
+  decoration point that keeps background work from being forgotten. It wraps
+  the complete `append(mcpTools(a), conductorTools(d)...)` set and, after a
+  successful handler call, attaches two deliberately separate fields:
+  `liveStatusLine()` supplies routine queued/running summaries under `"bg"`,
+  while `doneStatusLine()` supplies unclaimed terminal work under
+  `"background_done"` as a loud block such as `DONE: t3 (codex, thread
+  windows-impl) — call collect` (error/orphan states are named after the id).
+  This dedicated key preserves `pipeline_run`'s existing boolean `"done"`
+  result. Running entries are
+  enriched with the last board action by matching the project-qualified
+  `agent.BoardLabel(Spec.ProjectID, Spec.Thread)`, so the live line carries
+  tool plus target rather than only an elapsed clock.
+
+  `setKey` handles both native `map[string]any` results and JSON-object
+  structs: structs marshal/unmarshal through a map, retaining the same public
+  fields and gaining the sibling status key. Errors, nil/scalars, and bare
+  JSON arrays pass through unchanged. The two base tools whose successful
+  shape is a bare array (`budget_status` and `channel_health`) therefore
+  remain the documented residual gap: adding a sibling `done` key would
+  require a breaking wrapper-object change. When neither live nor unclaimed
+  terminal work exists no keys are added, so the common response shape stays
+  unchanged. The JSON-RPC transport itself is untouched; decoration only
+  augments object-shaped handler results and never emits directly to stdout.
 
 ### Background task registry (cmd/styx/mcp_tasks.go)
 
@@ -1706,7 +1736,7 @@ results to the caller.
 - **States** — `taskQueued` ("queued"), `taskRunning` ("running"),
   `taskDone` ("done"), `taskError` ("error"), `taskOrphaned` ("orphaned").
   Queued/running are "live"; done/error/orphaned are terminal and stay
-  visible (in `Snapshot` and `StatusLine`) until claimed.
+  visible in `Snapshot` and `doneStatusLine` until claimed.
 - **Monotonic ids** — `newTaskRegistry(rootCtx, limit)` builds an empty
   registry; `Spawn` assigns ids `t1`, `t2`, … in a mutex-guarded `r.seq`
   counter, monotonic within one server lifetime. Orphans adopted from a
@@ -1741,12 +1771,12 @@ results to the caller.
   process's root context ends; there is no separate daemon or supervisor
   process, matching the project's "no daemons" rule.
 - **Claim semantics** — a finished task (done/error/orphaned) stays
-  unclaimed until `Claim(id)` sets `Claimed = true`; `StatusLine` only lists
-  unclaimed terminal tasks (as `"<id> <state> unclaimed — call collect"`),
-  so once the caller has read a result via `collect` (Task 8) it stops
-  resurfacing on every status line. `run` errors are never swallowed: a
-  failed task's `Err` field carries `err.Error()`, surfaced through `Get`/
-  `Snapshot`/`StatusLine`, not dropped.
+  unclaimed until `Claim(id)` sets `Claimed = true`; `doneStatusLine` lists
+  only unclaimed terminal tasks as a distinct `DONE: ... — call collect`
+  notice, so once the caller has read a result it stops resurfacing on every
+  object-shaped tool response. `run` errors are never swallowed: a failed
+  task's `Err` carries `err.Error()`, surfaced through `Get`, `Snapshot`,
+  `collectOne`, and the error-labelled done notice.
 - **No sync bypass — every dispatch goes through the registry.** The
   `Busy(projectID, thread, risk)` guard that used to let a *synchronous*
   `dispatch` call check for a colliding live background task and error
@@ -1757,10 +1787,10 @@ results to the caller.
   `conflictLocked` ordering rules a `background: true` collision always
   did, and **queues** rather than erroring. There is no longer a
   synchronous caller that bypasses the registry to check.
-- **Nil-safety** — `Get`, `Claim`, `Snapshot`, and `StatusLine` are all safe
-  to call on a nil `*taskRegistry` (zero-value+false / no-op / nil slice /
-  `""` respectively), so callers don't need a separate "is async enabled"
-  check.
+- **Nil-safety** — `Get`, `Claim`, `Snapshot`, `liveStatusLine`, and
+  `doneStatusLine` are all safe to call on a nil `*taskRegistry`
+  (zero-value+false / no-op / nil slice / `""` respectively), so callers
+  don't need a separate "is async enabled" check.
 - **State-file mirror (crash honesty, never resumption)** —
   `persistLocked` mirrors task state to `r.dir` via `writeTaskFile` on every
   `Spawn`/completion/`Claim` when `r.dir != ""` (`""` in most unit tests, so
@@ -1791,17 +1821,19 @@ results to the caller.
   `maxClaimedAge` (7 days, wired in Task 7) are pruned (`os.Remove`) during
   the same scan — claimed files are never orphans, only prune candidates.
 
-**Awaiter (`cmd/styx/mcp_await.go`).** Awaited dispatches are observed
-background tasks: `awaitTasks` polls the registry every second until every
-awaited id is terminal, streaming one compact progress line per change
-(per-task heartbeats from the activity board in Render vocabulary — ▸ / ⚠ /
-✓ — plus ✗ for an awaited task that finished in `taskError` or
-`taskOrphaned`, one-time "tN done — collect" notices for unrelated
-completions, the ollama watcher note when present) through the call's MCP
-progress emitter. Terminal awaited tasks are claimed — their results return
-inline. Context cancellation
-(host Esc → notifications/cancelled, or server EOF drain) detaches: nothing
-is claimed and the tasks keep running as collectible background work.
+**Awaiter (`cmd/styx/mcp_await.go`).** Awaited dispatches and blocking
+`collect(wait:true)` calls share one observer: `awaitTasks` checks the
+registry every second until every fixed awaited id is terminal, streaming one
+compact progress line per change (per-task heartbeats from the activity board
+in Render vocabulary — ▸ / ⚠ / ✓ — plus ✗ for an awaited task that finished
+in `taskError` or `taskOrphaned`, one-time "tN done — collect" notices for
+unrelated completions, and the ollama watcher note when present) through the
+call's MCP progress emitter. Terminal awaited tasks are claimed and returned
+inline. Context cancellation (host Esc → notifications/cancelled, server EOF
+drain, or a blocking collect's private timeout context) detaches: nothing is
+claimed by the observer and the tasks keep running as collectible background
+work; the collect handler distinguishes timeout from host cancellation using
+the still-live parent context.
 
 ## Activity (internal/activity)
 
@@ -1816,11 +1848,17 @@ reads from. It holds only strings and timestamps — never `agent.Event` — so
 runs one way, agent → activity. `NewBoard()` starts empty on the wall clock
 (`SetClock` overrides it for tests). `Record(label, summary)` stamps a
 one-line activity string for an agent label, marking it live and appending to
-a per-agent ring buffer capped at `recentCap` (20) entries so the ollama
-watcher's prompt stays small. `Done(label, elapsed)` marks an agent finished
-with its total elapsed time. `Snapshot()` returns an `[]AgentState` (`Label`,
-`Last`, `LastAt`, `Done`, `Elapsed`, `Recent`) in first-seen order; `Recent
-(label)` returns just that agent's ring buffer. Labels are opaque keys: the
+a per-agent ring buffer capped at `recentCap` (20) entries. Each in-memory
+`recentEvent` stores both `At` and `Summary`, enabling deterministic idle/rate
+signals while keeping the watcher's prompt small. `Recent(label)` continues
+to derive the original `[]string` view, while `RecentEvents(label)` returns a
+copied timestamped view in oldest-first order. `Done(label, elapsed)` marks an
+agent finished with its total elapsed time. `Snapshot()` returns an
+`[]AgentState` (`Label`, `Last`, `LastAt`, `Done`, `Elapsed`, `Recent`) in
+first-seen order and carries the timestamped events internally for
+classification. The disk `mirrorFile` schema is unchanged: richer recent
+events never leave memory, preserving old/new `styx watch` compatibility.
+Labels are opaque keys: the
 `agent.Manager` writes project-namespaced ones (`agent.BoardLabel` →
 `"<projectID>/<thread>"`) so the single board shared across projects never
 collides; `activity.Render` strips the `"<projectID>/"` prefix (via
@@ -1833,20 +1871,31 @@ dispatch heartbeat, the conductor via the piggyback bg line and its own
 watcher goroutine (see the `repl.go` and "Conductor MCP tools" sections).
 
 **Ollama watcher** (`Watcher`): a best-effort background goroutine that
-periodically feeds cross-agent activity to local ollama `/api/chat` and
-writes health observations back to the board via `SetWatcherNote`.
-`Watcher{BaseURL, Model, Board, Interval}` configures the endpoint, chat
-model, target board, and poll cadence (0 defaults to 15s). `Run(ctx)` fires
-a goroutine that polls until context cancellation; poll errors are
-deliberately swallowed — a down ollama must not spam or crash the session.
-`pollOnce(ctx)` runs one watch cycle: it snapshots live (non-`Done`) agents,
-builds a structured prompt listing each agent's recent activity lines,
-sends it to ollama with a system prompt tuned for agent-health assessment,
-and stores the parsed response on success. On failure (unreachable ollama,
-parse error, etc.) it returns the error and leaves the existing note
-untouched — callers can log the error for debugging but the session
-continues unaffected. This graceful degradation is tested via `httptest`
-mocks for ollama success and failure paths.
+periodically checks cross-agent activity and writes health observations back
+to the board via `SetWatcherNote`. `Watcher{BaseURL, Model, Board, Interval,
+Stall}` configures the endpoint, chat model, target board, poll cadence (0
+defaults to 15s), and mechanical idle threshold (0 defaults to
+`DefaultStall`). Both conductor and REPL wire `Stall` from the already-existing
+`[watch].stall_threshold_seconds` setting. `Run(ctx)` polls until context
+cancellation; poll errors are deliberately swallowed so a down ollama cannot
+spam or crash the session.
+
+Before any HTTP call, `classify` computes deterministic `signalSet` values per
+live agent from the timestamped ring: trailing identical-action count,
+distinct recent summaries, distinct file targets, idle duration, and events
+per minute. Only an identical run of at least `loopRun` (4) or idle beyond
+`Stall` is suspicious enough to reach ollama. Healthy cycles — including
+changing edits/tests around one file — skip the model entirely and clear any
+stale watcher alarm. For suspicious agents, `pollOnce` sends only the flagged
+subset with timestamps, tool/target summaries, and all mechanical signals.
+The system prompt explicitly treats repeated work on one file as normal and
+defines a loop as the same action with no state change. Ollama must return one
+JSON object per line with `agent`, `healthy|watch|stuck`, and a short `reason`;
+only `watch`/`stuck` lines render into the board note. A response with no
+usable JSON verdict, an unreachable endpoint, or another transport/parse
+failure leaves the previous note untouched. This gate, structured prompt,
+verdict parser, and graceful degradation are covered by pure classification
+tests plus `httptest` watcher tests.
 
 **Live renderer** (`LiveRenderer`): a TTY-aware refresh loop that repaints
 the board in place on a ticker. `NewLiveRenderer(w io.Writer, b *Board, stall

@@ -96,7 +96,7 @@ func TestParseCodexEvent(t *testing.T) {
 			Event{Type: EventResult, Text: "boom", IsError: true}, true},
 		{"command_execution without command field surfaces as tool",
 			`{"type":"item.completed","item":{"type":"command_execution"}}`,
-			Event{Type: EventTool, Tool: "command_execution"}, true},
+			Event{Type: EventTool, Tool: "Bash"}, true},
 		{"garbage", `not json`, Event{}, false},
 	}
 	for _, tc := range cases {
@@ -119,7 +119,13 @@ func TestParseCodexToolEvent(t *testing.T) {
 		{
 			name: "command_execution item surfaces EventTool",
 			line: `{"type":"item.completed","item":{"type":"command_execution","command":"go build ./..."}}`,
-			want: Event{Type: EventTool, Tool: "command_execution", Text: "go build ./..."},
+			want: Event{Type: EventTool, Tool: "Bash", Text: "go build ./..."},
+			ok:   true,
+		},
+		{
+			name: "file_change item surfaces first changed path",
+			line: `{"type":"item.completed","item":{"type":"file_change","changes":[{"path":"internal/activity/watcher.go","kind":"update"}]}}`,
+			want: Event{Type: EventTool, Tool: "Edit", Text: "internal/activity/watcher.go"},
 			ok:   true,
 		},
 		{
@@ -137,6 +143,41 @@ func TestParseCodexToolEvent(t *testing.T) {
 			}
 			if ok && got != tt.want {
 				t.Fatalf("got %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestToolEventSummariesCarryVerbAndTarget(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		parse func([]byte) (Event, bool)
+		line  string
+		want  string
+	}{
+		{
+			name: "codex file change", parse: ParseCodexEvent,
+			line: `{"type":"item.completed","item":{"type":"file_change","path":"cmd/styx/mcp.go"}}`,
+			want: "Edit: cmd/styx/mcp.go",
+		},
+		{
+			name: "codex command", parse: ParseCodexEvent,
+			line: `{"type":"item.completed","item":{"type":"command_execution","command":"go test ./...\nignored"}}`,
+			want: "Bash: go test ./...",
+		},
+		{
+			name: "claude file tool", parse: ParseClaudeEvent,
+			line: `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"internal/agent/event.go"}}]}}`,
+			want: "Edit: internal/agent/event.go",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event, ok := tc.parse([]byte(tc.line))
+			if !ok {
+				t.Fatal("event was not parsed")
+			}
+			if got := summarize(event); got != tc.want {
+				t.Fatalf("summary = %q, want %q", got, tc.want)
 			}
 		})
 	}
