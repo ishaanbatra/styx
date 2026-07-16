@@ -140,7 +140,8 @@ restarting the session.
 | Verb | What it does |
 |---|---|
 | `debug <bug>` | **ultraFerdDebug**: agy on pinned Gemini 3.1 Pro (High) sweeps the repository into a cited debug brief, then Codex and Claude independently review it and styx writes a deterministic diagnosis report. Diagnosis only; no code edits |
-| `debug --test <name> --log <path> --file <hint> <bug>` | Add a failing test, a capped log/stack file, and repeatable starting-file hints to the sweep |
+| `debug --log <file...> [-- <failure description>]` | Failure-triage entry mode: agy reads one or more log/test-output files by path, clusters failures by root cause, and traces each cluster to repository code; one Codex review checks the clusters and traces. Log contents are never embedded in the prompt |
+| `debug --test <name> --file <hint> <bug>` | Add a failing-test name and repeatable starting-file hints to the normal diagnosis sweep |
 | `debug --review-only <brief> [bug]` | Skip the expensive sweep and run only the two short reviews plus verdict against an existing brief |
 
 ### Autonomy
@@ -235,7 +236,9 @@ It uses `debug.sweep` for agy with `claude:sonnet` fallback,
 `debug.review.codex` for the high-effort Codex pass, and
 `debug.review.claude` for the Claude Sonnet pass. `styx upgrade` injects
 missing debug rules and upgrades `agy:default` targets to the pin without
-overwriting explicitly selected custom models.
+overwriting explicitly selected custom models. Log mode still routes its sweep
+through `debug.sweep`, but intentionally stops after the single Codex review;
+the full Codex+Claude review remains exclusive to the normal diagnosis mode.
 
 ## Deps
 

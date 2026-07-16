@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,18 +21,16 @@ import (
 	"github.com/ishaanbatra/styx/internal/signals"
 )
 
-const maxDebugLogBytes = 256 * 1024
-
 type debugCLIArgs struct {
 	bug        string
 	testName   string
-	logPath    string
+	logPaths   []string
 	fileHints  []string
 	reviewOnly string
 }
 
-// cmdDebug runs ultraFerdDebug: a read-only repository sweep followed by two
-// independent brief reviews and a deterministic verdict.
+// cmdDebug runs ultraFerdDebug: a read-only repository sweep followed by
+// scaled independent review and a deterministic verdict.
 func cmdDebug(ctx context.Context, a *app, prog *progress.Tracker, args []string) error {
 	parsed, err := parseDebugArgs(args)
 	if err != nil {
@@ -51,12 +48,9 @@ func cmdDebug(ctx context.Context, a *app, prog *progress.Tracker, args []string
 		return fmt.Errorf("resolve debug project: %w", err)
 	}
 
-	logBody := ""
-	if parsed.logPath != "" {
-		logBody, err = readDebugLog(parsed.logPath)
-		if err != nil {
-			return err
-		}
+	parsed.logPaths, err = resolveDebugLogPaths(parsed.logPaths)
+	if err != nil {
+		return err
 	}
 	presetBrief := ""
 	if parsed.reviewOnly != "" {
@@ -87,6 +81,8 @@ func cmdDebug(ctx context.Context, a *app, prog *progress.Tracker, args []string
 		}
 		sweepName = debugDecisionLabel(dec)
 		sweepAdapter = newDebugChannelAdapter(a, rawChannel(ch), dec, "debug.sweep", projectID, runID, proj.Path)
+		sweepAdapter.attachments = debugLogAttachments(parsed.logPaths)
+		sweepAdapter.extraRoots = debugLogRoots(proj.Path, parsed.logPaths)
 		if dec.Degraded {
 			logStatus("debug sweep degraded to %s: %s", sweepName, dec.Reason)
 		}
@@ -96,9 +92,13 @@ func cmdDebug(ctx context.Context, a *app, prog *progress.Tracker, args []string
 	if err != nil {
 		return err
 	}
-	claudeAdapter, claudeName, err := routeDebugReviewer(ctx, a, "debug.review.claude", parsed.bug, sigs, projectID, runID)
-	if err != nil {
-		return err
+	var claudeAdapter *debugChannelAdapter
+	claudeName := ""
+	if len(parsed.logPaths) == 0 {
+		claudeAdapter, claudeName, err = routeDebugReviewer(ctx, a, "debug.review.claude", parsed.bug, sigs, projectID, runID)
+		if err != nil {
+			return err
+		}
 	}
 
 	debugDir := proj.DebugDir
@@ -109,8 +109,7 @@ func cmdDebug(ctx context.Context, a *app, prog *progress.Tracker, args []string
 	input := ferddebug.Input{
 		Bug:         parsed.bug,
 		TestName:    parsed.testName,
-		LogPath:     parsed.logPath,
-		LogBody:     logBody,
+		LogPaths:    append([]string(nil), parsed.logPaths...),
 		FileHints:   append([]string(nil), parsed.fileHints...),
 		ProjectPath: proj.Path,
 	}
@@ -218,6 +217,8 @@ type debugChannelAdapter struct {
 	projectID   string
 	runID       string
 	projectPath string
+	attachments []channel.Attachment
+	extraRoots  []string
 	blockedErr  error
 	response    channel.Response
 }
@@ -238,6 +239,8 @@ func (a *debugChannelAdapter) Send(ctx context.Context, prompt string) (string, 
 	}
 	resp, err := a.ch.Send(ctx, channel.Request{
 		Model: a.model, Effort: a.effort, Prompt: prompt, WorkingDir: a.projectPath,
+		Attachments: append([]channel.Attachment(nil), a.attachments...),
+		ExtraRoots:  append([]string(nil), a.extraRoots...),
 	})
 	a.response = resp
 	if a.tracker != nil {
@@ -275,12 +278,23 @@ func parseDebugArgs(args []string) (debugCLIArgs, error) {
 		case strings.HasPrefix(arg, "--test="):
 			out.testName = strings.TrimPrefix(arg, "--test=")
 		case arg == "--log":
-			out.logPath, _ = value("--log")
-			if out.logPath == "" {
+			v, err := value("--log")
+			if err != nil || v == "" || strings.HasPrefix(v, "-") {
 				return debugCLIArgs{}, fmt.Errorf("--log requires a value")
 			}
+			out.logPaths = append(out.logPaths, v)
+			// In entry mode, one --log accepts a corpus. A following flag ends
+			// the corpus; use -- before an optional free-form description.
+			for i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				out.logPaths = append(out.logPaths, args[i])
+			}
 		case strings.HasPrefix(arg, "--log="):
-			out.logPath = strings.TrimPrefix(arg, "--log=")
+			v := strings.TrimPrefix(arg, "--log=")
+			if v == "" {
+				return debugCLIArgs{}, fmt.Errorf("--log requires a value")
+			}
+			out.logPaths = append(out.logPaths, v)
 		case arg == "--file":
 			v, err := value("--file")
 			if err != nil || v == "" {
@@ -303,13 +317,77 @@ func parseDebugArgs(args []string) (debugCLIArgs, error) {
 		}
 	}
 	out.bug = strings.TrimSpace(strings.Join(positional, " "))
+	if len(out.logPaths) > 0 && out.reviewOnly != "" {
+		return debugCLIArgs{}, fmt.Errorf("--log and --review-only cannot be combined")
+	}
 	if out.bug == "" && out.reviewOnly != "" {
 		out.bug = "review-only debug diagnosis"
 	}
+	if out.bug == "" && len(out.logPaths) > 0 {
+		out.bug = "failure triage from provided logs"
+	}
 	if out.bug == "" {
-		return debugCLIArgs{}, fmt.Errorf("usage: styx debug [--test <name>] [--log <path>] [--file <hint>]... [--review-only <brief-path>] <bug description>")
+		return debugCLIArgs{}, fmt.Errorf("usage: styx debug <bug description> | styx debug --log <file...> [-- <failure description>] | styx debug --review-only <brief-path> [bug]")
 	}
 	return out, nil
+}
+
+func resolveDebugLogPaths(paths []string) ([]string, error) {
+	resolved := make([]string, 0, len(paths))
+	seen := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return nil, fmt.Errorf("resolve debug log %s: %w", path, err)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			return nil, fmt.Errorf("stat debug log %s: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("debug log %s is not a regular file", path)
+		}
+		if _, ok := seen[abs]; ok {
+			continue
+		}
+		seen[abs] = struct{}{}
+		resolved = append(resolved, abs)
+	}
+	return resolved, nil
+}
+
+func debugLogAttachments(paths []string) []channel.Attachment {
+	attachments := make([]channel.Attachment, 0, len(paths))
+	for _, path := range paths {
+		attachments = append(attachments, channel.Attachment{Path: path, Mime: "text/plain"})
+	}
+	return attachments
+}
+
+func debugLogRoots(projectPath string, paths []string) []string {
+	projectPath, _ = filepath.Abs(projectPath)
+	seen := map[string]struct{}{}
+	var roots []string
+	for _, path := range paths {
+		if pathWithin(projectPath, path) {
+			continue
+		}
+		root := filepath.Dir(path)
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || filepath.IsAbs(rel) {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // gitTreeState returns the porcelain status of dir's working tree, bounded so
@@ -349,17 +427,4 @@ func treeStateDiff(pre, post string) []string {
 		}
 	}
 	return dirtied
-}
-
-func readDebugLog(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open debug log %s: %w", path, err)
-	}
-	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxDebugLogBytes))
-	if err != nil {
-		return "", fmt.Errorf("read debug log %s: %w", path, err)
-	}
-	return string(b), nil
 }

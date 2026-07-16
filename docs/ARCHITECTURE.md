@@ -1116,36 +1116,55 @@ recent brief.
 
 ## Debug (internal/debug, cmd/styx/debug.go)
 
-`styx debug [--test <name>] [--log <path>] [--file <hint>]... <bug>` runs the
-read-only **ultraFerdDebug** pathway. The routed sweeper receives the project as
+`styx debug [--test <name>] [--file <hint>]... <bug>` runs the normal read-only
+**ultraFerdDebug** pathway. The routed sweeper receives the project as
 `WorkingDir` but never receives `channel.Request.Write`; it reads broadly and
 returns a markdown debug brief with symptom, file:line evidence, ranked
-hypotheses, a described minimal fix, and open questions. Read-only is enforced
-by the claude/codex channels but NOT by agy — its headless CLI auto-approves
-tool use and has no read-only mode (verified empirically: `--sandbox` restricts
-the terminal, not file writes) — so `cmdDebug` guards the default sweep channel
-itself: it snapshots `git status --porcelain` before the sweep, re-checks right
-after it (inside the `PersistBrief` hook, before reviews), and any paths the
-sweep touched are narrated loudly and recorded in `Report.SweepDirtied`, which
+hypotheses, a described minimal fix, and open questions.
+
+`styx debug --log <file...> [-- <failure description>]` is the failure-triage
+entry mode. `--log` accepts one or more regular log/test-output files (the
+repeatable `--log=<file>` form leaves following words available as the optional
+description). Paths are normalized and deduplicated. The sweep still routes
+through `debug.sweep` and receives the repository as `WorkingDir`; each log is
+also carried as a path-only `channel.Attachment`, while parent directories for
+logs outside the repository are attached through `Request.ExtraRoots` →
+`--add-dir`. Log contents are never read into or interpolated into the prompt.
+The agy prompt instead names the files and requires corpus accounting,
+root-cause clustering, deduplication, and a repository `file:line` code trace
+for every cluster.
+
+Read-only is enforced by the claude/codex channels but NOT by agy — its
+headless CLI auto-approves tool use and has no read-only mode (verified
+empirically: `--sandbox` restricts the terminal, not file writes) — so
+`cmdDebug` applies the same conductor-side tree guard to both entry modes: it
+snapshots `git status --porcelain` before the sweep, re-checks right after it
+(inside the `PersistBrief` hook, before reviews), and any paths the sweep
+touched are narrated loudly and recorded in `Report.SweepDirtied`, which
 renders as a warning section at the top of the report. That expensive brief
 is atomically persisted under the project's `DebugDir` (default `styx/debug`)
 before review starts.
 
-Codex and Claude then review the brief concurrently and independently: Codex
-checks cited-code misreads, while Claude checks whether the proposed cause/fix
-is fundamental. Both produce the `research.Critique` JSON shape. Reviewer
-errors remain visible in the report instead of discarding the sweep. Go code
-computes the verdict without a third model call: any BLOCKING finding makes it
-low-confidence and unconfirmed; IMPORTANT-only findings make it medium; two
-clean reviews make it high. Each role records a correlated `budget.Event`, and
-the completed run records a read-risk outcome.
+In normal diagnosis mode, Codex and Claude review the brief concurrently and
+independently: Codex checks cited-code misreads, while Claude checks whether the
+proposed cause/fix is fundamental. Log mode scales this down to exactly one
+Codex turn, whose lens checks failure coverage, cluster boundaries, and claimed
+code traces; it neither routes nor invokes `debug.review.claude`. All reviewers
+produce the `research.Critique` JSON shape. Reviewer errors remain visible in
+the report instead of discarding the sweep. Go code computes the verdict
+without another model call: any BLOCKING finding makes it low-confidence and
+unconfirmed; IMPORTANT-only findings make it medium; clean required reviews
+make it high. Each invoked role records a correlated `budget.Event`, and the
+completed run records a read-risk outcome.
 
-The final `# ultraFerdDebug report` contains the brief, both raw reviews, and
-the deterministic verdict, then is atomically written beside the recoverable
-brief and best-effort indexed as `memory.KindBrief`. This diagnosis pathway
-does not use the auto pipeline lock or `state.json`, so its state shape cannot
-affect `auto --resume`. `debug --review-only <brief> [bug]` is its recovery
-path: it skips the sweep and reruns only the two cheap reviews plus verdict.
+The final `# ultraFerdDebug report` contains the mode, input log paths when
+applicable, the brief, the required raw review(s), and the deterministic
+verdict, then is atomically written beside the recoverable brief and
+best-effort indexed as `memory.KindBrief`. This diagnosis pathway does not use
+the auto pipeline lock or `state.json`, so its state shape cannot affect
+`auto --resume`. `debug --review-only <brief> [bug]` is the normal mode's
+recovery path: it skips the sweep and reruns only the two cheap reviews plus
+verdict; combining it with `--log` is rejected.
 
 ## Execute (internal/execute)
 

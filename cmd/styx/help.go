@@ -27,6 +27,9 @@ VERBS
   research <query>          Gemini draft + Codex critique -> brief
   debug <bug>               ultraFerdDebug: agy sweep + independent Codex/Claude
                              review -> diagnosis report (no code edits)
+  debug --log <file...> [-- <failure description>]
+                             Cluster log/test failures by root cause, trace them
+                             to code, then run one Codex review (no code edits)
   debug --review-only <brief> [bug]
                              Re-run only the cheap reviews for an existing brief
   deep-research <query>     Open Gemini + ChatGPT in browser; synthesis template
