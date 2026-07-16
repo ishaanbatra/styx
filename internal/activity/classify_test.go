@@ -44,6 +44,18 @@ func TestClassify(t *testing.T) {
 				"Read: README.md",
 			}, idle: 45 * time.Second, wantVerdict: healthy, wantIdentical: 1, wantFiles: 1, wantRate: true,
 		},
+		{
+			name: "alternating two-action loop", events: []string{
+				"Bash: go test ./...", "Read: internal/a.go", "Bash: go test ./...", "Read: internal/a.go",
+				"Bash: go test ./...", "Read: internal/a.go", "Bash: go test ./...", "Read: internal/a.go",
+			}, step: 5 * time.Second, idle: time.Second, wantVerdict: suspicious, wantIdentical: 1, wantFiles: 1, wantRate: true,
+		},
+		{
+			name: "short edit-test alternation stays healthy", events: []string{
+				"Edit: internal/a.go", "Bash: go test ./...", "Edit: internal/a.go",
+				"Bash: go test ./...", "Edit: internal/a.go", "Bash: go test ./...",
+			}, step: 5 * time.Second, idle: time.Second, wantVerdict: healthy, wantIdentical: 1, wantFiles: 1, wantRate: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := NewBoard()
@@ -64,6 +76,10 @@ func TestClassify(t *testing.T) {
 			}
 			if tc.wantRate && signals.EventsPerMin <= 0 {
 				t.Fatalf("recent case must have a positive event rate: %+v", signals)
+			}
+			if tc.wantVerdict == suspicious && tc.wantIdentical < loopRun && tc.idle <= DefaultStall &&
+				signals.TrailingLowVariety < alternateRun {
+				t.Fatalf("alternation case must trip TrailingLowVariety >= %d: %+v", alternateRun, signals)
 			}
 		})
 	}

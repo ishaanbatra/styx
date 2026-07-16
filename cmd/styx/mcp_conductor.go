@@ -756,9 +756,9 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 		{
 			Name:        "pipeline_run",
 			Serial:      true,
-			Description: "Run a styx pipeline: research | review | intel | auto. auto ships (branch→push→PR) and requires the confirm_token handshake.",
+			Description: "Run a styx pipeline: research | review | intel | auto | debug. debug is ultraFerdDebug: an agy repository sweep plus independent codex/claude review, diagnosis-only with no edits. auto ships (branch→push→PR) and requires the confirm_token handshake.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
-				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto"}},
+				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto", "debug"}},
 				"arg":           map[string]any{"type": "string"},
 				"confirm_token": map[string]any{"type": "string"},
 			}, "required": []string{"pipeline"}},
@@ -768,7 +768,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					return nil, fmt.Errorf("pipeline_run args: %w", err)
 				}
 				switch in.Pipeline {
-				case "research", "review", "intel", "auto":
+				case "research", "review", "intel", "auto", "debug":
 				default:
 					return nil, fmt.Errorf("unknown pipeline %q", in.Pipeline)
 				}
@@ -804,6 +804,21 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					} else {
 						indexNewestBrief(ctx, m.mem, d.emb, filepath.Join(proj.Path, proj.ResearchDir))
 					}
+				case "debug":
+					if err := cmdDebug(ctx, d.a, prog, []string{in.Arg}); err != nil {
+						return nil, fmt.Errorf("pipeline debug: %w", err)
+					}
+					if proj, err := resolveGlobalTarget(""); err != nil {
+						logStatus("pipeline debug: report not indexed: %v", err)
+					} else if m, err := d.managerForProject(proj); err != nil {
+						logStatus("pipeline debug: report not indexed: %v", err)
+					} else {
+						debugDir := proj.DebugDir
+						if debugDir == "" {
+							debugDir = "styx/debug"
+						}
+						indexNewestReport(ctx, m.mem, d.emb, filepath.Join(proj.Path, debugDir))
+					}
 				case "review":
 					if err := cmdReview(ctx, d.a, nil); err != nil {
 						return nil, fmt.Errorf("pipeline review: %w", err)
@@ -827,7 +842,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}
 				}
 				return map[string]any{"pipeline": in.Pipeline, "done": true,
-					"note": "artifacts under styx/research/ and styx/plans/; runs ls for pipeline state"}, nil
+					"note": "artifacts under styx/research/, styx/debug/, and styx/plans/; runs ls for pipeline state"}, nil
 			},
 		},
 		{

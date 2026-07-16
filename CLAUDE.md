@@ -48,6 +48,8 @@ no docs. A PostToolUse hook in `.claude/settings.json` reminds you after every
   auto flow (research → intel → plan → execute → test → review → ship)
 - **Research** (`internal/research/` + `internal/brief/`): drafter/critic
   convergence loop, deep-mode URL chasing, briefs to disk
+- **Debug** (`internal/debug/` + `cmd/styx/debug.go`): ultraFerdDebug read-only
+  repository sweep, independent Codex/Claude reviews, deterministic report
 - **Execute** (`internal/execute/`): headless claude plan application + ship
   (commit/push/PR)
 - **Progress** (`internal/progress/`): TTY-aware `[styx]` stage narration

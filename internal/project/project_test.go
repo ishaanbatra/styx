@@ -57,8 +57,12 @@ func TestCurrent_AutoRegistersOnFirstUse(t *testing.T) {
 	cfgDir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", cfgDir)
 
-	if _, err := CurrentFrom(repo); err != nil {
+	p, err := CurrentFrom(repo)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if p.DebugDir != "styx/debug" {
+		t.Errorf("DebugDir = %q, want styx/debug", p.DebugDir)
 	}
 	// After CurrentFrom, projects.toml should exist with the new entry.
 	registry := filepath.Join(cfgDir, "styx", "projects.toml")

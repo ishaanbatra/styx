@@ -53,6 +53,20 @@ func TestExtract(t *testing.T) {
 			proj: config.Project{Language: "go"},
 			want: []string{"deep", "lang:go"},
 		},
+		{
+			name: "debug-panic",
+			verb: "debug",
+			args: []string{"panic with a nil pointer in the failing test"},
+			proj: config.Project{Language: "go"},
+			want: []string{"debug", "lang:go"},
+		},
+		{
+			name: "debug-benign",
+			verb: "debug",
+			args: []string{"unexpected behavior in the cache"},
+			proj: config.Project{Language: "go"},
+			want: []string{"lang:go"},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

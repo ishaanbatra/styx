@@ -12,12 +12,12 @@ func cmdUpgrade() error {
 	if err != nil {
 		return err
 	}
-	n, injected, fableRestored, taskCapInjected, watchInjected, err := config.UpgradeRoutingFile(p)
+	n, injected, fableRestored, taskCapInjected, watchInjected, debugInjected, err := config.UpgradeRoutingFile(p)
 	if err != nil {
 		return err
 	}
-	if n == 0 && !injected && !fableRestored && !taskCapInjected && !watchInjected {
-		fmt.Println("routing.toml already up to date (agy + implement verb + fable tier + conductor task cap + watch config present).")
+	if n == 0 && !injected && !fableRestored && !taskCapInjected && !watchInjected && !debugInjected {
+		fmt.Println("routing.toml already up to date (agy + implement/debug verbs + fable tier + conductor task cap + watch config present).")
 		return nil
 	}
 	if n > 0 {
@@ -34,6 +34,9 @@ func cmdUpgrade() error {
 	}
 	if watchInjected {
 		fmt.Println("Seeded [watch] stall_threshold_seconds = 90, interval_seconds = 15, ollama_enabled = true.")
+	}
+	if debugInjected {
+		fmt.Println("Added ultraFerdDebug routing (agy sweep, codex + claude reviews).")
 	}
 	fmt.Printf("Backup saved to %s/routing.v0.1.toml.bak\n", "~/.config/styx")
 	return nil

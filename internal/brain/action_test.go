@@ -47,6 +47,7 @@ func TestActionValid(t *testing.T) {
 		{"dispatch bad thread", Action{Action: ActionDispatch, Confidence: 0.7,
 			Dispatches: []Dispatch{{Thread: "gpt9", Message: "x"}}}, false},
 		{"pipeline ok", Action{Action: ActionPipeline, Pipeline: "research", Confidence: 0.9}, true},
+		{"debug pipeline ok", Action{Action: ActionPipeline, Pipeline: "debug", Confidence: 0.9}, true},
 		{"pipeline bad name", Action{Action: ActionPipeline, Pipeline: "destroy", Confidence: 0.9}, false},
 		{"remember ok", Action{Action: ActionRemember, Remember: "fact", Confidence: 1}, true},
 		{"remember empty", Action{Action: ActionRemember, Confidence: 1}, false},
@@ -84,6 +85,7 @@ func TestEffectiveRisk(t *testing.T) {
 		{"max across dispatches", Action{Action: ActionParallelDispatch, Dispatches: []Dispatch{{Thread: "claude", Message: "a", Risk: RiskRead}, {Thread: "codex", Message: "b", Risk: RiskShip}}}, RiskShip},
 		{"auto pipeline is ship", Action{Action: ActionPipeline, Pipeline: "auto"}, RiskShip},
 		{"research pipeline defaults edit", Action{Action: ActionPipeline, Pipeline: "research"}, RiskEdit},
+		{"debug pipeline is read", Action{Action: ActionPipeline, Pipeline: "debug", Risk: RiskShip}, RiskRead},
 		{"action-level ship", Action{Action: ActionHandoff, Risk: RiskShip}, RiskShip},
 	}
 	for _, tt := range tests {
@@ -134,5 +136,11 @@ func TestProjectAndExtraRootsInSchema(t *testing.T) {
 		if !bytes.Contains(ActionSchema, []byte(want)) {
 			t.Errorf("ActionSchema missing %s", want)
 		}
+	}
+}
+
+func TestDebugPipelineInSchema(t *testing.T) {
+	if !bytes.Contains(ActionSchema, []byte(`"debug"`)) {
+		t.Error("ActionSchema missing debug pipeline")
 	}
 }

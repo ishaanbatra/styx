@@ -46,6 +46,40 @@ fallback = ["claude:sonnet-4-6"]
 	}
 }
 
+func TestEnsureDebugRules(t *testing.T) {
+	src := `[[rule]]
+verb = "research"
+use = "agy:default"
+`
+	got, changed := EnsureDebugRules(src)
+	if !changed {
+		t.Fatal("expected debug rules to be injected")
+	}
+	for _, verb := range []string{"debug.sweep", "debug.review.codex", "debug.review.claude"} {
+		if strings.Count(got, `verb = "`+verb+`"`) != 1 {
+			t.Errorf("expected exactly one %s rule:\n%s", verb, got)
+		}
+	}
+	again, changed := EnsureDebugRules(got)
+	if changed || again != got {
+		t.Fatal("second debug-rule upgrade must be a no-op")
+	}
+}
+
+func TestEnsureDebugRulesPreservesCustomPartialRule(t *testing.T) {
+	src := `[[rule]]
+verb = "debug.sweep"
+use = "claude:opus"
+`
+	got, changed := EnsureDebugRules(src)
+	if !changed {
+		t.Fatal("missing review rules must be injected")
+	}
+	if strings.Count(got, `verb = "debug.sweep"`) != 1 || !strings.Contains(got, `use = "claude:opus"`) {
+		t.Fatalf("custom sweep rule was changed or duplicated:\n%s", got)
+	}
+}
+
 func TestRewriteRoutingGeminiToAgy(t *testing.T) {
 	src := `[budget]
 claude.cap_pct = 80
@@ -107,7 +141,7 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, _, _, _, watchInjected, err := UpgradeRoutingFile(routingPath)
+	n, _, _, _, watchInjected, debugInjected, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +150,9 @@ use  = "gemini:flash"
 	}
 	if !watchInjected {
 		t.Error("expected [watch] section to be injected on a config that lacks one")
+	}
+	if !debugInjected {
+		t.Error("expected debug rules to be injected on a pre-debug config")
 	}
 	// Backup exists
 	backup := filepath.Join(routingDir, "routing.v0.1.toml.bak")
@@ -126,6 +163,11 @@ use  = "gemini:flash"
 	b, _ := os.ReadFile(routingPath)
 	if !strings.Contains(string(b), "agy:default") {
 		t.Errorf("post-upgrade file missing agy:default: %s", b)
+	}
+	for _, verb := range []string{"debug.sweep", "debug.review.codex", "debug.review.claude"} {
+		if !strings.Contains(string(b), `verb = "`+verb+`"`) {
+			t.Errorf("post-upgrade file missing %s: %s", verb, b)
+		}
 	}
 }
 
