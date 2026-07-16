@@ -28,6 +28,21 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	if strings.Contains(defaultRoutingTOML, "claude:opus-4") || strings.Contains(defaultRoutingTOML, "claude:sonnet-4") {
 		t.Error("seeded routing still pins a claude version")
 	}
+	// Agy is intentionally exempt: its subscription CLI remembers the user's
+	// last interactive model, so a pin prevents a sweep from silently using it.
+	agyRules := 0
+	for _, rule := range r.Rules {
+		if !strings.HasPrefix(rule.Use, "agy:") {
+			continue
+		}
+		agyRules++
+		if rule.Use != "agy:Gemini 3.1 Pro (High)" {
+			t.Errorf("seeded %s route uses %q, want sticky-model agy pin", rule.Verb, rule.Use)
+		}
+	}
+	if agyRules == 0 {
+		t.Error("seeded routing has no agy rules")
+	}
 	if r.Models.RefreshIntervalHours == 0 {
 		t.Error("seeded routing missing [models] (defaults not applied?)")
 	}
@@ -50,7 +65,7 @@ func TestDefaultRouting_DebugRules(t *testing.T) {
 	tests := []struct {
 		verb, channel, model, effort string
 	}{
-		{"debug.sweep", "agy", "default", ""},
+		{"debug.sweep", "agy", "Gemini 3.1 Pro (High)", ""},
 		{"debug.review.codex", "codex", "", "high"},
 		{"debug.review.claude", "claude", "sonnet", ""},
 	}

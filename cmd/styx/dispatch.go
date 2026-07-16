@@ -408,9 +408,9 @@ func ensureFirstRun() error {
 		}
 		logStatus("wrote default routing.toml to %s", routingPath)
 	}
-	// Auto-upgrade: v0.2 rewrites gemini:* -> agy:default; v0.3 injects the
-	// `implement` verb rules. Both back up to routing.v0.1.toml.bak.
-	if n, injected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, err := config.UpgradeRoutingFile(routingPath); err != nil {
+	// Auto-upgrade: v0.2 rewrites gemini:* -> agy, later migrations inject the
+	// implement/debug rules and pin agy models. Changes back up routing.toml.
+	if n, injected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, agyPinned, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
 	} else {
 		if n > 0 {
@@ -433,6 +433,9 @@ func ensureFirstRun() error {
 		}
 		if debugInjected {
 			logStatus("auto-upgraded routing.toml with ultraFerdDebug sweep and review rules")
+		}
+		if agyPinned {
+			logStatus("auto-upgraded routing.toml: pinned agy routes to Gemini 3.1 Pro (High)")
 		}
 	}
 	if projs, err := config.LoadProjects(); err == nil {

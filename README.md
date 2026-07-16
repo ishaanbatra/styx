@@ -129,7 +129,7 @@ restarting the session.
 
 | Verb | What it does |
 |---|---|
-| `research <q>` | Convergence loop: agy drafts, codex critiques, agy revises, until critic returns no BLOCKING/IMPORTANT (max 6 rounds) |
+| `research <q>` | Convergence loop: agy on pinned Gemini 3.1 Pro (High) drafts, codex critiques, agy revises, until critic returns no BLOCKING/IMPORTANT (max 6 rounds) |
 | `research --deep <q>` | Same loop, then chase every cited URL and summarize into a Sources Appendix |
 | `plan <desc>` | Auto-refresh intel index, write `.claude/context.md`, draft a detailed plan via Claude |
 | `build [target]` | Auto-refresh intel, write `.claude/context.md`, launch Claude interactively |
@@ -139,7 +139,7 @@ restarting the session.
 
 | Verb | What it does |
 |---|---|
-| `debug <bug>` | **ultraFerdDebug**: agy sweeps the repository into a cited debug brief, then Codex and Claude independently review it and styx writes a deterministic diagnosis report. Diagnosis only; no code edits |
+| `debug <bug>` | **ultraFerdDebug**: agy on pinned Gemini 3.1 Pro (High) sweeps the repository into a cited debug brief, then Codex and Claude independently review it and styx writes a deterministic diagnosis report. Diagnosis only; no code edits |
 | `debug --test <name> --log <path> --file <hint> <bug>` | Add a failing test, a capped log/stack file, and repeatable starting-file hints to the sweep |
 | `debug --review-only <brief> [bug]` | Skip the expensive sweep and run only the two short reviews plus verdict against an existing brief |
 
@@ -175,8 +175,8 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 |---|---|
 | `grunt <prompt>` | Local Ollama pass-through |
 | `think <prompt>` | Local Ollama reasoning mode (`deep:` prefix -> Claude) |
-| `explain <files...>` | Explain code files |
-| `summarize <files...>` | Summarize a set of files |
+| `explain <files...>` | Explain code files; large contexts route to pinned Gemini 3.1 Pro (High) on agy |
+| `summarize <files...>` | Summarize a set of files with pinned Gemini 3.1 Pro (High) on agy |
 | `critique <text>` | Devil's-advocate critique (Codex) |
 | `check` | Dashboard: git status, latest briefs/plans |
 | `budget` | Per-channel usage summary |
@@ -229,10 +229,13 @@ routing upgrade without replacing a host already chosen by the user:
 host = "claude" # claude | codex
 ```
 
-The seeded routing table uses `debug.sweep` for agy with
-`claude:sonnet` fallback, `debug.review.codex` for the high-effort Codex pass,
-and `debug.review.claude` for the Claude Sonnet pass. `styx upgrade` injects
-missing debug rules without overwriting customized ones.
+The seeded routing table pins agy rules to `Gemini 3.1 Pro (High)` because the
+subscription CLI otherwise reuses the user's last interactive model choice.
+It uses `debug.sweep` for agy with `claude:sonnet` fallback,
+`debug.review.codex` for the high-effort Codex pass, and
+`debug.review.claude` for the Claude Sonnet pass. `styx upgrade` injects
+missing debug rules and upgrades `agy:default` targets to the pin without
+overwriting explicitly selected custom models.
 
 ## Deps
 

@@ -18,7 +18,7 @@ ollama.cap_pct           = 0    # local, unlimited
 # ── research ──
 [[rule]]
 verb = "research"
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["ollama:qwen2.5-coder:14b"]
 
 [[rule]]
@@ -71,7 +71,7 @@ synthesize_with = "claude:sonnet"
 # ── debug (ultraFerdDebug: agy sweep, codex+claude review) ──
 [[rule]]
 verb = "debug.sweep"
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet"]
 
 [[rule]]
@@ -106,7 +106,7 @@ use  = "ollama:qwen2.5-coder:14b"
 [[rule]]
 verb = "explain"
 signals = ["large_context"]
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet"]
 
 [[rule]]
@@ -115,7 +115,7 @@ use  = "ollama:qwen2.5-coder:14b"
 
 [[rule]]
 verb = "summarize"
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]
 
 [[rule]]

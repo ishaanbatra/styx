@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-15
+last_verified: 2026-07-16
 ---
 
 # Styx Architecture
@@ -39,7 +39,7 @@ argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir
         internal/channel (decorated: WithProgress wrapping WithTimeout/raw adapter)
               ├── channel/claude   exec `claude -p` / interactive
               ├── channel/codex    exec `codex exec`
-              ├── channel/agy      exec `agy -p --dangerously-skip-permissions`
+              ├── channel/agy      exec `agy -p --dangerously-skip-permissions [--model <name>]`
               └── channel/ollama   HTTP localhost:11434 (auto-launches the app)
 ```
 
@@ -354,8 +354,11 @@ provider-specific values and the router copies it onto `Decision.Effort`.
 Bare channel tokens such as `codex` are valid and mean "let that CLI choose its
 current default model." `[models].refresh_interval_hours` controls the
 model-refresh staleness threshold and defaults to 24 hours. The seeded
-`default_routing.go` table is already in that de-pinned form, with
-`research.critic` showing `effort = "high"` as the pass-through example.
+`default_routing.go` table de-pins Claude and Codex versions, with
+`research.critic` showing `effort = "high"` as the pass-through example. Agy
+is deliberately different: its seeded rules pin `Gemini 3.1 Pro (High)`
+because the subscription CLI otherwise reuses the user's last interactive
+model choice.
 
 The `implement` verb routes autonomous plan application: codex is primary
 (well-scoped execution), claude is the fallback, and the `complex` signal
@@ -364,10 +367,13 @@ The `implement` verb routes autonomous plan application: codex is primary
 (`EnsureImplementRules`) on next run, alongside the v0.2 gemini→agy rewrite.
 
 The three ultraFerdDebug roles have dedicated rules: `debug.sweep` routes to
-`agy:default` with only `claude:sonnet` as fallback,
+`agy:Gemini 3.1 Pro (High)` with only `claude:sonnet` as fallback,
 `debug.review.codex` routes to Codex with high effort, and
 `debug.review.claude` routes to Claude Sonnet. `EnsureDebugRules` injects only
 missing rules into existing configs and preserves customized role targets.
+`EnsureAgyModelPin` upgrades unpinned `agy:default` routing targets while
+leaving explicit custom agy models alone; both first-run and `styx upgrade`
+surface whether that migration changed the routing file.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -598,8 +604,9 @@ usage from `turn.completed` events (never len/4 estimates), and defaults to a
 400k-token window (`Window` overrides for tests). Edit-risk turns add
 `--sandbox workspace-write` (codex exec is read-only by default); read-risk
 turns keep the default. Agy remains a plain adapter with no native
-resume/stream support: it runs `agy -p --dangerously-skip-permissions`, and
-continuity is maintained by styx summaries (agy exposes `--continue`/
+resume/stream support: it runs `agy -p --dangerously-skip-permissions`, adds
+`--model <name>` when the routed model is non-empty and not `default`, and
+maintains continuity through styx summaries (agy exposes `--continue`/
 `--conversation <id>` but never surfaces conversation IDs in `--print` output,
 so headless resume stays impossible).
 
