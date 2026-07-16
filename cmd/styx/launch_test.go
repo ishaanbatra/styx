@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/graph"
+	"github.com/ishaanbatra/styx/internal/launcher"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
 	"github.com/ishaanbatra/styx/internal/project"
@@ -244,6 +246,81 @@ func TestEnsureInteractiveTTY(t *testing.T) {
 	stdinIsTTY = func() bool { return true }
 	if err := ensureInteractiveTTY(); err != nil {
 		t.Fatalf("TTY stdin must pass, got %v", err)
+	}
+}
+
+func TestSelectConductorHost(t *testing.T) {
+	tests := []struct {
+		name       string
+		flagHost   string
+		configHost string
+		want       string
+		wantErr    string
+	}{
+		{"flag overrides config", "codex", "claude", "codex", ""},
+		{"config used without flag", "", "codex", "codex", ""},
+		{"missing values default to claude", "", "", "claude", ""},
+		{"unknown flag rejected", "other", "claude", "", "supported: claude, codex"},
+		{"unknown config rejected", "", "other", "", "supported: claude, codex"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, err := selectConductorHost(tt.flagHost, tt.configHost)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("selectConductorHost: %v", err)
+			}
+			if host.Name() != tt.want {
+				t.Errorf("host = %q, want %q", host.Name(), tt.want)
+			}
+		})
+	}
+}
+
+func TestNarrateRouteGateDegradation(t *testing.T) {
+	origQuiet := globalQuiet
+	globalQuiet = false
+	defer func() { globalQuiet = origQuiet }()
+
+	tests := []struct {
+		name string
+		host launcher.Host
+		mode string
+		want string
+	}{
+		{"codex block degrades", &launcher.CodexHost{}, "block", "guidance-only routing"},
+		{"codex audit degrades", &launcher.CodexHost{}, "audit", "guidance-only routing"},
+		{"codex off is silent", &launcher.CodexHost{}, "off", ""},
+		{"claude block is silent", &launcher.ClaudeHost{}, "block", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldStderr := os.Stderr
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			os.Stderr = w
+			narrateRouteGateDegradation(tt.host, tt.mode)
+			w.Close()
+			os.Stderr = oldStderr
+			var out bytes.Buffer
+			if _, err := out.ReadFrom(r); err != nil {
+				t.Fatal(err)
+			}
+			r.Close()
+			if tt.want == "" && out.Len() != 0 {
+				t.Errorf("unexpected narration: %q", out.String())
+			}
+			if tt.want != "" && !strings.Contains(out.String(), tt.want) {
+				t.Errorf("narration = %q, want containing %q", out.String(), tt.want)
+			}
+		})
 	}
 }
 

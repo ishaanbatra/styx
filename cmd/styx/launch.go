@@ -21,7 +21,7 @@ import (
 
 // cmdLaunch is the conductor front door: `styx` / `styx <repos...>`. The
 // first repo (if any) resolves the focus project exactly like the classic
-// REPL's newREPLSession; extra repos are both added to the Claude Code
+// REPL's newREPLSession; extra repos are both added to the conductor host
 // session directly (the launcher passes --add-dir per repo) and noted in
 // the guidance so the brain also passes them as the MCP dispatch tool's
 // extra_roots, giving dispatched agent threads the same access.
@@ -29,25 +29,19 @@ func cmdLaunch(a *app, repos ...string) error {
 	return launchConductor(a, repos, nil)
 }
 
-// cmdResume relaunches the conductor resuming an existing Claude Code session:
-// with a session ID it passes --resume <id>, without one --continue (Claude
-// Code picks the directory's most recent session). Either way the full
-// toolbelt is rewired — a plain `claude --resume` would restore the
-// conversation but lose the styx MCP server and guidance, since those are
-// per-invocation flags. Focus resolution is cwd-anchored like bare `styx`
-// (sessions are per-directory); extra repos are out of scope.
+// cmdResume relaunches the conductor resuming an existing host session. The
+// selected host maps an empty or explicit session ID to its own CLI shape, and
+// the full toolbelt is rewired because MCP and guidance are per-invocation.
+// Focus resolution is cwd-anchored like bare `styx`; extra repos are out of
+// scope.
 func cmdResume(a *app, sessionID string) error {
-	extraArgs := []string{"--continue"}
-	if sessionID != "" {
-		extraArgs = []string{"--resume", sessionID}
-	}
-	return launchConductor(a, nil, extraArgs)
+	return launchConductor(a, nil, &sessionID)
 }
 
 // ensureGraphsFresh fires a background graphify build for every stale bound
 // repo. All narration happens HERE, before the host owns the TTY — the
 // goroutines are silent (build output goes to state/graph/<id>/build.log)
-// because a stderr write mid-session would corrupt the Claude Code TUI.
+// because a stderr write mid-session would corrupt the conductor host's TUI.
 // The returned channel closes when all builds finish; launchConductor ignores
 // it (builds race the session and die with the process — meta is only written
 // on success, so an interrupted build simply retries next launch).
@@ -79,9 +73,9 @@ func ensureGraphsFresh(bin string, projs []project.Project) <-chan struct{} {
 }
 
 // launchConductor is the shared guidance-assembly + host-launch path behind
-// cmdLaunch and cmdResume; extraArgs are passed through to the host CLI after
-// its standard flags.
-func launchConductor(a *app, repos []string, extraArgs []string) error {
+// cmdLaunch and cmdResume; a non-nil resumeSession is mapped to host-specific
+// argv by the selected launcher.
+func launchConductor(a *app, repos []string, resumeSession *string) error {
 	if err := ensureInteractiveTTY(); err != nil {
 		return err
 	}
@@ -117,20 +111,56 @@ func launchConductor(a *app, repos []string, extraArgs []string) error {
 	if err != nil {
 		return fmt.Errorf("locate styx binary: %w", err)
 	}
-	host := &launcher.ClaudeHost{}
+	host, err := selectConductorHost(globalHost, a.routing.Conductor.Host)
+	if err != nil {
+		return err
+	}
+	narrateRouteGateDegradation(host, a.routing.Conductor.RouteGate)
+	var resumeArgs []string
+	if resumeSession != nil {
+		resumeArgs = host.ResumeArgs(*resumeSession)
+	}
 	logStatus("launching " + host.Name() + " conductor in " + p.Name)
 	return host.Launch(context.Background(), launcher.Opts{
 		ProjectPath: p.Path, StyxBin: styxBin, Guidance: guide, ExtraRepos: extras,
-		RouteGate: a.routing.Conductor.RouteGate,
-		ExtraArgs: extraArgs,
+		RouteGate:  a.routing.Conductor.RouteGate,
+		ResumeArgs: resumeArgs,
 	})
+}
+
+// narrateRouteGateDegradation makes Codex's guidance-only enforcement visible.
+// Codex's hook subsystem does not provide the deny gate used by Claude Code.
+func narrateRouteGateDegradation(host launcher.Host, mode string) {
+	if host.Name() == "codex" && mode != "off" {
+		logStatus("codex cannot enforce route_gate=%s with hooks; continuing with guidance-only routing", mode)
+	}
+}
+
+// selectConductorHost applies launch-only flag > routing config > claude
+// precedence and rejects unsupported hosts without silently falling back.
+func selectConductorHost(flagHost, configHost string) (launcher.Host, error) {
+	name := flagHost
+	if name == "" {
+		name = configHost
+	}
+	if name == "" {
+		name = "claude"
+	}
+	switch name {
+	case "claude":
+		return &launcher.ClaudeHost{}, nil
+	case "codex":
+		return &launcher.CodexHost{}, nil
+	default:
+		return nil, fmt.Errorf("unsupported conductor host %q (supported: claude, codex)", name)
+	}
 }
 
 // conductorGuidance assembles the final --append-system-prompt content:
 // base guidance, the focus project's registry alias, extra-repo notes, and
 // the two learned-preference sections (the entire application mechanism of
 // styx learn — nothing else consumes learned state), and the commit-attribution
-// instruction that replaces Claude Code's built-in co-author rule.
+// instruction that standardizes attribution across conductor hosts.
 func conductorGuidance(base, focusName, extraNote, prefs, userPrefs string) string {
 	g := base
 	g += "\n\n## This session's project\n" +
@@ -159,8 +189,8 @@ var stdinIsTTY = func() bool {
 }
 
 // ensureInteractiveTTY refuses a conductor launch when there is no terminal
-// to hand to Claude Code — exec'ing claude on a pipe dies with a confusing
-// "--print requires input" error instead of anything actionable.
+// to hand to the interactive host CLI. Without this guard, hosts fail later
+// with errors that do not explain that a scripted styx verb is required.
 func ensureInteractiveTTY() error {
 	if stdinIsTTY() {
 		return nil

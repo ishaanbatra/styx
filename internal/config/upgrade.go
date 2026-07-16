@@ -221,6 +221,12 @@ func EnsureFableTier(content string) (string, bool) {
 const conductorTaskCapKnob = `# max concurrent background dispatches; over-cap tasks queue (collect shows position)
 max_background_tasks = 4`
 
+// conductorHostKnob is the seeded interactive host selection, injected into
+// existing configs by EnsureConductorHost. Keep this aligned with the
+// [conductor] block in cmd/styx/default_routing.go.
+const conductorHostKnob = `# interactive host CLI: claude | codex
+host = "claude"`
+
 // EnsureConductorTaskCap injects the [conductor] max_background_tasks knob
 // (B1) when absent. A config already carrying the key — any value — is left
 // alone. If the [conductor] section exists the knob lands at its end; with no
@@ -254,6 +260,41 @@ func EnsureConductorTaskCap(content string) (string, bool) {
 	}
 	trimmed := strings.TrimRight(content, "\n")
 	return trimmed + "\n\n# ── Conductor (frontier-brain launcher + MCP toolbelt) ──\n[conductor]\nship_gate = \"handshake\"\n" + conductorTaskCapKnob + "\n", true
+}
+
+// EnsureConductorHost injects the [conductor] host knob when absent. A config
+// already carrying the key in that section is left alone so user selection is
+// preserved. EnsureConductorTaskCap runs first in the upgrade pipeline and
+// guarantees the section exists there; the standalone no-section case still
+// appends a complete minimal section.
+func EnsureConductorHost(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "[conductor]" {
+			continue
+		}
+		end := len(lines)
+		for j := i + 1; j < len(lines); j++ {
+			trimmed := strings.TrimSpace(lines[j])
+			if len(trimmed) > 0 && trimmed[0] == '[' {
+				end = j
+				break
+			}
+		}
+		for _, conductorLine := range lines[i+1 : end] {
+			key, _, found := strings.Cut(strings.TrimSpace(conductorLine), "=")
+			if found && strings.TrimSpace(key) == "host" {
+				return content, false
+			}
+		}
+		out := make([]string, 0, len(lines)+2)
+		out = append(out, lines[:i+1]...)
+		out = append(out, strings.Split(conductorHostKnob, "\n")...)
+		out = append(out, lines[i+1:]...)
+		return strings.Join(out, "\n"), true
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	return trimmed + "\n\n# ── Conductor (frontier-brain launcher + MCP toolbelt) ──\n[conductor]\n" + conductorHostKnob + "\n", true
 }
 
 // watchSectionRE matches a [watch] section header line.
@@ -361,43 +402,44 @@ func RewriteRoutingGeminiToAgy(content string) (string, int) {
 
 // UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
 // injects the `implement` verb rules if missing (v0.3), restores the seeded fable
-// tier mapping (v0.4), seeds the [conductor] max_background_tasks cap (B1), seeds
-// the [watch] section (C5), injects ultraFerdDebug rules, cleans stale budget
-// keys, dedupes fallback arrays,
+// tier mapping (v0.4), seeds the [conductor] max_background_tasks cap (B1) and
+// interactive host, seeds the [watch] section (C5), injects ultraFerdDebug
+// rules, cleans stale budget keys, dedupes fallback arrays,
 // backs up the original to routing.v0.1.toml.bak, and atomically writes the new
 // content.
 // Returns the gemini-rule substitution count, whether implement rules were
 // injected, whether the fable tier was restored, whether the conductor task
-// cap was injected, whether the [watch] section was injected, and whether any
-// debug rules were injected. Missing-file is not an error.
-func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fableRestored, taskCapInjected, watchInjected, debugInjected bool, err error) {
+// cap and host were injected, whether the [watch] section was injected, and
+// whether any debug rules were injected. Missing-file is not an error.
+func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected bool, err error) {
 	b, err := os.ReadFile(routingPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, false, false, false, false, false, nil
+			return 0, false, false, false, false, false, false, nil
 		}
-		return 0, false, false, false, false, false, fmt.Errorf("read routing: %w", err)
+		return 0, false, false, false, false, false, false, fmt.Errorf("read routing: %w", err)
 	}
 	newContent, n := RewriteRoutingGeminiToAgy(string(b))
 	newContent, injected := EnsureImplementRules(newContent)
 	newContent, fable := EnsureFableTier(newContent)
 	newContent, taskCap := EnsureConductorTaskCap(newContent)
+	newContent, host := EnsureConductorHost(newContent)
 	newContent, watch := EnsureWatchSection(newContent)
 	newContent, debug := EnsureDebugRules(newContent)
 	// Use content comparison: skip write if nothing changed at all
 	if newContent == string(b) {
-		return 0, false, false, false, false, false, nil
+		return 0, false, false, false, false, false, false, nil
 	}
 	backup := filepath.Join(filepath.Dir(routingPath), "routing.v0.1.toml.bak")
 	if err := os.WriteFile(backup, b, 0o644); err != nil {
-		return 0, false, false, false, false, false, fmt.Errorf("write backup %s: %w", backup, err)
+		return 0, false, false, false, false, false, false, fmt.Errorf("write backup %s: %w", backup, err)
 	}
 	tmp := routingPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
-		return 0, false, false, false, false, false, fmt.Errorf("write tmp: %w", err)
+		return 0, false, false, false, false, false, false, fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, routingPath); err != nil {
-		return 0, false, false, false, false, false, fmt.Errorf("atomic rename: %w", err)
+		return 0, false, false, false, false, false, false, fmt.Errorf("atomic rename: %w", err)
 	}
-	return n, injected, fable, taskCap, watch, debug, nil
+	return n, injected, fable, taskCap, host, watch, debug, nil
 }

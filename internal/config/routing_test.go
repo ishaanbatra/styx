@@ -197,6 +197,7 @@ func defaultBrainForTest() BrainConfig {
 
 func defaultConductorForTest() Conductor {
 	return Conductor{
+		Host:               "claude",
 		ShipGate:           "handshake",
 		RouteGate:          "block",
 		MaxBackgroundTasks: 4,
@@ -228,6 +229,27 @@ func TestConductorDefaults(t *testing.T) {
 	}
 	if r.Conductor.ShipGate != "handshake" {
 		t.Fatalf("ShipGate default = %q, want handshake", r.Conductor.ShipGate)
+	}
+}
+
+func TestConductorHostDefault(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{"missing defaults to claude", "", "claude"},
+		{"explicit claude preserved", "claude", "claude"},
+		{"explicit codex preserved", "codex", "codex"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := Routing{Conductor: Conductor{Host: tt.host}}
+			applyConductorDefaults(&r)
+			if r.Conductor.Host != tt.want {
+				t.Errorf("host = %q, want %q", r.Conductor.Host, tt.want)
+			}
+		})
 	}
 }
 

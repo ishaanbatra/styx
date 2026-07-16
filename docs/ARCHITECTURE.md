@@ -22,7 +22,7 @@ Styx is a Go CLI that routes dev work between four AI channels — claude
 (local HTTP) — using a hand-curated rules table with budget-aware fallback.
 
 ```
-argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir)
+argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir --host)
               │ bare `styx` launches the conductor (`styx repl` for the
               │ classic REPL); otherwise ensureFirstRun():
               │ first-run onboard/seed ~/.config/styx/routing.toml,
@@ -54,9 +54,10 @@ One file per verb (`research.go`, `debug.go`, `plan.go`, `build.go`, `review.go`
 Shared pieces:
 
 - `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose` plus
-  `--project <alias>` / `--dir <path>`; `ensureFirstRun` seeds config; bare
+  `--project <alias>` / `--dir <path>` / `--host claude|codex`;
+  `ensureFirstRun` seeds config; bare
   `styx` constructs the app and calls `cmdLaunch(a)`, handing off to the
-  Claude Code conductor (see "Launcher" below) — `styx repl` is the only way
+  configured conductor host (see "Launcher" below) — `styx repl` is the only way
   to reach the classic v0.2 REPL loop now; errors exit 1 with a `styx:`
   prefix. Declares the linker-stampable `var styxVersion = "0.4.0-dev"` and
   resolves its display value in this order: a non-development linker stamp,
@@ -98,20 +99,17 @@ Shared pieces:
   separate and unchanged.
 - `launch.go` — `cmdLaunch(a *app, repos ...string) error`, the conductor
   front door, and `cmdResume(a *app, sessionID string) error`, which
-  relaunches the conductor resuming a Claude Code session: `--resume <id>`
-  with a session ID, `--continue` (the directory's most recent session)
-  without. Both are thin wrappers over the shared
-  `launchConductor(a, repos, extraArgs)` helper — resume exists because the
-  toolbelt flags are per-invocation, so a plain `claude --resume` would
-  restore the conversation but lose the styx MCP server and guidance. Resume
-  takes no repo arguments (sessions are per-directory, so it is cwd-anchored
-  like bare `styx`; extra repos are out of scope) and passes its flags via
-  `launcher.Opts.ExtraArgs`. `launchConductor`'s first line is
+  relaunches the selected host's session: Claude maps to `--resume <id>` /
+  `--continue`; Codex maps to `resume <id>` / `resume --last`. Both are thin
+  wrappers over `launchConductor(a, repos, resumeSession)`. Resume takes no
+  repo arguments (sessions are per-directory, so it is cwd-anchored like bare
+  `styx`; extra repos are out of scope), and the selected `launcher.Host` maps
+  the request through `ResumeArgs`. `launchConductor`'s first line is
   `ensureInteractiveTTY()`: it refuses to launch (returning an actionable
-  error instead of letting Claude Code exec on a pipe and die with a cryptic
-  `--print` failure) whenever stdin isn't a character device, per the
-  var-swappable `stdinIsTTY func() bool` (tests stub it; production stats
-  `os.Stdin` and checks `os.ModeCharDevice`). It then resolves the focus project
+  error instead of letting an interactive host CLI fail later with a cryptic
+  non-TTY error) whenever stdin isn't a character device, per the var-swappable
+  `stdinIsTTY func() bool` (tests stub it; production stats `os.Stdin` and checks
+  `os.ModeCharDevice`). It then resolves the focus project
   exactly like `newREPLSession`'s seed
   resolution (first repo by alias, or `resolveGlobalTarget("")` for bare
   `styx` so cwd still works). Uniquely among verbs, bare `styx` outside any
@@ -121,14 +119,16 @@ Shared pieces:
   synthesizing an unregistered `Project{Name: base(cwd), Path: cwd}` and
   narrating via `logStatus`; project-scoped MCP tools then require a
   registered repo per-call. Resolves any extra repos — passed to the
-  launcher as `Opts.ExtraRepos` (rendered as `--add-dir` flags on the Claude
-  Code session) and folded into the guidance as a note telling the brain to
+  launcher as `Opts.ExtraRepos` (rendered as `--add-dir` flags on either host)
+  and folded into the guidance as a note telling the brain to
   also pass them as the MCP `dispatch` tool's `extra_roots` so dispatched
   agent threads get the same access → fire background graph builds for stale bound repos
   (`ensureGraphsFresh`, see Graph section) → loads `internal/guidance.Load(project.Path)`,
   appends `recallRoutingPrefs(a)` output when non-empty, resolves the running
-  `styx` binary via `os.Executable()`, and calls
-  `(&launcher.ClaudeHost{}).Launch(ctx, launcher.Opts{...})`.
+  `styx` binary via `os.Executable()`, selects a host using global `--host` >
+  `[conductor] host` > `claude` precedence, rejects unknown values with the
+  supported host list, narrates Codex's guidance-only route-gate degradation,
+  and calls that host's `Launch(ctx, launcher.Opts{...})`.
   `recallRoutingPrefs(a *app) string` opens the global memory store + ollama
   embedder exactly as `newREPLSession` does (`repl.go`), calls
   `memory.Recall(ctx, emb, "routing preference", 5, glob)`, and joins hit text
@@ -382,7 +382,8 @@ Per-channel caps also carry optional `timeout_minutes` for non-interactive
 subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
 wiring. `Brain` configures the planned local ollama routing brain and memory
 embedding model; `Conductor` configures the frontier-brain launcher and MCP
-toolbelt (e.g. `ship_gate`: handshake | tty | off, default handshake, controlling
+toolbelt (`host`: claude | codex, default claude, selecting the interactive
+conductor CLI; `ship_gate`: handshake | tty | off, default handshake, controlling
 ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`;
 `route_gate`: block | audit | off, default block, controlling the host-hook
 enforcement of dispatch-over-inline routing — see the `styx hook` section below; and
@@ -390,7 +391,9 @@ enforcement of dispatch-over-inline routing — see the `styx hook` section belo
 registry, default 4, seeded in `default_routing.go` and injected into
 pre-B1 configs by `config.EnsureConductorTaskCap` — idempotent, respects an
 already-customized `max_background_tasks` at any value, and appends a whole
-`[conductor]` section when none exists);
+`[conductor]` section when none exists). `config.EnsureConductorHost` likewise
+injects `host = "claude"` into existing configs on upgrade, while preserving
+any configured host;
 `Tiers` maps brain tier names to claude CLI model aliases; `fable` maps to `fable`
 again (the top tier, callable since mid-2026 after the 2026-06-12 suspension —
 `config.EnsureFableTier` migrates suspension-era configs that still pin the seeded
@@ -1161,7 +1164,7 @@ implementers), `execute.Ship` via `prBody` (PR bodies, default and
 caller-supplied), and the conductor's `dispatch`/`dispatch_parallel`
 via `attributedMessage` (edit/ship-risk messages; read-risk dispatches
 and ollama one-shots pass through untouched), plus `conductorGuidance`,
-which embeds `CommitInstruction` in Claude Code's appended system prompt so
+which embeds `CommitInstruction` in the conductor guidance so
 commits made directly by the conductor carry the styx trailer.
 
 ## Shipgate (internal/shipgate)
@@ -1178,7 +1181,7 @@ The MCP server cannot gate this — it only sees tool calls the host routes to
 it, and inline self-handling never crosses the MCP boundary (this is why
 `ship`, a styx tool call, *can* be gated but inline research cannot from the
 MCP side). The one seam that observes the host's native tools is Claude Code's
-hook system, and since styx launches Claude Code, the launcher installs
+hook system, so the Claude launcher installs
 `styx hook` as a shell-free exec-form hook (`command` is the styx binary path;
 `args` is `["hook", "<event>"]`) scoped to conductor sessions only — the
 settings file lives in styx's state dir, never the user's `~/.claude`.
@@ -1213,21 +1216,26 @@ route-gate mode controls only the hooks object. The launcher's
 (inline now costs more than dispatch for high-signal cases) but cannot make a
 determined `Read`+`curl`+`Grep` chain impossible — the `Bash` matcher narrows
 the curl case, the audit tier and guidance prose cover the fuzzy remainder.
+Codex has no equivalent deny hook in this integration: any non-`off` mode
+degrades to guidance-only routing, with a one-line `logStatus` notice before
+the Codex TUI takes over.
 
 ## Launcher (internal/launcher)
 
-The conductor front door: opens a frontier-brain host session (Claude Code
-first) with styx attached as an MCP toolbelt. `Host` (`Name() string`,
-`Launch(ctx, Opts) error`) is the seam for future hosts; `ClaudeHost{Bin
-string}` (empty `Bin` means `"claude"` on `PATH`) is the only host-specific
-code in the conductor — everything else downstream is portable MCP surface
-(`internal/mcpserver` + the conductor tools). `Opts{ProjectPath, StyxBin,
-Guidance, RouteGate, ExtraRepos, ExtraArgs}` is everything a host needs.
+The conductor front door opens either Claude Code or Codex with styx attached
+as an MCP toolbelt. `Host` (`Name() string`, `ResumeArgs(sessionID) []string`,
+`Launch(ctx, Opts) error`) isolates the CLI differences; everything downstream
+is portable MCP surface (`internal/mcpserver` + the conductor tools).
+`Opts{ProjectPath, StyxBin, Guidance, RouteGate, ExtraRepos, ResumeArgs}` is
+everything a host needs. Empty `Bin` on either adapter means its normal
+`claude`/`codex` executable on `PATH`.
+
 `ClaudeHost.Launch`:
+
 1. resolves `paths.StateDir()` and `paths.EnsureDir`s it;
 2. writes `{"mcpServers": {"styx": {"command": StyxBin, "args": ["mcp"]}}}`
    to `<stateDir>/conductor-mcp.json` via atomic tmp+rename;
-2b. always writes `<stateDir>/conductor-settings.json` via atomic tmp+rename
+3. always writes `<stateDir>/conductor-settings.json` via atomic tmp+rename
    and passes it as `--settings`. The top-level `includeCoAuthoredBy: false`
    disables Claude Code's built-in Claude co-author trailer for this styx-owned
    session; `RouteGate` controls only the routing hooks (`off` omits `hooks`,
@@ -1239,19 +1247,29 @@ Guidance, RouteGate, ExtraRepos, ExtraArgs}` is everything a host needs.
    make one portable command string impossible. We deliberately do NOT pass
    `--strict-mcp-config`: the user's other MCP servers stay available and the
    hook's matcher catches MCP web tools by name instead;
-3. execs `claude --mcp-config <path> --settings <path> --append-system-prompt <Guidance>`
-   (plus `--add-dir <repo>` per `ExtraRepos`, then any `ExtraArgs` verbatim —
-   `styx resume` uses this for `--resume <id>` / `--continue`) via
+4. execs `claude --mcp-config <path> --settings <path> --append-system-prompt <Guidance>`
+   (plus `--add-dir <repo>` per `ExtraRepos`, then `ResumeArgs` —
+   `--resume <id>` or `--continue`) via
    `exec.CommandContext` with
    `cmd.Dir = ProjectPath` and stdio passed through directly (`cmd.Stdin`,
    `cmd.Stdout`, `cmd.Stderr` = the process's own), so the user drives the
    resulting Claude Code session interactively; the launch call returns only
    when that session exits.
 
+`CodexHost.Launch` performs no file writes. It execs `codex` with
+per-invocation `-c` overrides for
+`mcp_servers.styx.command=<TOML-string(StyxBin)>`,
+`mcp_servers.styx.args=["mcp"]`, and
+`developer_instructions=<TOML-string(Guidance)>`, followed by `--add-dir
+<repo>` per extra repo. `tomlBasicString` quotes and escapes the guidance so
+Codex cannot reinterpret raw prompt text as another TOML type. Resume args are
+subcommand-first (`resume --last` or `resume <id>`) before those overrides.
+Like Claude, Codex uses `exec.CommandContext`, `cmd.Dir = ProjectPath`, and
+direct stdio passthrough, and never mutates the user's host configuration.
+
 **Conductor data flow.** `cmd/styx/launch.go`'s
-`launchConductor(a, repos, extraArgs)` is the only caller (reached via
-`cmdLaunch(a, repos...)` and `cmdResume(a, sessionID)`, the latter passing
-`--resume <id>` / `--continue` as `ExtraArgs`): it resolves the focus project
+`launchConductor(a, repos, resumeSession)` is the only caller (reached via
+`cmdLaunch(a, repos...)` and `cmdResume(a, sessionID)`): it resolves the focus project
 (`target.Resolve` on the
 first repo, or `resolveGlobalTarget("")` for bare `styx`, falling back to
 the plain cwd when that fails with `ErrNotInGitRepo` and no explicit

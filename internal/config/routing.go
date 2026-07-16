@@ -71,8 +71,9 @@ type BrainConfig struct {
 
 // Conductor configures the frontier-brain launcher + MCP toolbelt.
 type Conductor struct {
+	Host               string `toml:"host"`                 // claude | codex
 	ShipGate           string `toml:"ship_gate"`            // handshake | tty | off
-	RouteGate          string `toml:"route_gate"`           // block | audit | off — host-hook enforcement of dispatch-over-inline routing
+	RouteGate          string `toml:"route_gate"`           // block | audit | off — Claude host-hook enforcement; Codex guidance-only
 	MaxBackgroundTasks int    `toml:"max_background_tasks"` // concurrent background dispatch cap (task registry)
 }
 
@@ -123,6 +124,9 @@ func applyBrainDefaults(r *Routing) {
 // applyConductorDefaults fills zero-valued conductor settings so configs written
 // before this section existed keep working.
 func applyConductorDefaults(r *Routing) {
+	if r.Conductor.Host == "" {
+		r.Conductor.Host = "claude"
+	}
 	if r.Conductor.ShipGate == "" {
 		r.Conductor.ShipGate = "handshake"
 	}

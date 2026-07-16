@@ -12,12 +12,12 @@ func cmdUpgrade() error {
 	if err != nil {
 		return err
 	}
-	n, injected, fableRestored, taskCapInjected, watchInjected, debugInjected, err := config.UpgradeRoutingFile(p)
+	n, injected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, err := config.UpgradeRoutingFile(p)
 	if err != nil {
 		return err
 	}
-	if n == 0 && !injected && !fableRestored && !taskCapInjected && !watchInjected && !debugInjected {
-		fmt.Println("routing.toml already up to date (agy + implement/debug verbs + fable tier + conductor task cap + watch config present).")
+	if n == 0 && !injected && !fableRestored && !taskCapInjected && !hostInjected && !watchInjected && !debugInjected {
+		fmt.Println("routing.toml already up to date (agy + implement/debug verbs + fable tier + conductor host/task cap + watch config present).")
 		return nil
 	}
 	if n > 0 {
@@ -31,6 +31,9 @@ func cmdUpgrade() error {
 	}
 	if taskCapInjected {
 		fmt.Println("Seeded [conductor] max_background_tasks = 4.")
+	}
+	if hostInjected {
+		fmt.Println("Seeded [conductor] host = \"claude\".")
 	}
 	if watchInjected {
 		fmt.Println("Seeded [watch] stall_threshold_seconds = 90, interval_seconds = 15, ollama_enabled = true.")
