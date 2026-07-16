@@ -34,6 +34,9 @@ VERBS
                              Re-run only the cheap reviews for an existing brief
   dead-code [path]           Sweep for unused files/functions/imports, verify
                              symbols, then Codex spot-check confirmed findings
+  map-impact <symbol|file|diff-spec>
+                             Trace repository dependents and change impact,
+                             then Codex spot-check claimed dependency edges
   deep-research <query>     Open Gemini + ChatGPT in browser; synthesis template
   plan <description>        Draft an implementation plan using the latest brief
   build [target]            Interactive Claude/Codex session in the project dir

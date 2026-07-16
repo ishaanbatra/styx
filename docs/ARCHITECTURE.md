@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-16
+last_verified: 2026-07-16 # Slice 4 map-impact
 ---
 
 # Styx Architecture
@@ -48,7 +48,7 @@ fallback chain when a channel is over its message caps.
 
 ## cmd/styx — verbs and app wiring
 
-One file per verb (`research.go`, `debug.go`, `dead_code.go`, `plan.go`, `build.go`, `review.go`,
+One file per verb (`research.go`, `debug.go`, `dead_code.go`, `map_impact.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
 `learn.go`, `repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
@@ -381,6 +381,11 @@ The `dead-code` verb routes to `agy:Gemini 3.1 Pro (High)` with
 `claude:sonnet` then `codex` fallbacks. `EnsureDeadCodeRule` appends that rule
 to existing routing files only when absent, preserving a user's custom rule;
 the startup and explicit-upgrade paths report the injection separately.
+
+The `map-impact` verb uses the identical seeded agy pin and fallback chain.
+`EnsureMapImpactRule` appends it to existing routing files when missing while
+preserving any custom rule, and both startup and explicit upgrade report that
+migration separately.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -1212,6 +1217,46 @@ status/reference, the Codex response or failure, and raw agy JSON. It is written
 atomically through `brief.WriteReport` under `styx/dead-code/`. Sweep and review
 calls share a run id in budget usage, and completion records a read-risk
 outcome. The pathway has no pipeline lock or resumable state.
+
+`internal/modeljson.Candidates` is the shared defensive recovery seam used by
+dead-code and map-impact for strict, fenced, or embedded model JSON; each
+pathway still owns and validates its concrete schema. Their command adapters
+share `readPathwayChannelAdapter`, which forwards routed model/effort and
+records correlated sweep/review usage without enabling writes.
+
+## Impact mapping (internal/mapimpact, cmd/styx/map_impact.go)
+
+`styx map-impact <symbol|file|diff-spec>` performs one read-only repository-wide
+dependency and change-impact trace. Exactly one input is required. An existing
+regular file inside the active project (after symlink resolution) is classified
+as a file; otherwise a value accepted by `git diff --name-only <value> --`
+(including a ref such as `HEAD~1` or a range) is classified as a diff; remaining
+values are symbols. Directories, outside-project files, empty inputs, and
+flag-shaped inputs are rejected.
+
+The sweep routes through `map-impact`, uses the project as `WorkingDir`, forwards
+the pinned agy model, and never sets `channel.Request.Write`. Its prompt requires
+one JSON object with a `findings` array. Every finding is a directed dependency
+edge with repo-relative, 1-based `source` and `dependent` sites, named symbols,
+a relationship, `direct|transitive` impact, and evidence rationale. Parsing is
+defensive and capped at 500 entries; malformed entries become warnings while
+valid edges are re-encoded into a canonical machine-readable report section;
+the original raw sweep is retained separately for auditability.
+
+Because agy cannot enforce read-only behavior, `cmdMapImpact` snapshots
+`gitTreeState` immediately before the sweep and invokes `treeStateDiff` in
+`AfterSweep` immediately after it returns, before review. Dirtied paths are
+narrated and rendered prominently. If valid edges exist, exactly one read-only
+Codex turn spot-checks the first five, asking whether each cited dependent site
+actually references or relies on the cited source; it returns per-edge
+VERIFIED/REFUTED/UNCERTAIN judgments. Review errors remain in the artifact, and
+no valid edges skips the review.
+
+The final report records the classified input, parser/tree warnings, every
+structured edge, the bounded Codex review, and raw agy JSON. `brief.WriteReport`
+writes it atomically under `styx/map-impact/`. Sweep and review share a run id,
+completion records a read-risk outcome, and the pathway has no pipeline lock or
+resumable state.
 
 ## Execute (internal/execute)
 
@@ -2221,6 +2266,7 @@ should rotate the migrated keys.
 <project>/styx/research, styx/debug, styx/plans
                                              briefs + debug reports + plans (per-project config)
 <project>/styx/dead-code                    dead-code verification reports (fixed pathway dir)
+<project>/styx/map-impact                  impact-map reports (fixed pathway dir)
 ```
 
 ## Testing conventions

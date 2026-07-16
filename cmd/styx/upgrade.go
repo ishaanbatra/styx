@@ -12,12 +12,12 @@ func cmdUpgrade() error {
 	if err != nil {
 		return err
 	}
-	n, injected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, deadCodeInjected, agyPinned, err := config.UpgradeRoutingFile(p)
+	n, injected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, deadCodeInjected, mapImpactInjected, agyPinned, err := config.UpgradeRoutingFile(p)
 	if err != nil {
 		return err
 	}
-	if n == 0 && !injected && !fableRestored && !taskCapInjected && !hostInjected && !watchInjected && !debugInjected && !deadCodeInjected && !agyPinned {
-		fmt.Println("routing.toml already up to date (agy model pin + implement/debug/dead-code verbs + fable tier + conductor host/task cap + watch config present).")
+	if n == 0 && !injected && !fableRestored && !taskCapInjected && !hostInjected && !watchInjected && !debugInjected && !deadCodeInjected && !mapImpactInjected && !agyPinned {
+		fmt.Println("routing.toml already up to date (agy model pin + implement/debug/dead-code/map-impact verbs + fable tier + conductor host/task cap + watch config present).")
 		return nil
 	}
 	if n > 0 {
@@ -43,6 +43,9 @@ func cmdUpgrade() error {
 	}
 	if deadCodeInjected {
 		fmt.Println("Added dead-code routing (agy sweep, claude/codex fallback).")
+	}
+	if mapImpactInjected {
+		fmt.Println("Added map-impact routing (agy sweep, claude/codex fallback).")
 	}
 	if agyPinned {
 		fmt.Println("Pinned agy routes to Gemini 3.1 Pro (High).")

@@ -11,11 +11,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ishaanbatra/styx/internal/modeljson"
 )
 
 const maxFindings = 500
@@ -27,7 +28,7 @@ type rawSweep struct {
 // ParseFindings extracts findings from strict JSON, fenced JSON, or a JSON
 // object embedded in surrounding model chatter. Bad entries are skipped.
 func ParseFindings(raw string) ([]Finding, []string) {
-	candidates := jsonCandidates(raw)
+	candidates := modeljson.Candidates(raw)
 	var envelope rawSweep
 	parsed := false
 	for _, candidate := range candidates {
@@ -84,20 +85,6 @@ func ParseFindings(raw string) ([]Finding, []string) {
 		findings = append(findings, finding)
 	}
 	return findings, warnings
-}
-
-func jsonCandidates(raw string) []string {
-	trimmed := strings.TrimSpace(raw)
-	candidates := []string{trimmed}
-	for _, match := range regexp.MustCompile("(?s)```(?:json)?\\s*(.*?)```").FindAllStringSubmatch(raw, -1) {
-		if len(match) == 2 {
-			candidates = append(candidates, strings.TrimSpace(match[1]))
-		}
-	}
-	if start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}"); start >= 0 && end > start {
-		candidates = append(candidates, raw[start:end+1])
-	}
-	return candidates
 }
 
 func validateFinding(f Finding) error {

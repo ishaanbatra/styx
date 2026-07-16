@@ -144,6 +144,7 @@ restarting the session.
 | `debug --test <name> --file <hint> <bug>` | Add a failing-test name and repeatable starting-file hints to the normal diagnosis sweep |
 | `debug --review-only <brief> [bug]` | Skip the expensive sweep and run only the two short reviews plus verdict against an existing brief |
 | `dead-code [path]` | Agy on pinned Gemini 3.1 Pro (High) sweeps the repository for unused files, functions, and imports. Styx whole-word-checks every valid reported symbol outside its definition site, marks it CONFIRMED/REFUTED, then runs one Codex spot-check over up to five confirmed findings. Read-only; report saved under `styx/dead-code/` |
+| `map-impact <symbol\|file\|diff-spec>` | Agy on pinned Gemini 3.1 Pro (High) traces direct dependents and transitive change impact across the repository from a symbol, file, or git diff/ref such as `HEAD~1`. Findings are structured dependency edges; one Codex turn spot-checks up to five claimed edges against the cited code. Read-only; report saved under `styx/map-impact/` |
 
 ### Autonomy
 
@@ -220,6 +221,7 @@ timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 - `<project>/.styx/runs/<run-id>/` — pipeline state per run
 - `<project>/styx/debug/` — recoverable ultraFerdDebug briefs and final reports (overridable with the project's `debug_dir`)
 - `<project>/styx/dead-code/` — atomic dead-code sweep, deterministic verification, and Codex spot-check reports
+- `<project>/styx/map-impact/` — atomic impact maps with canonical dependency-edge JSON and a Codex spot-check
 - Secrets live in the platform secret store (macOS Keychain service `styx` /
   Windows Credential Manager target prefix `styx/`).
 
@@ -244,6 +246,8 @@ the full Codex+Claude review remains exclusive to the normal diagnosis mode.
 The `dead-code` rule uses the same agy pin with `claude:sonnet` then `codex`
 fallbacks. Existing routing files receive it idempotently during startup or
 `styx upgrade`; an existing customized `dead-code` target is preserved.
+The `map-impact` rule uses the same pin and fallback chain; its missing-rule
+migration is likewise idempotent and preserves existing customized routing.
 
 ## Deps
 

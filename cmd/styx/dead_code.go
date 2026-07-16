@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -183,40 +182,9 @@ func deadCodeCounts(findings []deadcode.VerifiedFinding) (confirmed, refuted int
 }
 
 type deadCodeChannelAdapter struct {
-	ch          channel.Channel
-	tracker     *budget.Tracker
-	channelName string
-	model       string
-	effort      string
-	role        string
-	projectID   string
-	runID       string
-	projectPath string
-	response    channel.Response
+	*readPathwayChannelAdapter
 }
 
 func newDeadCodeChannelAdapter(a *app, ch channel.Channel, channelName, model, effort, role, projectID, runID, projectPath string) *deadCodeChannelAdapter {
-	return &deadCodeChannelAdapter{
-		ch: ch, tracker: a.tracker, channelName: channelName, model: model, effort: effort,
-		role: role, projectID: projectID, runID: runID, projectPath: projectPath,
-	}
-}
-
-func (a *deadCodeChannelAdapter) Send(ctx context.Context, prompt string) (string, error) {
-	if a == nil || a.ch == nil {
-		return "", errors.New("dead-code channel is unavailable")
-	}
-	resp, err := a.ch.Send(ctx, channel.Request{
-		Model: a.model, Effort: a.effort, Prompt: prompt, WorkingDir: a.projectPath,
-	})
-	a.response = resp
-	if a.tracker != nil {
-		_ = a.tracker.Record(ctx, budget.Event{
-			Channel: a.channelName, Verb: a.role, Model: a.model,
-			TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
-			Success: err == nil, ErrorKind: errorKindOf(err),
-			Project: a.projectID, RunID: a.runID,
-		})
-	}
-	return resp.Text, err
+	return &deadCodeChannelAdapter{newReadPathwayChannelAdapter(a, ch, channelName, model, effort, role, projectID, runID, projectPath)}
 }

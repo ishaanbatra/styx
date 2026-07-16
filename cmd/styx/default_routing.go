@@ -89,6 +89,12 @@ verb = "dead-code"
 use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet", "codex"]
 
+# ── map-impact (agy dependency trace, codex edge spot-check) ──
+[[rule]]
+verb = "map-impact"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+
 # ── grunt / think ──
 [[rule]]
 verb = "grunt"
