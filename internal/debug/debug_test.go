@@ -182,6 +182,49 @@ func TestRunPresetBriefSkipsSweepAndKeepsReviewsIndependent(t *testing.T) {
 	}
 }
 
+func TestRunLogModeUsesOneCodexReview(t *testing.T) {
+	tests := []struct {
+		name       string
+		response   string
+		err        error
+		confirmed  bool
+		confidence string
+	}{
+		{name: "clean", response: cleanReview, confirmed: true, confidence: "high"},
+		{name: "important", response: `{"blocking":[],"important":["one file not accounted for"],"nits":[]}`, confirmed: true, confidence: "medium"},
+		{name: "blocking", response: `{"blocking":["cluster merges two causes"],"important":[],"nits":[]}`, confirmed: false, confidence: "low"},
+		{name: "review failure", err: errors.New("timeout"), confirmed: false, confidence: "low"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := &callLog{}
+			rep, err := Run(context.Background(), Options{
+				Input:   Input{Bug: "CI failures", LogPaths: []string{"/tmp/unit.log", "/tmp/race.log"}},
+				Sweeper: &fakeChan{name: "sweep", response: "triage brief", log: log},
+				Codex:   &fakeChan{name: "codex", response: tt.response, err: tt.err, log: log},
+				Claude:  &fakeChan{name: "claude", response: cleanReview, log: log},
+				Prog:    progress.Quiet(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rep.Mode != modeFailureTriage || rep.Verdict.Confirmed != tt.confirmed || rep.Verdict.Confidence != tt.confidence {
+				t.Fatalf("report = %+v, want confirmed=%t confidence=%s", rep, tt.confirmed, tt.confidence)
+			}
+			entries, prompts := log.snapshot()
+			if strings.Join(entries, ",") != "sweep,codex" {
+				t.Fatalf("calls = %v, want sweep then codex only", entries)
+			}
+			if !strings.Contains(prompts["codex"], "clusters group failures") {
+				t.Errorf("codex log-review prompt missing clustering lens:\n%s", prompts["codex"])
+			}
+			if got := RenderReport(rep); strings.Contains(got, "## Claude Review") {
+				t.Errorf("log-mode report unexpectedly contains Claude review:\n%s", got)
+			}
+		})
+	}
+}
+
 func TestRenderReport(t *testing.T) {
 	rep := runWithReviews(t,
 		&fakeChan{name: "codex", response: cleanReview},

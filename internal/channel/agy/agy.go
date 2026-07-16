@@ -46,6 +46,9 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 		"-p", req.Prompt,
 		"--dangerously-skip-permissions",
 	}
+	if req.Model != "" && req.Model != "default" {
+		args = append(args, "--model", req.Model)
+	}
 	if req.WorkingDir != "" {
 		args = append(args, "--add-dir", req.WorkingDir)
 	}

@@ -127,6 +127,13 @@ func main() {
 
 	verb := rest[0]
 	args := rest[1:]
+	if setupFreeVerb(verb) {
+		if err := dispatch(verb, args); err != nil {
+			fmt.Fprintf(os.Stderr, "styx: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if err := ensureFirstRun(); err != nil {
 		fmt.Fprintf(os.Stderr, "styx: setup error: %v\n", err)
@@ -136,5 +143,16 @@ func main() {
 	if err := dispatch(verb, args); err != nil {
 		fmt.Fprintf(os.Stderr, "styx: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// setupFreeVerb identifies read-only informational commands that must not
+// create or migrate user configuration before producing their output.
+func setupFreeVerb(verb string) bool {
+	switch verb {
+	case "help", "-h", "--help", "version", "--version", "-V":
+		return true
+	default:
+		return false
 	}
 }

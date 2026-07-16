@@ -28,6 +28,21 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	if strings.Contains(defaultRoutingTOML, "claude:opus-4") || strings.Contains(defaultRoutingTOML, "claude:sonnet-4") {
 		t.Error("seeded routing still pins a claude version")
 	}
+	// Agy is intentionally exempt: its subscription CLI remembers the user's
+	// last interactive model, so a pin prevents a sweep from silently using it.
+	agyRules := 0
+	for _, rule := range r.Rules {
+		if !strings.HasPrefix(rule.Use, "agy:") {
+			continue
+		}
+		agyRules++
+		if rule.Use != "agy:Gemini 3.1 Pro (High)" {
+			t.Errorf("seeded %s route uses %q, want sticky-model agy pin", rule.Verb, rule.Use)
+		}
+	}
+	if agyRules == 0 {
+		t.Error("seeded routing has no agy rules")
+	}
 	if r.Models.RefreshIntervalHours == 0 {
 		t.Error("seeded routing missing [models] (defaults not applied?)")
 	}
@@ -50,7 +65,7 @@ func TestDefaultRouting_DebugRules(t *testing.T) {
 	tests := []struct {
 		verb, channel, model, effort string
 	}{
-		{"debug.sweep", "agy", "default", ""},
+		{"debug.sweep", "agy", "Gemini 3.1 Pro (High)", ""},
 		{"debug.review.codex", "codex", "", "high"},
 		{"debug.review.claude", "claude", "sonnet", ""},
 	}
@@ -65,6 +80,69 @@ func TestDefaultRouting_DebugRules(t *testing.T) {
 			}
 			if got.BlockedByBudget {
 				t.Error("seeded debug route unexpectedly blocked")
+			}
+		})
+	}
+}
+
+func TestDefaultRoutingReadSweepRules(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(defaultRoutingTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := config.LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := router.FromConfig(routing, nil)
+	for _, verb := range []string{"dead-code", "map-impact", "cross-repo"} {
+		t.Run(verb, func(t *testing.T) {
+			got, err := r.Route(context.Background(), router.Request{Verb: verb})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Channel != "agy" || got.Model != "Gemini 3.1 Pro (High)" {
+				t.Errorf("%s decision = %+v", verb, got)
+			}
+			if len(got.Fallback) != 2 || got.Fallback[0].Channel != "claude" || got.Fallback[0].Model != "sonnet" || got.Fallback[1].Channel != "codex" {
+				t.Errorf("%s fallback = %+v", verb, got.Fallback)
+			}
+		})
+	}
+}
+
+func TestDefaultRoutingPRDraftRules(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(defaultRoutingTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := config.LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := router.FromConfig(routing, nil)
+	for _, verb := range []string{"pr.title", "pr.body"} {
+		t.Run(verb, func(t *testing.T) {
+			got, err := r.Route(context.Background(), router.Request{Verb: verb})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Channel != "ollama" || got.Model != "qwen2.5-coder:7b" {
+				t.Errorf("decision = %+v", got)
+			}
+			if len(got.Fallback) != 1 || got.Fallback[0].Channel != "claude" || got.Fallback[0].Model != "haiku" {
+				t.Errorf("fallback = %+v", got.Fallback)
+			}
+		})
+		t.Run(verb+" complex", func(t *testing.T) {
+			got, err := r.Route(context.Background(), router.Request{Verb: verb, Signals: []string{"complex"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Channel != "claude" || got.Model != "sonnet" || len(got.Fallback) != 1 || got.Fallback[0].Channel != "codex" {
+				t.Errorf("complex decision = %+v", got)
 			}
 		})
 	}

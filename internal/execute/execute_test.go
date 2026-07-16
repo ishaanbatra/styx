@@ -301,3 +301,96 @@ func TestPRBody(t *testing.T) {
 		})
 	}
 }
+
+func TestShipCreatesExplicitDraftAndAppliesLabels(t *testing.T) {
+	bin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "gh.log")
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gh := `#!/bin/sh
+echo "$@" >> "$STYX_GH_LOG"
+if [ "$1 $2" = "pr create" ]; then
+  echo "https://github.com/acme/repo/pull/7"
+  exit 0
+fi
+if [ "$1 $2" = "pr edit" ]; then
+  exit 0
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(gh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("STYX_GH_LOG", logPath)
+
+	res, err := Ship(context.Background(), ShipOptions{
+		ProjectPath: t.TempDir(), Branch: "styx/change", Goal: "ignored",
+		PRTitle: "Intentional title", PRBody: "Structured body", Draft: true,
+		Labels: []string{"bug", "tests"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PRURL != "https://github.com/acme/repo/pull/7" || len(res.MetadataErrors) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(log)
+	for _, want := range []string{
+		"pr create --title Intentional title --body Structured body", "--draft",
+		"pr edit https://github.com/acme/repo/pull/7 --add-label bug --add-label tests",
+		attribution.PRFooter,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("gh calls missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "--fill") {
+		t.Errorf("gh create must not use --fill:\n%s", got)
+	}
+}
+
+func TestShipRecoversExistingURLAndKeepsItOnLabelFailure(t *testing.T) {
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gh := `#!/bin/sh
+if [ "$1 $2" = "pr create" ]; then
+  echo "a pull request already exists" >&2
+  exit 1
+fi
+if [ "$1 $2" = "pr view" ]; then
+  echo "https://github.com/acme/repo/pull/9"
+  exit 0
+fi
+if [ "$1 $2" = "pr edit" ]; then
+  echo "label unavailable" >&2
+  exit 2
+fi
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(gh), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	res, err := Ship(context.Background(), ShipOptions{
+		ProjectPath: t.TempDir(), Branch: "styx/resumed", PRTitle: "Title",
+		PRBody: "Body", Labels: []string{"bug"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PRURL != "https://github.com/acme/repo/pull/9" {
+		t.Fatalf("recovered PR URL lost: %+v", res)
+	}
+	if len(res.MetadataErrors) != 1 || !strings.Contains(res.MetadataErrors[0], "label unavailable") {
+		t.Fatalf("label failure not surfaced: %+v", res)
+	}
+}

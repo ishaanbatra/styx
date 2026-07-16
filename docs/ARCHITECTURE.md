@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-15
+last_verified: 2026-07-16 # PR microtask drafting
 ---
 
 # Styx Architecture
@@ -39,7 +39,7 @@ argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir
         internal/channel (decorated: WithProgress wrapping WithTimeout/raw adapter)
               ├── channel/claude   exec `claude -p` / interactive
               ├── channel/codex    exec `codex exec`
-              ├── channel/agy      exec `agy -p --dangerously-skip-permissions`
+              ├── channel/agy      exec `agy -p --dangerously-skip-permissions [--model <name>]`
               └── channel/ollama   HTTP localhost:11434 (auto-launches the app)
 ```
 
@@ -48,13 +48,15 @@ fallback chain when a channel is over its message caps.
 
 ## cmd/styx — verbs and app wiring
 
-One file per verb (`research.go`, `debug.go`, `plan.go`, `build.go`, `review.go`,
+One file per verb (`research.go`, `debug.go`, `dead_code.go`, `map_impact.go`, `cross_repo.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
 `learn.go`, `repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
 
 - `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose` plus
   `--project <alias>` / `--dir <path>` / `--host claude|codex`;
+  help and version aliases dispatch before `ensureFirstRun`, so informational
+  queries never create or migrate user configuration;
   `ensureFirstRun` seeds config; bare
   `styx` constructs the app and calls `cmdLaunch(a)`, handing off to the
   configured conductor host (see "Launcher" below) — `styx repl` is the only way
@@ -68,8 +70,8 @@ Shared pieces:
   visible only with `--verbose` and can never change the command result.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first (including `help`/`-h`/`--help` and `version`/`--version`/`-V`,
-  which prints `"styx " + styxDisplayVersion()` and returns immediately — no
-  app, no conductor); the rest construct `app{routing, tracker, router, channels,
+  which print without first-run setup and return immediately — no app, no
+  conductor); the rest construct `app{routing, tracker, router, channels,
   progress}` via `loadApp()`. `loadApp()` runs a best-effort model refresh when
   `models.json` is stale and reloads routing if a de-pin migration ran, then
   shares the budget tracker with the router for both cap checks and
@@ -354,8 +356,11 @@ provider-specific values and the router copies it onto `Decision.Effort`.
 Bare channel tokens such as `codex` are valid and mean "let that CLI choose its
 current default model." `[models].refresh_interval_hours` controls the
 model-refresh staleness threshold and defaults to 24 hours. The seeded
-`default_routing.go` table is already in that de-pinned form, with
-`research.critic` showing `effort = "high"` as the pass-through example.
+`default_routing.go` table de-pins Claude and Codex versions, with
+`research.critic` showing `effort = "high"` as the pass-through example. Agy
+is deliberately different: its seeded rules pin `Gemini 3.1 Pro (High)`
+because the subscription CLI otherwise reuses the user's last interactive
+model choice.
 
 The `implement` verb routes autonomous plan application: codex is primary
 (well-scoped execution), claude is the fallback, and the `complex` signal
@@ -364,10 +369,37 @@ The `implement` verb routes autonomous plan application: codex is primary
 (`EnsureImplementRules`) on next run, alongside the v0.2 gemini→agy rewrite.
 
 The three ultraFerdDebug roles have dedicated rules: `debug.sweep` routes to
-`agy:default` with only `claude:sonnet` as fallback,
+`agy:Gemini 3.1 Pro (High)` with only `claude:sonnet` as fallback,
 `debug.review.codex` routes to Codex with high effort, and
 `debug.review.claude` routes to Claude Sonnet. `EnsureDebugRules` injects only
 missing rules into existing configs and preserves customized role targets.
+`EnsureAgyModelPin` upgrades unpinned `agy:default` routing targets while
+leaving explicit custom agy models alone; both first-run and `styx upgrade`
+surface whether that migration changed the routing file.
+
+The `dead-code` verb routes to `agy:Gemini 3.1 Pro (High)` with
+`claude:sonnet` then `codex` fallbacks. `EnsureDeadCodeRule` appends that rule
+to existing routing files only when absent, preserving a user's custom rule;
+the startup and explicit-upgrade paths report the injection separately.
+
+The `map-impact` verb uses the identical seeded agy pin and fallback chain.
+`EnsureMapImpactRule` appends it to existing routing files when missing while
+preserving any custom rule, and both startup and explicit upgrade report that
+migration separately.
+
+The `cross-repo` verb uses that same seeded agy pin and fallback chain.
+`EnsureCrossRepoRule` appends it to existing routing files when missing while
+preserving any custom rule; startup and `styx upgrade` report this migration
+separately.
+
+The `pr.title` and `pr.body` verbs seed a `complex` rule using Claude Sonnet
+with Codex fallback before the ordinary `ollama:qwen2.5-coder:7b` rule with one
+`claude:haiku` fallback. Complex goal language, deterministic risk flags, or
+diffs over 50 files / 2,000 changed lines raise the drafting floor. `EnsurePRDraftRules`
+independently appends either missing rule group and preserves customized routes. Bounded microtask callers use
+`Router.NextAvailableFallback` at the moment escalation is needed; it filters
+to the decision's capability-floor candidates and rechecks both caps and the
+circuit breaker, so validation-driven fallback cannot bypass routing safety.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -598,8 +630,9 @@ usage from `turn.completed` events (never len/4 estimates), and defaults to a
 400k-token window (`Window` overrides for tests). Edit-risk turns add
 `--sandbox workspace-write` (codex exec is read-only by default); read-risk
 turns keep the default. Agy remains a plain adapter with no native
-resume/stream support: it runs `agy -p --dangerously-skip-permissions`, and
-continuity is maintained by styx summaries (agy exposes `--continue`/
+resume/stream support: it runs `agy -p --dangerously-skip-permissions`, adds
+`--model <name>` when the routed model is non-empty and not `default`, and
+maintains continuity through styx summaries (agy exposes `--continue`/
 `--conversation <id>` but never surfaces conversation IDs in `--print` output,
 so headless resume stays impossible).
 
@@ -1077,6 +1110,27 @@ well-scoped work, claude for `complex` goals) and injects it into
 `execute.Options.Channel` — except claude, which is left nil so `Apply` uses its
 built-in live-streaming claude path.
 
+The ship closure only drafts when PR publication will actually run (neither
+`--no-pr` nor `--no-push`). `internal/prdraft` builds a deterministic context
+packet from pipeline state plus the default-branch diff: commits, touched paths,
+numstat, issue/test references, risk flags, allowlisted labels, and explicit
+test/review check states. A completed stage with `SkippedReason` is represented
+and rendered as skipped, never as successful. Pipeline-owned checks, draft
+policy, issue-linking lines, and core labels are not part of either model output
+schema. Ambiguous issue references render as related links rather than automatic
+closing directives, and failure to collect git evidence forces a draft PR.
+
+`cmd/styx/pr_draft.go` runs `pr.title` and `pr.body` independently through
+`internal/microtask`: primary, at most one lazily resolved fallback, then a
+deterministic static value. Strict JSON decoding, length/shape checks,
+evidence-grounding, contradiction checks, secret-like text rejection, and
+label allowlisting validate model prose. Every transport attempt writes usage;
+successful sends remain usage successes even when their prose fails validation,
+so validation cannot open an operational channel breaker. Outcomes separately
+carry validation error kinds plus `verb:<verb>`, `escalated`, and
+`static-fallback` signals as applicable, and use `<run-id>:<verb>` as a rateable
+task reference.
+
 ## Research (internal/research, internal/brief)
 
 Convergence loop: drafter (agy) drafts, critic (codex) critiques as structured
@@ -1109,36 +1163,168 @@ recent brief.
 
 ## Debug (internal/debug, cmd/styx/debug.go)
 
-`styx debug [--test <name>] [--log <path>] [--file <hint>]... <bug>` runs the
-read-only **ultraFerdDebug** pathway. The routed sweeper receives the project as
+`styx debug [--test <name>] [--file <hint>]... <bug>` runs the normal read-only
+**ultraFerdDebug** pathway. The routed sweeper receives the project as
 `WorkingDir` but never receives `channel.Request.Write`; it reads broadly and
 returns a markdown debug brief with symptom, file:line evidence, ranked
-hypotheses, a described minimal fix, and open questions. Read-only is enforced
-by the claude/codex channels but NOT by agy — its headless CLI auto-approves
-tool use and has no read-only mode (verified empirically: `--sandbox` restricts
-the terminal, not file writes) — so `cmdDebug` guards the default sweep channel
-itself: it snapshots `git status --porcelain` before the sweep, re-checks right
-after it (inside the `PersistBrief` hook, before reviews), and any paths the
-sweep touched are narrated loudly and recorded in `Report.SweepDirtied`, which
+hypotheses, a described minimal fix, and open questions.
+
+`styx debug --log <file...> [-- <failure description>]` is the failure-triage
+entry mode. `--log` accepts one or more regular log/test-output files (the
+repeatable `--log=<file>` form leaves following words available as the optional
+description). Paths are normalized and deduplicated. The sweep still routes
+through `debug.sweep` and receives the repository as `WorkingDir`; each log is
+also carried as a path-only `channel.Attachment`, while parent directories for
+logs outside the repository are attached through `Request.ExtraRoots` →
+`--add-dir`. Log contents are never read into or interpolated into the prompt.
+The agy prompt instead names the files and requires corpus accounting,
+root-cause clustering, deduplication, and a repository `file:line` code trace
+for every cluster.
+
+Read-only is enforced by the claude/codex channels but NOT by agy — its
+headless CLI auto-approves tool use and has no read-only mode (verified
+empirically: `--sandbox` restricts the terminal, not file writes) — so
+`cmdDebug` applies the same conductor-side tree guard to both entry modes: it
+snapshots `git status --porcelain` before the sweep, re-checks right after it
+(inside the `PersistBrief` hook, before reviews), and any paths the sweep
+touched are narrated loudly and recorded in `Report.SweepDirtied`, which
 renders as a warning section at the top of the report. That expensive brief
 is atomically persisted under the project's `DebugDir` (default `styx/debug`)
 before review starts.
 
-Codex and Claude then review the brief concurrently and independently: Codex
-checks cited-code misreads, while Claude checks whether the proposed cause/fix
-is fundamental. Both produce the `research.Critique` JSON shape. Reviewer
-errors remain visible in the report instead of discarding the sweep. Go code
-computes the verdict without a third model call: any BLOCKING finding makes it
-low-confidence and unconfirmed; IMPORTANT-only findings make it medium; two
-clean reviews make it high. Each role records a correlated `budget.Event`, and
-the completed run records a read-risk outcome.
+In normal diagnosis mode, Codex and Claude review the brief concurrently and
+independently: Codex checks cited-code misreads, while Claude checks whether the
+proposed cause/fix is fundamental. Log mode scales this down to exactly one
+Codex turn, whose lens checks failure coverage, cluster boundaries, and claimed
+code traces; it neither routes nor invokes `debug.review.claude`. All reviewers
+produce the `research.Critique` JSON shape. Reviewer errors remain visible in
+the report instead of discarding the sweep. Go code computes the verdict
+without another model call: any BLOCKING finding makes it low-confidence and
+unconfirmed; IMPORTANT-only findings make it medium; clean required reviews
+make it high. Each invoked role records a correlated `budget.Event`, and the
+completed run records a read-risk outcome.
 
-The final `# ultraFerdDebug report` contains the brief, both raw reviews, and
-the deterministic verdict, then is atomically written beside the recoverable
-brief and best-effort indexed as `memory.KindBrief`. This diagnosis pathway
-does not use the auto pipeline lock or `state.json`, so its state shape cannot
-affect `auto --resume`. `debug --review-only <brief> [bug]` is its recovery
-path: it skips the sweep and reruns only the two cheap reviews plus verdict.
+The final `# ultraFerdDebug report` contains the mode, input log paths when
+applicable, the brief, the required raw review(s), and the deterministic
+verdict, then is atomically written beside the recoverable brief and
+best-effort indexed as `memory.KindBrief`. This diagnosis pathway does not use
+the auto pipeline lock or `state.json`, so its state shape cannot affect
+`auto --resume`. `debug --review-only <brief> [bug]` is the normal mode's
+recovery path: it skips the sweep and reruns only the two cheap reviews plus
+verdict; combining it with `--log` is rejected.
+
+## Dead code (internal/deadcode, cmd/styx/dead_code.go)
+
+`styx dead-code [path]` performs one read-only repository sweep for unused
+files, functions, and imports. The optional path must resolve to a regular file
+or directory inside the active project (including after symlink resolution);
+it scopes agy's attention while verification still searches the whole project
+for callers. The command routes the sweep through `dead-code`, passes the
+project as `WorkingDir`, forwards the pinned agy model, and never sets
+`channel.Request.Write`.
+
+The sweep prompt requires one JSON object whose `findings` entries carry a
+`file|function|import` kind, exact searchable symbol, repo-relative definition
+path and 1-based line, and rationale. `ParseFindings` accepts strict JSON,
+fenced JSON, or an embedded object defensively. It validates each entry
+independently, caps the accepted input at 500, and turns malformed output,
+invalid entries, missing definitions, and scan errors into report warnings;
+garbage never panics or aborts an otherwise completed sweep.
+
+Because agy's headless CLI can write despite the read-only prompt, `cmdDeadCode`
+reuses `gitTreeState`/`treeStateDiff`: it snapshots immediately before the
+sweep and compares in the pathway's `AfterSweep` hook immediately after agy
+returns, before deterministic verification or Codex. New porcelain entries are
+narrated and rendered as `SweepDirtied` warnings.
+
+`Verify` walks the project once (excluding `.git` and binary files), searches
+each accepted symbol using Unicode identifier boundaries, and excludes only
+the reported definition file+line. No remaining whole-word reference marks a
+finding `CONFIRMED`; one or more references conservatively marks it `REFUTED`,
+with deterministic sorted `path:line` evidence. If any findings are confirmed,
+exactly one read-only Codex turn receives the first five as a bounded sample and
+checks reflection, registration, generated uses, build tags, interfaces, and
+entry-point semantics. With no confirmed findings the review is skipped;
+review failure is retained in the report instead of discarding verification.
+
+The final report includes warnings, tree-guard results, every deterministic
+status/reference, the Codex response or failure, and raw agy JSON. It is written
+atomically through `brief.WriteReport` under `styx/dead-code/`. Sweep and review
+calls share a run id in budget usage, and completion records a read-risk
+outcome. The pathway has no pipeline lock or resumable state.
+
+`internal/modeljson.Candidates` is the shared defensive recovery seam used by
+dead-code, map-impact, and cross-repo for strict, fenced, or embedded model
+JSON; each pathway still owns and validates its concrete schema. Their command adapters
+share `readPathwayChannelAdapter`, which forwards routed model/effort and
+records correlated sweep/review usage without enabling writes; cross-repo adds
+only its validated repository roots through the adapter's `ExtraRoots` copy.
+
+## Impact mapping (internal/mapimpact, cmd/styx/map_impact.go)
+
+`styx map-impact <symbol|file|diff-spec>` performs one read-only repository-wide
+dependency and change-impact trace. Exactly one input is required. An existing
+regular file inside the active project (after symlink resolution) is classified
+as a file; otherwise a value accepted by `git diff --name-only <value> --`
+(including a ref such as `HEAD~1` or a range) is classified as a diff; remaining
+values are symbols. Directories, outside-project files, empty inputs, and
+flag-shaped inputs are rejected.
+
+The sweep routes through `map-impact`, uses the project as `WorkingDir`, forwards
+the pinned agy model, and never sets `channel.Request.Write`. Its prompt requires
+one JSON object with a `findings` array. Every finding is a directed dependency
+edge with repo-relative, 1-based `source` and `dependent` sites, named symbols,
+a relationship, `direct|transitive` impact, and evidence rationale. Parsing is
+defensive and capped at 500 entries; malformed entries become warnings while
+valid edges are re-encoded into a canonical machine-readable report section;
+the original raw sweep is retained separately for auditability.
+
+Because agy cannot enforce read-only behavior, `cmdMapImpact` snapshots
+`gitTreeState` immediately before the sweep and invokes `treeStateDiff` in
+`AfterSweep` immediately after it returns, before review. Dirtied paths are
+narrated and rendered prominently. If valid edges exist, exactly one read-only
+Codex turn spot-checks the first five, asking whether each cited dependent site
+actually references or relies on the cited source; it returns per-edge
+VERIFIED/REFUTED/UNCERTAIN judgments. Review errors remain in the artifact, and
+no valid edges skips the review.
+
+The final report records the classified input, parser/tree warnings, every
+structured edge, the bounded Codex review, and raw agy JSON. `brief.WriteReport`
+writes it atomically under `styx/map-impact/`. Sweep and review share a run id,
+completion records a read-risk outcome, and the pathway has no pipeline lock or
+resumable state.
+
+## Cross-repository links (internal/crossrepo, cmd/styx/cross_repo.go)
+
+`styx cross-repo <root2> [root3...] [-- <question>]` analyzes concrete
+producer/consumer relationships across the active repository and exactly the
+additional git repository roots named before `--`. Every root is resolved
+through symlinks, must name a git top-level directory exactly, and is
+deduplicated. Styx refuses the home directory, `.git`, `.ssh`, known cloud/CLI
+credential directories, keyrings, and keychains before any model is invoked.
+This keeps the agy mount set to the smallest explicitly requested set.
+
+The sweep routes through the seeded `cross-repo` rule, forwards the pinned agy
+model, uses the primary repository as `WorkingDir`, and copies only the other
+validated roots into `channel.Request.ExtraRoots`; the same roots are available
+to one read-only Codex review turn. The agy prompt requires a single JSON
+`findings` object with exact mounted-root strings, repository-relative producer
+and consumer sites, a relationship, contract, and evidence. Parsing uses
+`modeljson.Candidates`, validates each entry independently, caps consideration
+at 500, rejects unknown/same roots and escaping paths, and preserves canonical
+machine-readable findings separately from raw model output.
+
+Because agy cannot enforce read-only access, the command snapshots
+`gitTreeState` for every mounted root before the sweep and diffs every root in
+the mandatory `AfterSweep` hook immediately after it returns. Any changed root
+or post-sweep guard error is a hard failure: parsing and Codex are skipped,
+success is refused, and a loud forensic report identifies the affected root and
+porcelain paths. With a clean guard and valid findings, exactly one Codex turn
+spot-checks the first five producer/consumer links. The final report includes
+all roots, parser warnings, canonical JSON findings, the Codex result or error,
+and raw agy output; `brief.WriteReport` writes it atomically under
+`styx/cross-repo/`. Sweep and review share one run id and the completed command
+records a read-risk outcome.
 
 ## Execute (internal/execute)
 
@@ -1147,7 +1333,12 @@ path: it skips the sweep and reruns only the two cheap reviews plus verdict.
 through that channel with `Write: true` and captures output; when nil it uses
 the built-in claude path (`--dangerously-skip-permissions -p`), which streams
 claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
-`--no-pr`/`--no-push`.
+`--no-pr`/`--no-push`. For PR publication, callers may supply drafted title,
+body, draft state, and labels, but `Ship` owns the final `gh pr create`
+arguments and appends styx attribution to the body. Label edits are best-effort
+metadata after creation: failures are reported in `MetadataErrors` without
+erasing the created or recovered PR URL. If create reports an existing PR,
+`Ship` recovers its URL with `gh pr view` before applying labels.
 
 ## Attribution (internal/attribution)
 
@@ -2147,6 +2338,9 @@ should rotate the migrated keys.
 <project>/.styx/runs/<run-id>/state.json    pipeline state
 <project>/styx/research, styx/debug, styx/plans
                                              briefs + debug reports + plans (per-project config)
+<project>/styx/dead-code                    dead-code verification reports (fixed pathway dir)
+<project>/styx/map-impact                  impact-map reports (fixed pathway dir)
+<project>/styx/cross-repo                  guarded multi-root link reports (fixed pathway dir)
 ```
 
 ## Testing conventions

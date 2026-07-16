@@ -67,6 +67,13 @@ func TestExtract(t *testing.T) {
 			proj: config.Project{Language: "go"},
 			want: []string{"lang:go"},
 		},
+		{
+			name: "complex-pr-drafting-raises-floor",
+			verb: "pr.body",
+			args: []string{"refactor the auth middleware"},
+			proj: config.Project{Language: "go"},
+			want: []string{"clerical", "complex", "lang:go"},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -18,7 +18,7 @@ ollama.cap_pct           = 0    # local, unlimited
 # ── research ──
 [[rule]]
 verb = "research"
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["ollama:qwen2.5-coder:14b"]
 
 [[rule]]
@@ -71,7 +71,7 @@ synthesize_with = "claude:sonnet"
 # ── debug (ultraFerdDebug: agy sweep, codex+claude review) ──
 [[rule]]
 verb = "debug.sweep"
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet"]
 
 [[rule]]
@@ -82,6 +82,47 @@ effort = "high"
 [[rule]]
 verb = "debug.review.claude"
 use  = "claude:sonnet"
+
+# ── dead-code (agy sweep, deterministic grep, codex spot-check) ──
+[[rule]]
+verb = "dead-code"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+
+# ── map-impact (agy dependency trace, codex edge spot-check) ──
+[[rule]]
+verb = "map-impact"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+
+# ── cross-repo (agy multi-root link trace, codex spot-check) ──
+[[rule]]
+verb = "cross-repo"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+
+# ── PR drafting (bounded local prose, one cheap-cloud fallback) ──
+[[rule]]
+verb = "pr.title"
+signals = ["complex"]
+use  = "claude:sonnet"
+fallback = ["codex"]
+
+[[rule]]
+verb = "pr.title"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]
+
+[[rule]]
+verb = "pr.body"
+signals = ["complex"]
+use  = "claude:sonnet"
+fallback = ["codex"]
+
+[[rule]]
+verb = "pr.body"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]
 
 # ── grunt / think ──
 [[rule]]
@@ -106,7 +147,7 @@ use  = "ollama:qwen2.5-coder:14b"
 [[rule]]
 verb = "explain"
 signals = ["large_context"]
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet"]
 
 [[rule]]
@@ -115,7 +156,7 @@ use  = "ollama:qwen2.5-coder:14b"
 
 [[rule]]
 verb = "summarize"
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]
 
 [[rule]]

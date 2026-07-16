@@ -129,7 +129,7 @@ restarting the session.
 
 | Verb | What it does |
 |---|---|
-| `research <q>` | Convergence loop: agy drafts, codex critiques, agy revises, until critic returns no BLOCKING/IMPORTANT (max 6 rounds) |
+| `research <q>` | Convergence loop: agy on pinned Gemini 3.1 Pro (High) drafts, codex critiques, agy revises, until critic returns no BLOCKING/IMPORTANT (max 6 rounds) |
 | `research --deep <q>` | Same loop, then chase every cited URL and summarize into a Sources Appendix |
 | `plan <desc>` | Auto-refresh intel index, write `.claude/context.md`, draft a detailed plan via Claude |
 | `build [target]` | Auto-refresh intel, write `.claude/context.md`, launch Claude interactively |
@@ -139,9 +139,13 @@ restarting the session.
 
 | Verb | What it does |
 |---|---|
-| `debug <bug>` | **ultraFerdDebug**: agy sweeps the repository into a cited debug brief, then Codex and Claude independently review it and styx writes a deterministic diagnosis report. Diagnosis only; no code edits |
-| `debug --test <name> --log <path> --file <hint> <bug>` | Add a failing test, a capped log/stack file, and repeatable starting-file hints to the sweep |
+| `debug <bug>` | **ultraFerdDebug**: agy on pinned Gemini 3.1 Pro (High) sweeps the repository into a cited debug brief, then Codex and Claude independently review it and styx writes a deterministic diagnosis report. Diagnosis only; no code edits |
+| `debug --log <file...> [-- <failure description>]` | Failure-triage entry mode: agy reads one or more log/test-output files by path, clusters failures by root cause, and traces each cluster to repository code; one Codex review checks the clusters and traces. Log contents are never embedded in the prompt |
+| `debug --test <name> --file <hint> <bug>` | Add a failing-test name and repeatable starting-file hints to the normal diagnosis sweep |
 | `debug --review-only <brief> [bug]` | Skip the expensive sweep and run only the two short reviews plus verdict against an existing brief |
+| `dead-code [path]` | Agy on pinned Gemini 3.1 Pro (High) sweeps the repository for unused files, functions, and imports. Styx whole-word-checks every valid reported symbol outside its definition site, marks it CONFIRMED/REFUTED, then runs one Codex spot-check over up to five confirmed findings. Read-only; report saved under `styx/dead-code/` |
+| `map-impact <symbol\|file\|diff-spec>` | Agy on pinned Gemini 3.1 Pro (High) traces direct dependents and transitive change impact across the repository from a symbol, file, or git diff/ref such as `HEAD~1`. Findings are structured dependency edges; one Codex turn spot-checks up to five claimed edges against the cited code. Read-only; report saved under `styx/map-impact/` |
+| `cross-repo <root2> [root3...] [-- <question>]` | Agy traces machine-readable producer/consumer links across exactly the named git repository roots, then one Codex turn spot-checks up to five links. Every mounted tree is guarded; any mutation refuses success. Sensitive credential directories are never mounted. Report saved atomically under the primary repo's `styx/cross-repo/` |
 
 ### Autonomy
 
@@ -153,6 +157,18 @@ restarting the session.
 | `auto --no-push <goal>` | Stop at commit (don't push) |
 | `auto --resume <run-id>` | Resume an interrupted pipeline |
 | `execute <plan-file>` | Apply a plan non-interactively via the `implement` route (Codex for well-scoped plans, Claude for `complex` ones) |
+
+When `auto` reaches ship, styx derives a grounded PR context from pipeline
+state and the branch diff, then drafts the title and body as two bounded prose
+microtasks. Each uses local `ollama:qwen2.5-coder:7b`, may escalate once to
+`claude:haiku` only while that route is within budget and circuit-closed, and
+otherwise uses deterministic text. Test/review results, including skipped
+stages and their reasons, remain pipeline-owned facts; models cannot override
+them. Risky changes or repeated test/review attempts create a draft PR, and
+allowlisted labels are applied best-effort after creation. `--no-pr` and
+`--no-push` skip PR drafting entirely, so those modes make no drafting calls.
+Complex goals, deterministic risk flags, or unusually large diffs raise the
+drafting floor to Claude Sonnet with Codex fallback instead of using local prose.
 
 ### Context + inspection
 
@@ -175,8 +191,8 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 |---|---|
 | `grunt <prompt>` | Local Ollama pass-through |
 | `think <prompt>` | Local Ollama reasoning mode (`deep:` prefix -> Claude) |
-| `explain <files...>` | Explain code files |
-| `summarize <files...>` | Summarize a set of files |
+| `explain <files...>` | Explain code files; large contexts route to pinned Gemini 3.1 Pro (High) on agy |
+| `summarize <files...>` | Summarize a set of files with pinned Gemini 3.1 Pro (High) on agy |
 | `critique <text>` | Devil's-advocate critique (Codex) |
 | `check` | Dashboard: git status, latest briefs/plans |
 | `budget` | Per-channel usage summary |
@@ -217,6 +233,9 @@ timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 - `<project>/.claude/context.md` — rendered intel (Claude Code auto-loads this)
 - `<project>/.styx/runs/<run-id>/` — pipeline state per run
 - `<project>/styx/debug/` — recoverable ultraFerdDebug briefs and final reports (overridable with the project's `debug_dir`)
+- `<project>/styx/dead-code/` — atomic dead-code sweep, deterministic verification, and Codex spot-check reports
+- `<project>/styx/map-impact/` — atomic impact maps with canonical dependency-edge JSON and a Codex spot-check
+- `<project>/styx/cross-repo/` — atomic multi-root link reports with canonical findings and all-roots guard evidence
 - Secrets live in the platform secret store (macOS Keychain service `styx` /
   Windows Credential Manager target prefix `styx/`).
 
@@ -229,10 +248,27 @@ routing upgrade without replacing a host already chosen by the user:
 host = "claude" # claude | codex
 ```
 
-The seeded routing table uses `debug.sweep` for agy with
-`claude:sonnet` fallback, `debug.review.codex` for the high-effort Codex pass,
-and `debug.review.claude` for the Claude Sonnet pass. `styx upgrade` injects
-missing debug rules without overwriting customized ones.
+The seeded routing table pins agy rules to `Gemini 3.1 Pro (High)` because the
+subscription CLI otherwise reuses the user's last interactive model choice.
+It uses `debug.sweep` for agy with `claude:sonnet` fallback,
+`debug.review.codex` for the high-effort Codex pass, and
+`debug.review.claude` for the Claude Sonnet pass. `styx upgrade` injects
+missing debug rules and upgrades `agy:default` targets to the pin without
+overwriting explicitly selected custom models. Log mode still routes its sweep
+through `debug.sweep`, but intentionally stops after the single Codex review;
+the full Codex+Claude review remains exclusive to the normal diagnosis mode.
+The `dead-code` rule uses the same agy pin with `claude:sonnet` then `codex`
+fallbacks. Existing routing files receive it idempotently during startup or
+`styx upgrade`; an existing customized `dead-code` target is preserved.
+The `map-impact` rule uses the same pin and fallback chain; its missing-rule
+migration is likewise idempotent and preserves existing customized routing.
+The `cross-repo` rule follows the same pattern; existing routing files receive
+it idempotently without replacing a customized `cross-repo` target.
+The `pr.title` and `pr.body` rules use local `ollama:qwen2.5-coder:7b` with a
+single `claude:haiku` fallback for ordinary changes, plus a preceding
+`complex` rule using Claude Sonnet with Codex fallback. Startup and
+`styx upgrade` add either missing rule group without replacing an existing
+customized PR-drafting route.
 
 ## Deps
 

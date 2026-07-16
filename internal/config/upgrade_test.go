@@ -80,6 +80,163 @@ use = "claude:opus"
 	}
 }
 
+func TestEnsureDeadCodeRule(t *testing.T) {
+	tests := []struct {
+		name        string
+		src         string
+		wantChanged bool
+		wantUse     string
+	}{
+		{name: "absent", src: "[[rule]]\nverb = \"research\"\nuse = \"agy:default\"\n", wantChanged: true, wantUse: `use  = "agy:Gemini 3.1 Pro (High)"`},
+		{name: "custom present", src: "[[rule]]\nverb = \"dead-code\"\nuse = \"claude:opus\"\n", wantUse: `use = "claude:opus"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := EnsureDeadCodeRule(tt.src)
+			if changed != tt.wantChanged {
+				t.Errorf("changed = %t, want %t", changed, tt.wantChanged)
+			}
+			if strings.Count(got, `verb = "dead-code"`) != 1 || !strings.Contains(got, tt.wantUse) {
+				t.Errorf("dead-code rule mismatch:\n%s", got)
+			}
+			again, changed := EnsureDeadCodeRule(got)
+			if changed || again != got {
+				t.Error("second dead-code upgrade must be a no-op")
+			}
+		})
+	}
+}
+
+func TestEnsureMapImpactRule(t *testing.T) {
+	tests := []struct {
+		name, src, wantUse string
+		wantChanged        bool
+	}{
+		{name: "missing", src: "[[rule]]\nverb = \"research\"\nuse = \"agy:default\"\n", wantUse: `use  = "agy:Gemini 3.1 Pro (High)"`, wantChanged: true},
+		{name: "custom present", src: "[[rule]]\nverb = \"map-impact\"\nuse = \"claude:opus\"\n", wantUse: `use = "claude:opus"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := EnsureMapImpactRule(tt.src)
+			if changed != tt.wantChanged {
+				t.Errorf("changed = %t, want %t", changed, tt.wantChanged)
+			}
+			if strings.Count(got, `verb = "map-impact"`) != 1 || !strings.Contains(got, tt.wantUse) {
+				t.Errorf("map-impact rule mismatch:\n%s", got)
+			}
+			again, changed := EnsureMapImpactRule(got)
+			if changed || again != got {
+				t.Error("second map-impact upgrade must be a no-op")
+			}
+		})
+	}
+}
+
+func TestEnsureCrossRepoRule(t *testing.T) {
+	tests := []struct {
+		name, src, wantUse string
+		wantChanged        bool
+	}{
+		{name: "missing", src: "[models]\nrefresh_interval_hours = 24\n", wantUse: `use  = "agy:Gemini 3.1 Pro (High)"`, wantChanged: true},
+		{name: "custom present", src: "[[rule]]\nverb = \"cross-repo\"\nuse = \"claude:opus\"\n", wantUse: `use = "claude:opus"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := EnsureCrossRepoRule(tt.src)
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %t, want %t", changed, tt.wantChanged)
+			}
+			if strings.Count(got, `verb = "cross-repo"`) != 1 || !strings.Contains(got, tt.wantUse) {
+				t.Errorf("cross-repo rule mismatch:\n%s", got)
+			}
+			again, changed := EnsureCrossRepoRule(got)
+			if changed || again != got {
+				t.Error("second cross-repo upgrade must be a no-op")
+			}
+		})
+	}
+}
+
+func TestEnsurePRDraftRules(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{name: "both missing", src: "[models]\nrefresh_interval_hours = 24\n"},
+		{name: "custom title preserved", src: "[[rule]]\nverb = \"pr.title\"\nuse = \"codex\"\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := EnsurePRDraftRules(tt.src)
+			if !changed {
+				t.Fatal("expected missing PR drafting rules to be injected")
+			}
+			for _, verb := range []string{"pr.title", "pr.body"} {
+				want := 2
+				if strings.Contains(tt.src, `verb = "`+verb+`"`) {
+					want = 1
+				}
+				if strings.Count(got, `verb = "`+verb+`"`) != want {
+					t.Errorf("expected %d %s rule(s):\n%s", want, verb, got)
+				}
+			}
+			if strings.Contains(tt.src, `use = "codex"`) && !strings.Contains(got, `use = "codex"`) {
+				t.Error("custom PR title rule was not preserved")
+			}
+			again, changed := EnsurePRDraftRules(got)
+			if changed || again != got {
+				t.Error("second PR drafting upgrade must be a no-op")
+			}
+		})
+	}
+}
+
+func TestEnsureAgyModelPin(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		want        string
+		wantChanged bool
+	}{
+		{
+			name:        "use and fallback targets",
+			content:     "use = \"agy:default\"\nfallback = [\"agy:default\", \"claude:sonnet\"]\n",
+			want:        "use = \"agy:Gemini 3.1 Pro (High)\"\nfallback = [\"agy:Gemini 3.1 Pro (High)\", \"claude:sonnet\"]\n",
+			wantChanged: true,
+		},
+		{
+			name:        "single quoted target",
+			content:     "use = 'agy:default'\n",
+			want:        "use = 'agy:Gemini 3.1 Pro (High)'\n",
+			wantChanged: true,
+		},
+		{
+			name:        "already pinned",
+			content:     "use = \"agy:Gemini 3.1 Pro (High)\"\n",
+			want:        "use = \"agy:Gemini 3.1 Pro (High)\"\n",
+			wantChanged: false,
+		},
+		{
+			name:        "custom model and comment preserved",
+			content:     "# previous use = \"agy:default\"\nuse = \"agy:Gemini Flash\"\n",
+			want:        "# previous use = \"agy:default\"\nuse = \"agy:Gemini Flash\"\n",
+			wantChanged: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := EnsureAgyModelPin(tt.content)
+			if changed != tt.wantChanged {
+				t.Errorf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			if got != tt.want {
+				t.Errorf("content mismatch:\n got: %q\nwant: %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRewriteRoutingGeminiToAgy(t *testing.T) {
 	src := `[budget]
 claude.cap_pct = 80
@@ -141,36 +298,115 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, _, _, _, hostInjected, watchInjected, debugInjected, err := UpgradeRoutingFile(routingPath)
+	result, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("expected 1 substitution, got %d", n)
+	if result.GeminiRewrites != 1 {
+		t.Errorf("expected 1 substitution, got %d", result.GeminiRewrites)
 	}
-	if !watchInjected {
+	if !result.WatchInjected {
 		t.Error("expected [watch] section to be injected on a config that lacks one")
 	}
-	if !hostInjected {
+	if !result.HostInjected {
 		t.Error("expected [conductor] host to be injected on a config that lacks one")
 	}
-	if !debugInjected {
+	if !result.DebugInjected {
 		t.Error("expected debug rules to be injected on a pre-debug config")
+	}
+	if !result.DeadCodeInjected {
+		t.Error("expected dead-code rule to be injected on an old config")
+	}
+	if !result.MapImpactInjected {
+		t.Error("expected map-impact rule to be injected on an old config")
+	}
+	if !result.CrossRepoInjected {
+		t.Error("expected cross-repo rule to be injected on an old config")
+	}
+	if !result.PRDraftInjected {
+		t.Error("expected PR drafting rules to be injected on an old config")
+	}
+	if !result.AgyPinned {
+		t.Error("expected migrated agy route to receive the model pin")
 	}
 	// Backup exists
 	backup := filepath.Join(routingDir, "routing.v0.1.toml.bak")
 	if _, err := os.Stat(backup); err != nil {
 		t.Errorf("backup not created: %v", err)
 	}
-	// New file has agy
+	// New file has the deterministic agy model pin.
 	b, _ := os.ReadFile(routingPath)
-	if !strings.Contains(string(b), "agy:default") {
-		t.Errorf("post-upgrade file missing agy:default: %s", b)
+	if !strings.Contains(string(b), agyPinnedTarget) {
+		t.Errorf("post-upgrade file missing %s: %s", agyPinnedTarget, b)
 	}
 	for _, verb := range []string{"debug.sweep", "debug.review.codex", "debug.review.claude"} {
 		if !strings.Contains(string(b), `verb = "`+verb+`"`) {
 			t.Errorf("post-upgrade file missing %s: %s", verb, b)
 		}
+	}
+	if !strings.Contains(string(b), `verb = "dead-code"`) {
+		t.Errorf("post-upgrade file missing dead-code: %s", b)
+	}
+	if !strings.Contains(string(b), `verb = "map-impact"`) {
+		t.Errorf("post-upgrade file missing map-impact: %s", b)
+	}
+	if !strings.Contains(string(b), `verb = "cross-repo"`) {
+		t.Errorf("post-upgrade file missing cross-repo: %s", b)
+	}
+	for _, verb := range []string{"pr.title", "pr.body"} {
+		if !strings.Contains(string(b), `verb = "`+verb+`"`) {
+			t.Errorf("post-upgrade file missing %s: %s", verb, b)
+		}
+	}
+}
+
+func TestUpgrade_AgyModelPinRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	routingPath := filepath.Join(dir, "routing.toml")
+	original := `[[rule]]
+verb = "summarize"
+use = "agy:default"
+fallback = ["claude:sonnet"]
+`
+	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := UpgradeRoutingFile(routingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.AgyPinned {
+		t.Fatal("expected upgrade to pin the unpinned agy route")
+	}
+	upgraded, err := os.ReadFile(routingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(upgraded), "agy:default") || !strings.Contains(string(upgraded), agyPinnedTarget) {
+		t.Fatalf("upgraded routing has wrong agy target:\n%s", upgraded)
+	}
+	routing, err := LoadRoutingFile(routingPath)
+	if err != nil {
+		t.Fatalf("upgraded routing must parse: %v", err)
+	}
+	if routing.Rules[0].Use != agyPinnedTarget {
+		t.Errorf("round-tripped target = %q, want %q", routing.Rules[0].Use, agyPinnedTarget)
+	}
+	backup, err := os.ReadFile(filepath.Join(dir, "routing.v0.1.toml.bak"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Errorf("backup = %q, want original %q", backup, original)
+	}
+
+	result, err = UpgradeRoutingFile(routingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AgyPinned {
+		t.Fatal("second upgrade must be a no-op")
 	}
 }
 

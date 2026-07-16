@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ishaanbatra/styx/internal/channel"
@@ -31,6 +32,53 @@ func TestSend_OneShotCapturesStdout(t *testing.T) {
 	}
 	if resp.Text == "" {
 		t.Error("expected non-empty Text")
+	}
+}
+
+func TestSend_ForwardsExplicitModel(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{
+			name:  "pinned model",
+			model: "Gemini 3.1 Pro (High)",
+			want:  "-p hi --dangerously-skip-permissions --model Gemini 3.1 Pro (High)",
+		},
+		{name: "default sentinel", model: "default", want: "-p hi --dangerously-skip-permissions"},
+		{name: "empty model", model: "", want: "-p hi --dangerously-skip-permissions"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeSrc, err := filepath.Abs("../../../testdata/fakeagent")
+			if err != nil {
+				t.Fatal(err)
+			}
+			fake, err := os.ReadFile(fakeSrc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			binDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(binDir, "agy"), fake, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			argsLog := filepath.Join(t.TempDir(), "args.log")
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("FAKEAGENT_ARGS_LOG", argsLog)
+
+			if _, err := New().Send(context.Background(), channel.Request{Model: tt.model, Prompt: "hi"}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(argsLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.TrimSpace(string(got)) != tt.want {
+				t.Errorf("agy args = %q, want %q", strings.TrimSpace(string(got)), tt.want)
+			}
+		})
 	}
 }
 

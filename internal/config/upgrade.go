@@ -165,13 +165,15 @@ const debugRulesHeader = `
 # ── debug (ultraFerdDebug: agy sweep, codex+claude review) ──
 `
 
+const agyPinnedTarget = "agy:Gemini 3.1 Pro (High)"
+
 var debugRuleBlocks = []struct {
 	verb  string
 	block string
 }{
 	{"debug.sweep", `[[rule]]
 verb = "debug.sweep"
-use  = "agy:default"
+use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet"]
 `},
 	{"debug.review.codex", `[[rule]]
@@ -201,6 +203,144 @@ func EnsureDebugRules(content string) (string, bool) {
 	trimmed := strings.TrimRight(content, "\n")
 	return trimmed + "\n" + debugRulesHeader + strings.Join(missing, "\n"), true
 }
+
+const deadCodeRuleBlock = `
+# ── dead-code (agy sweep, deterministic grep, codex spot-check) ──
+[[rule]]
+verb = "dead-code"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+`
+
+var deadCodeVerbRE = regexp.MustCompile(`(?m)^\s*verb\s*=\s*"dead-code"`)
+
+// EnsureDeadCodeRule appends the dead-code routing rule when absent. Existing
+// custom rules are preserved verbatim and the operation is idempotent.
+func EnsureDeadCodeRule(content string) (string, bool) {
+	if deadCodeVerbRE.MatchString(content) {
+		return content, false
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	return trimmed + "\n" + deadCodeRuleBlock, true
+}
+
+const mapImpactRuleBlock = `
+# ── map-impact (agy dependency trace, codex edge spot-check) ──
+[[rule]]
+verb = "map-impact"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+`
+
+var mapImpactVerbRE = regexp.MustCompile(`(?m)^\s*verb\s*=\s*"map-impact"`)
+
+// EnsureMapImpactRule appends the map-impact routing rule when absent.
+// Existing custom rules are preserved verbatim and the operation is idempotent.
+func EnsureMapImpactRule(content string) (string, bool) {
+	if mapImpactVerbRE.MatchString(content) {
+		return content, false
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	return trimmed + "\n" + mapImpactRuleBlock, true
+}
+
+const crossRepoRuleBlock = `
+# ── cross-repo (agy multi-root link trace, codex spot-check) ──
+[[rule]]
+verb = "cross-repo"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+`
+
+var crossRepoVerbRE = regexp.MustCompile(`(?m)^\s*verb\s*=\s*"cross-repo"`)
+
+// EnsureCrossRepoRule appends the cross-repo routing rule when absent.
+// Existing custom rules are preserved verbatim and the operation is idempotent.
+func EnsureCrossRepoRule(content string) (string, bool) {
+	if crossRepoVerbRE.MatchString(content) {
+		return content, false
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	return trimmed + "\n" + crossRepoRuleBlock, true
+}
+
+const prDraftRulesBlock = `
+# ── PR drafting (bounded local prose, one cheap-cloud fallback) ──
+[[rule]]
+verb = "pr.title"
+signals = ["complex"]
+use  = "claude:sonnet"
+fallback = ["codex"]
+
+[[rule]]
+verb = "pr.title"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]
+
+[[rule]]
+verb = "pr.body"
+signals = ["complex"]
+use  = "claude:sonnet"
+fallback = ["codex"]
+
+[[rule]]
+verb = "pr.body"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]
+`
+
+// EnsurePRDraftRules appends either missing PR drafting rule while preserving
+// any existing custom rule for that verb. The operation is idempotent.
+func EnsurePRDraftRules(content string) (string, bool) {
+	missing := make([]string, 0, 2)
+	for _, verb := range []string{"pr.title", "pr.body"} {
+		re := regexp.MustCompile(`(?m)^\s*verb\s*=\s*"` + regexp.QuoteMeta(verb) + `"`)
+		if re.MatchString(content) {
+			continue
+		}
+		parts := strings.Split(prDraftRulesBlock, "[[rule]]")
+		var blocks []string
+		for _, part := range parts[1:] {
+			block := "[[rule]]" + part
+			if strings.Contains(block, `verb = "`+verb+`"`) {
+				blocks = append(blocks, strings.TrimSpace(block))
+			}
+		}
+		missing = append(missing, strings.Join(blocks, "\n\n")+"\n")
+	}
+	if len(missing) == 0 {
+		return content, false
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	header := "\n\n# ── PR drafting (bounded local prose, one cheap-cloud fallback) ──\n"
+	return trimmed + header + strings.Join(missing, "\n"), true
+}
+
+// EnsureAgyModelPin replaces unpinned agy routing targets with the seeded
+// subscription-CLI model label. Agy remembers the user's last interactive
+// model choice, so "default" is not deterministic. Explicit custom models are
+// preserved. Returns the new content and whether any routing target changed.
+func EnsureAgyModelPin(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	changed := false
+	for i, line := range lines {
+		if !routingTargetLineRE.MatchString(line) {
+			continue
+		}
+		rewritten := strings.ReplaceAll(line, `"agy:default"`, `"`+agyPinnedTarget+`"`)
+		rewritten = strings.ReplaceAll(rewritten, `'agy:default'`, `'`+agyPinnedTarget+`'`)
+		if rewritten != line {
+			lines[i] = rewritten
+			changed = true
+		}
+	}
+	if !changed {
+		return content, false
+	}
+	return strings.Join(lines, "\n"), true
+}
+
+var routingTargetLineRE = regexp.MustCompile(`^\s*(?:use|fallback|parallel|synthesize_with)\s*=`)
 
 // EnsureFableTier upgrades the exact seeded suspension-era mapping
 // `fable  = "opus"` to `fable  = "fable"`. Only the seeded spelling is
@@ -400,24 +540,53 @@ func RewriteRoutingGeminiToAgy(content string) (string, int) {
 	return result, count
 }
 
+// UpgradeResult reports every migration performed by UpgradeRoutingFile.
+// Named fields keep callers stable as new idempotent routing migrations are
+// added.
+type UpgradeResult struct {
+	GeminiRewrites    int
+	ImplementInjected bool
+	FableRestored     bool
+	TaskCapInjected   bool
+	HostInjected      bool
+	WatchInjected     bool
+	DebugInjected     bool
+	DeadCodeInjected  bool
+	MapImpactInjected bool
+	CrossRepoInjected bool
+	PRDraftInjected   bool
+	AgyPinned         bool
+}
+
+// Changed reports whether the routing file was rewritten by any migration.
+func (r UpgradeResult) Changed() bool {
+	return r.GeminiRewrites > 0 || r.ImplementInjected || r.FableRestored ||
+		r.TaskCapInjected || r.HostInjected || r.WatchInjected ||
+		r.DebugInjected || r.DeadCodeInjected || r.MapImpactInjected ||
+		r.CrossRepoInjected || r.PRDraftInjected || r.AgyPinned
+}
+
 // UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
 // injects the `implement` verb rules if missing (v0.3), restores the seeded fable
 // tier mapping (v0.4), seeds the [conductor] max_background_tasks cap (B1) and
-// interactive host, seeds the [watch] section (C5), injects ultraFerdDebug
-// rules, cleans stale budget keys, dedupes fallback arrays,
+// interactive host, seeds the [watch] section (C5), injects ultraFerdDebug and
+// dead-code, map-impact, cross-repo, and PR drafting rules, cleans stale budget
+// keys, dedupes fallback arrays,
 // backs up the original to routing.v0.1.toml.bak, and atomically writes the new
 // content.
 // Returns the gemini-rule substitution count, whether implement rules were
 // injected, whether the fable tier was restored, whether the conductor task
 // cap and host were injected, whether the [watch] section was injected, and
-// whether any debug rules were injected. Missing-file is not an error.
-func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected bool, err error) {
+// whether any debug/read-pathway/PR drafting rules were injected, and whether
+// unpinned agy targets were pinned.
+// Missing-file is not an error.
+func UpgradeRoutingFile(routingPath string) (UpgradeResult, error) {
 	b, err := os.ReadFile(routingPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, false, false, false, false, false, false, nil
+			return UpgradeResult{}, nil
 		}
-		return 0, false, false, false, false, false, false, fmt.Errorf("read routing: %w", err)
+		return UpgradeResult{}, fmt.Errorf("read routing: %w", err)
 	}
 	newContent, n := RewriteRoutingGeminiToAgy(string(b))
 	newContent, injected := EnsureImplementRules(newContent)
@@ -426,20 +595,31 @@ func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fab
 	newContent, host := EnsureConductorHost(newContent)
 	newContent, watch := EnsureWatchSection(newContent)
 	newContent, debug := EnsureDebugRules(newContent)
+	newContent, deadCode := EnsureDeadCodeRule(newContent)
+	newContent, mapImpact := EnsureMapImpactRule(newContent)
+	newContent, crossRepo := EnsureCrossRepoRule(newContent)
+	newContent, prDraft := EnsurePRDraftRules(newContent)
+	newContent, pinned := EnsureAgyModelPin(newContent)
 	// Use content comparison: skip write if nothing changed at all
 	if newContent == string(b) {
-		return 0, false, false, false, false, false, false, nil
+		return UpgradeResult{}, nil
 	}
 	backup := filepath.Join(filepath.Dir(routingPath), "routing.v0.1.toml.bak")
 	if err := os.WriteFile(backup, b, 0o644); err != nil {
-		return 0, false, false, false, false, false, false, fmt.Errorf("write backup %s: %w", backup, err)
+		return UpgradeResult{}, fmt.Errorf("write backup %s: %w", backup, err)
 	}
 	tmp := routingPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
-		return 0, false, false, false, false, false, false, fmt.Errorf("write tmp: %w", err)
+		return UpgradeResult{}, fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, routingPath); err != nil {
-		return 0, false, false, false, false, false, false, fmt.Errorf("atomic rename: %w", err)
+		return UpgradeResult{}, fmt.Errorf("atomic rename: %w", err)
 	}
-	return n, injected, fable, taskCap, host, watch, debug, nil
+	return UpgradeResult{
+		GeminiRewrites: n, ImplementInjected: injected, FableRestored: fable,
+		TaskCapInjected: taskCap, HostInjected: host, WatchInjected: watch,
+		DebugInjected: debug, DeadCodeInjected: deadCode,
+		MapImpactInjected: mapImpact, CrossRepoInjected: crossRepo,
+		PRDraftInjected: prDraft, AgyPinned: pinned,
+	}, nil
 }

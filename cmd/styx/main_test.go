@@ -87,6 +87,31 @@ func TestResolveStyxDisplayVersion(t *testing.T) {
 	}
 }
 
+func TestSetupFreeVerb(t *testing.T) {
+	tests := []struct {
+		verb string
+		want bool
+	}{
+		{verb: "help", want: true},
+		{verb: "-h", want: true},
+		{verb: "--help", want: true},
+		{verb: "version", want: true},
+		{verb: "--version", want: true},
+		{verb: "-V", want: true},
+		{verb: "upgrade", want: false},
+		{verb: "dead-code", want: false},
+		{verb: "map-impact", want: false},
+		{verb: "cross-repo", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.verb, func(t *testing.T) {
+			if got := setupFreeVerb(tt.verb); got != tt.want {
+				t.Errorf("setupFreeVerb(%q) = %t, want %t", tt.verb, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseGlobalFlags(t *testing.T) {
 	cases := []struct {
 		name        string

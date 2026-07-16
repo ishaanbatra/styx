@@ -313,6 +313,12 @@ func dispatch(verb string, args []string) error {
 		return cmdResearch(context.Background(), a, nil, args)
 	case "debug":
 		return cmdDebug(context.Background(), a, nil, args)
+	case "dead-code":
+		return cmdDeadCode(context.Background(), a, nil, args)
+	case "map-impact":
+		return cmdMapImpact(context.Background(), a, nil, args)
+	case "cross-repo":
+		return cmdCrossRepo(context.Background(), a, nil, args)
 	case "plan":
 		return cmdPlan(a, args)
 	case "build":
@@ -408,31 +414,47 @@ func ensureFirstRun() error {
 		}
 		logStatus("wrote default routing.toml to %s", routingPath)
 	}
-	// Auto-upgrade: v0.2 rewrites gemini:* -> agy:default; v0.3 injects the
-	// `implement` verb rules. Both back up to routing.v0.1.toml.bak.
-	if n, injected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, err := config.UpgradeRoutingFile(routingPath); err != nil {
+	// Auto-upgrade: v0.2 rewrites gemini:* -> agy, later migrations inject the
+	// implement/debug/dead-code/map-impact/cross-repo/PR-drafting rules and pin
+	// agy models. Changes back up routing.toml.
+	if result, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
 	} else {
-		if n > 0 {
-			logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", n)
+		if result.GeminiRewrites > 0 {
+			logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", result.GeminiRewrites)
 		}
-		if injected {
+		if result.ImplementInjected {
 			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")
 		}
-		if fableRestored {
+		if result.FableRestored {
 			logStatus("auto-upgraded routing.toml: restored the fable tier (suspension lifted)")
 		}
-		if taskCapInjected {
+		if result.TaskCapInjected {
 			logStatus("auto-upgraded routing.toml: seeded [conductor] max_background_tasks = 4")
 		}
-		if hostInjected {
+		if result.HostInjected {
 			logStatus("auto-upgraded routing.toml: seeded [conductor] host = \"claude\"")
 		}
-		if watchInjected {
+		if result.WatchInjected {
 			logStatus("auto-upgraded routing.toml: seeded [watch] stall_threshold_seconds=90 interval_seconds=15 ollama_enabled=true")
 		}
-		if debugInjected {
+		if result.DebugInjected {
 			logStatus("auto-upgraded routing.toml with ultraFerdDebug sweep and review rules")
+		}
+		if result.DeadCodeInjected {
+			logStatus("auto-upgraded routing.toml with the dead-code sweep rule")
+		}
+		if result.MapImpactInjected {
+			logStatus("auto-upgraded routing.toml with the map-impact sweep rule")
+		}
+		if result.CrossRepoInjected {
+			logStatus("auto-upgraded routing.toml with the cross-repo sweep rule")
+		}
+		if result.PRDraftInjected {
+			logStatus("auto-upgraded routing.toml with local PR title/body drafting rules")
+		}
+		if result.AgyPinned {
+			logStatus("auto-upgraded routing.toml: pinned agy routes to Gemini 3.1 Pro (High)")
 		}
 	}
 	if projs, err := config.LoadProjects(); err == nil {

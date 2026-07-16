@@ -15,11 +15,16 @@ func TestSweepPromptOptionalSections(t *testing.T) {
 		{
 			name: "bug only", in: Input{Bug: "panic on empty input"},
 			want: []string{"panic on empty input", "## Evidence", "## Hypotheses"},
-			omit: []string{"--- FAILING TEST ---", "--- LOG / STACK", "--- START HERE"},
+			omit: []string{"--- FAILING TEST ---", "--- LOG / TEST-OUTPUT FILES", "--- START HERE"},
 		},
 		{
-			name: "all evidence", in: Input{Bug: "boom", TestName: "TestFoo", LogBody: "stack line", FileHints: []string{"a.go", "b.go:20"}},
-			want: []string{"--- FAILING TEST ---", "TestFoo", "--- LOG / STACK (truncated) ---", "stack line", "--- START HERE", "a.go\nb.go:20"},
+			name: "all diagnosis hints", in: Input{Bug: "boom", TestName: "TestFoo", FileHints: []string{"a.go", "b.go:20"}},
+			want: []string{"--- FAILING TEST ---", "TestFoo", "--- START HERE", "a.go\nb.go:20"},
+		},
+		{
+			name: "log corpus switches to triage", in: Input{Bug: "CI failures", TestName: "package tests", LogPaths: []string{"/tmp/unit.log", "/tmp/race.log"}, FileHints: []string{"cache.go"}},
+			want: []string{"FAILURE TRIAGE BRIEF", "## Corpus summary", "## Root-cause clusters", "## Code traces", "/tmp/unit.log\n/tmp/race.log", "package tests", "cache.go", "content is not in this prompt"},
+			omit: []string{"## Symptom", "## Hypotheses"},
 		},
 	}
 	for _, tt := range tests {
@@ -43,6 +48,7 @@ func TestReviewerPromptsEmbedBriefAndDemandJSON(t *testing.T) {
 	for name, got := range map[string]string{
 		"misread":    reviewPromptMisread("CITED BRIEF"),
 		"root cause": reviewPromptRootCause("CITED BRIEF"),
+		"log triage": reviewPromptLogTriage("CITED BRIEF"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, want := range []string{"CITED BRIEF", "Return ONLY this JSON", `{"blocking":["..."]`} {

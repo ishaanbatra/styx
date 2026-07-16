@@ -27,8 +27,19 @@ VERBS
   research <query>          Gemini draft + Codex critique -> brief
   debug <bug>               ultraFerdDebug: agy sweep + independent Codex/Claude
                              review -> diagnosis report (no code edits)
+  debug --log <file...> [-- <failure description>]
+                             Cluster log/test failures by root cause, trace them
+                             to code, then run one Codex review (no code edits)
   debug --review-only <brief> [bug]
                              Re-run only the cheap reviews for an existing brief
+  dead-code [path]           Sweep for unused files/functions/imports, verify
+                             symbols, then Codex spot-check confirmed findings
+  map-impact <symbol|file|diff-spec>
+                             Trace repository dependents and change impact,
+                             then Codex spot-check claimed dependency edges
+  cross-repo <root2> [root3...] [-- <question>]
+                             Trace APIs and consumer links across exactly the
+                             named git repository roots, then Codex spot-check
   deep-research <query>     Open Gemini + ChatGPT in browser; synthesis template
   plan <description>        Draft an implementation plan using the latest brief
   build [target]            Interactive Claude/Codex session in the project dir

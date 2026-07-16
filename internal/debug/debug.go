@@ -1,6 +1,6 @@
 // Package debug implements the ultraFerdDebug diagnosis pathway: one
-// repository-wide sweep, two independent reviews, and a deterministic verdict.
-// It never edits code.
+// repository-wide sweep, scaled review, and a deterministic verdict. It never
+// edits code.
 package debug
 
 import (
@@ -17,6 +17,11 @@ import (
 // PipelineName is the user-visible name of the debug pathway.
 const PipelineName = "ultraFerdDebug"
 
+const (
+	modeDiagnosis     = "diagnosis"
+	modeFailureTriage = "failure-triage"
+)
+
 // Channel is the narrow provider interface needed by the pathway.
 type Channel interface {
 	Send(ctx context.Context, prompt string) (string, error)
@@ -26,8 +31,7 @@ type Channel interface {
 type Input struct {
 	Bug         string
 	TestName    string
-	LogPath     string
-	LogBody     string
+	LogPaths    []string
 	FileHints   []string
 	ProjectPath string
 }
@@ -51,6 +55,8 @@ type Verdict struct {
 // Report is the complete diagnosis produced by the pathway.
 type Report struct {
 	Bug          string    `json:"bug"`
+	Mode         string    `json:"mode"`
+	LogPaths     []string  `json:"log_paths,omitempty"`
 	StartedAt    time.Time `json:"started_at"`
 	EndedAt      time.Time `json:"ended_at"`
 	SweepChannel string    `json:"sweep_channel"`
@@ -96,6 +102,8 @@ func Run(ctx context.Context, o Options) (*Report, error) {
 	}
 	rep := &Report{
 		Bug:          o.Input.Bug,
+		Mode:         debugMode(o.Input),
+		LogPaths:     append([]string(nil), o.Input.LogPaths...),
 		StartedAt:    time.Now().UTC(),
 		SweepChannel: defaultString(o.SweepChannel, "agy:default"),
 	}
@@ -127,6 +135,16 @@ func Run(ctx context.Context, o Options) (*Report, error) {
 		}
 	}
 
+	if isLogMode(o.Input) {
+		st := prog.Stage("Reviewing failure triage (codex)")
+		rep.CodexReview = collectReview(ctx, o.Codex,
+			defaultString(o.CodexChannel, "codex"), "triage-clusters", reviewPromptLogTriage(rep.Brief))
+		st.Done("1 review collected")
+		rep.Verdict = synthesizeSingleVerdict(rep.CodexReview)
+		rep.EndedAt = time.Now().UTC()
+		return rep, nil
+	}
+
 	st := prog.Stage("Reviewing debug brief (codex + claude in parallel)")
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -146,6 +164,17 @@ func Run(ctx context.Context, o Options) (*Report, error) {
 	rep.Verdict = synthesizeVerdict(rep.CodexReview, rep.ClaudeReview)
 	rep.EndedAt = time.Now().UTC()
 	return rep, nil
+}
+
+func isLogMode(in Input) bool {
+	return len(in.LogPaths) > 0
+}
+
+func debugMode(in Input) string {
+	if isLogMode(in) {
+		return modeFailureTriage
+	}
+	return modeDiagnosis
 }
 
 func collectReview(ctx context.Context, ch Channel, channelName, lens, prompt string) Review {
@@ -201,6 +230,33 @@ func synthesizeVerdict(codex, claude Review) Verdict {
 	return Verdict{Confirmed: confirmed, Confidence: confidence, Summary: summary}
 }
 
+func synthesizeSingleVerdict(codex Review) Verdict {
+	if codex.Err != "" {
+		return Verdict{
+			Confirmed:  false,
+			Confidence: "low",
+			Summary:    "Failure triage could not be confirmed because the Codex review failed: " + codex.Err,
+		}
+	}
+	blocking := prefixedFindings(codex, codex.Critique.Blocking)
+	if len(blocking) > 0 {
+		return Verdict{
+			Confirmed:  false,
+			Confidence: "low",
+			Summary:    "Unresolved blocking findings:\n- " + strings.Join(blocking, "\n- "),
+		}
+	}
+	confidence := "high"
+	if len(codex.Critique.Important) > 0 {
+		confidence = "medium"
+	}
+	return Verdict{
+		Confirmed:  true,
+		Confidence: confidence,
+		Summary:    "Failure clusters and their code traces survived the independent Codex review.",
+	}
+}
+
 func prefixedFindings(r Review, findings []string) []string {
 	prefix := strings.SplitN(r.Channel, ":", 2)[0]
 	out := make([]string, 0, len(findings))
@@ -218,6 +274,13 @@ func RenderReport(r *Report) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s report\n\n", PipelineName)
 	fmt.Fprintf(&b, "- Bug: %s\n", r.Bug)
+	fmt.Fprintf(&b, "- Mode: %s\n", defaultString(r.Mode, modeDiagnosis))
+	if len(r.LogPaths) > 0 {
+		b.WriteString("- Log files:\n")
+		for _, path := range r.LogPaths {
+			fmt.Fprintf(&b, "  - %s\n", path)
+		}
+	}
 	fmt.Fprintf(&b, "- Date: %s\n", r.EndedAt.UTC().Format(time.RFC3339))
 	fmt.Fprintf(&b, "- Sweep channel: %s\n", r.SweepChannel)
 	fmt.Fprintf(&b, "- Verdict: %s confidence; confirmed=%t\n", r.Verdict.Confidence, r.Verdict.Confirmed)
@@ -233,7 +296,9 @@ func RenderReport(r *Report) string {
 	}
 	fmt.Fprintf(&b, "\n## Debug Brief\n\n%s\n", r.Brief)
 	renderReview(&b, "Codex Review", r.CodexReview)
-	renderReview(&b, "Claude Review", r.ClaudeReview)
+	if r.Mode != modeFailureTriage {
+		renderReview(&b, "Claude Review", r.ClaudeReview)
+	}
 	fmt.Fprintf(&b, "\n## Verdict\n\n- Confidence: %s\n- Confirmed: %t\n\n%s\n",
 		r.Verdict.Confidence, r.Verdict.Confirmed, r.Verdict.Summary)
 	return b.String()

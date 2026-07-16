@@ -14,6 +14,10 @@ type stubBudget struct {
 	used map[string]float64
 }
 
+type availabilityBreaker map[string]bool
+
+func (s availabilityBreaker) Broken(_ context.Context, channel string) bool { return s[channel] }
+
 func (s *stubBudget) UsedPct(_ context.Context, channel string) (float64, error) {
 	return s.used[channel], nil
 }
@@ -276,6 +280,29 @@ func TestRoute_NonFlooredUnchanged(t *testing.T) {
 	}
 	if dec.Floor != "local" {
 		t.Fatalf("floor = %q, want local (no floor)", dec.Floor)
+	}
+}
+
+func TestNextAvailableFallbackRechecksCapsAndBreakers(t *testing.T) {
+	r := newRouter(
+		[]config.Rule{{Verb: "pr.title", Use: "ollama:small", Fallback: []string{"claude:haiku", "codex:small"}}},
+		config.BudgetCaps{
+			Claude: config.ChannelCap{CapPct: 80},
+			Codex:  config.ChannelCap{CapPct: 80},
+		},
+		map[string]float64{"claude": 90, "codex": 20},
+	)
+	decision, err := r.Route(context.Background(), Request{Verb: "pr.title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, ok := r.NextAvailableFallback(context.Background(), decision)
+	if !ok || target != (ChannelModel{Channel: "codex", Model: "small"}) {
+		t.Fatalf("next fallback = %+v, %t; want codex:small", target, ok)
+	}
+	r.Breaker = availabilityBreaker{"codex": true}
+	if target, ok := r.NextAvailableFallback(context.Background(), decision); ok {
+		t.Fatalf("circuit-open fallback returned as available: %+v", target)
 	}
 }
 
