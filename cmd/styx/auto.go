@@ -278,15 +278,26 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 	}
 
 	r.RunShip = func(ctx context.Context, rr *pipeline.Runner) (string, bool, error) {
-		res, err := execute.Ship(ctx, execute.ShipOptions{
+		opts := execute.ShipOptions{
 			ProjectPath: proj.Path,
 			Branch:      rr.State.Branch,
 			NoPR:        noPR,
 			NoPush:      noPush,
 			Goal:        rr.State.Goal,
-		})
+		}
+		// Draft only when this invocation will actually publish a PR. In
+		// particular, --no-pr and --no-push stay completely model-free.
+		if !noPR && !noPush {
+			draft := draftPullRequest(ctx, a, proj, rr.State)
+			opts.PRTitle, opts.PRBody = draft.Title, draft.Body
+			opts.Draft, opts.Labels = draft.Draft, draft.Labels
+		}
+		res, err := execute.Ship(ctx, opts)
 		if err != nil {
 			return "", false, err
+		}
+		for _, metadataErr := range res.MetadataErrors {
+			logStatus("PR metadata warning: %s", metadataErr)
 		}
 		return res.PRURL, res.Pushed, nil
 	}

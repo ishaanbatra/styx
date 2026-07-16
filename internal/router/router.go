@@ -197,6 +197,33 @@ func (r *Router) Route(ctx context.Context, req Request) (Decision, error) {
 	}, nil
 }
 
+// NextAvailableFallback returns the first floor-clearing target after the
+// decision's chosen target that is currently within budget and circuit-closed.
+// Callers use this at escalation time so a successful initial route cannot
+// become a back door around caps or breakers while the primary is running.
+func (r *Router) NextAvailableFallback(ctx context.Context, decision Decision) (ChannelModel, bool) {
+	start := 0
+	for i, target := range decision.Fallback {
+		if target.Channel == decision.Channel && target.Model == decision.Model {
+			start = i + 1
+			break
+		}
+	}
+	acceptable := make(map[string]bool, len(decision.TierPlan.Acceptable))
+	for _, target := range decision.TierPlan.Acceptable {
+		acceptable[target] = true
+	}
+	for _, target := range decision.Fallback[start:] {
+		if len(acceptable) > 0 && !acceptable[cmStr(target)] {
+			continue
+		}
+		if !r.unavailable(ctx, target.Channel) {
+			return target, true
+		}
+	}
+	return ChannelModel{}, false
+}
+
 // cmStr renders a ChannelModel as "channel:model" (or bare channel when Model is empty).
 func cmStr(c ChannelModel) string {
 	if c.Model == "" {

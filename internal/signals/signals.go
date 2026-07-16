@@ -27,6 +27,7 @@ const (
 	SigComplex     = "complex"
 	SigInteractive = "interactive"
 	SigDebug       = "debug"
+	SigClerical    = "clerical"
 )
 
 // Extract turns (verb, args, project) into a deduplicated, sorted set of signals.
@@ -42,6 +43,8 @@ func Extract(verb string, args []string, proj config.Project) []string {
 	switch verb {
 	case "build":
 		add(SigInteractive)
+	case "pr.title", "pr.body":
+		add(SigClerical)
 	case "grunt":
 		if len(joined) > 0 && len(joined) < trivialMaxChars {
 			add(SigTrivial)

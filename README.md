@@ -158,6 +158,18 @@ restarting the session.
 | `auto --resume <run-id>` | Resume an interrupted pipeline |
 | `execute <plan-file>` | Apply a plan non-interactively via the `implement` route (Codex for well-scoped plans, Claude for `complex` ones) |
 
+When `auto` reaches ship, styx derives a grounded PR context from pipeline
+state and the branch diff, then drafts the title and body as two bounded prose
+microtasks. Each uses local `ollama:qwen2.5-coder:7b`, may escalate once to
+`claude:haiku` only while that route is within budget and circuit-closed, and
+otherwise uses deterministic text. Test/review results, including skipped
+stages and their reasons, remain pipeline-owned facts; models cannot override
+them. Risky changes or repeated test/review attempts create a draft PR, and
+allowlisted labels are applied best-effort after creation. `--no-pr` and
+`--no-push` skip PR drafting entirely, so those modes make no drafting calls.
+Complex goals, deterministic risk flags, or unusually large diffs raise the
+drafting floor to Claude Sonnet with Codex fallback instead of using local prose.
+
 ### Context + inspection
 
 | Verb | What it does |
@@ -252,6 +264,11 @@ The `map-impact` rule uses the same pin and fallback chain; its missing-rule
 migration is likewise idempotent and preserves existing customized routing.
 The `cross-repo` rule follows the same pattern; existing routing files receive
 it idempotently without replacing a customized `cross-repo` target.
+The `pr.title` and `pr.body` rules use local `ollama:qwen2.5-coder:7b` with a
+single `claude:haiku` fallback for ordinary changes, plus a preceding
+`complex` rule using Claude Sonnet with Codex fallback. Startup and
+`styx upgrade` add either missing rule group without replacing an existing
+customized PR-drafting route.
 
 ## Deps
 

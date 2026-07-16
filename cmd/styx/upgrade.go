@@ -12,45 +12,48 @@ func cmdUpgrade() error {
 	if err != nil {
 		return err
 	}
-	n, injected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, deadCodeInjected, mapImpactInjected, crossRepoInjected, agyPinned, err := config.UpgradeRoutingFile(p)
+	result, err := config.UpgradeRoutingFile(p)
 	if err != nil {
 		return err
 	}
-	if n == 0 && !injected && !fableRestored && !taskCapInjected && !hostInjected && !watchInjected && !debugInjected && !deadCodeInjected && !mapImpactInjected && !crossRepoInjected && !agyPinned {
-		fmt.Println("routing.toml already up to date (agy model pin + implement/debug/dead-code/map-impact/cross-repo verbs + fable tier + conductor host/task cap + watch config present).")
+	if !result.Changed() {
+		fmt.Println("routing.toml already up to date (agy model pin + implement/debug/dead-code/map-impact/cross-repo/PR-drafting verbs + fable tier + conductor host/task cap + watch config present).")
 		return nil
 	}
-	if n > 0 {
-		fmt.Printf("Migrated %d rule reference(s) from gemini-cli to agy.\n", n)
+	if result.GeminiRewrites > 0 {
+		fmt.Printf("Migrated %d rule reference(s) from gemini-cli to agy.\n", result.GeminiRewrites)
 	}
-	if injected {
+	if result.ImplementInjected {
 		fmt.Println("Added the implement verb (codex implements from a plan, claude fallback).")
 	}
-	if fableRestored {
+	if result.FableRestored {
 		fmt.Println("Restored the fable tier (suspension lifted; fable now maps to fable).")
 	}
-	if taskCapInjected {
+	if result.TaskCapInjected {
 		fmt.Println("Seeded [conductor] max_background_tasks = 4.")
 	}
-	if hostInjected {
+	if result.HostInjected {
 		fmt.Println("Seeded [conductor] host = \"claude\".")
 	}
-	if watchInjected {
+	if result.WatchInjected {
 		fmt.Println("Seeded [watch] stall_threshold_seconds = 90, interval_seconds = 15, ollama_enabled = true.")
 	}
-	if debugInjected {
+	if result.DebugInjected {
 		fmt.Println("Added ultraFerdDebug routing (agy sweep, codex + claude reviews).")
 	}
-	if deadCodeInjected {
+	if result.DeadCodeInjected {
 		fmt.Println("Added dead-code routing (agy sweep, claude/codex fallback).")
 	}
-	if mapImpactInjected {
+	if result.MapImpactInjected {
 		fmt.Println("Added map-impact routing (agy sweep, claude/codex fallback).")
 	}
-	if crossRepoInjected {
+	if result.CrossRepoInjected {
 		fmt.Println("Added cross-repo routing (agy multi-root sweep, claude/codex fallback).")
 	}
-	if agyPinned {
+	if result.PRDraftInjected {
+		fmt.Println("Added local PR title/body drafting with a haiku fallback.")
+	}
+	if result.AgyPinned {
 		fmt.Println("Pinned agy routes to Gemini 3.1 Pro (High).")
 	}
 	fmt.Printf("Backup saved to %s/routing.v0.1.toml.bak\n", "~/.config/styx")

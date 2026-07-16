@@ -111,3 +111,39 @@ func TestDefaultRoutingReadSweepRules(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultRoutingPRDraftRules(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(defaultRoutingTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := config.LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := router.FromConfig(routing, nil)
+	for _, verb := range []string{"pr.title", "pr.body"} {
+		t.Run(verb, func(t *testing.T) {
+			got, err := r.Route(context.Background(), router.Request{Verb: verb})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Channel != "ollama" || got.Model != "qwen2.5-coder:7b" {
+				t.Errorf("decision = %+v", got)
+			}
+			if len(got.Fallback) != 1 || got.Fallback[0].Channel != "claude" || got.Fallback[0].Model != "haiku" {
+				t.Errorf("fallback = %+v", got.Fallback)
+			}
+		})
+		t.Run(verb+" complex", func(t *testing.T) {
+			got, err := r.Route(context.Background(), router.Request{Verb: verb, Signals: []string{"complex"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Channel != "claude" || got.Model != "sonnet" || len(got.Fallback) != 1 || got.Fallback[0].Channel != "codex" {
+				t.Errorf("complex decision = %+v", got)
+			}
+		})
+	}
+}

@@ -157,6 +157,40 @@ func TestEnsureCrossRepoRule(t *testing.T) {
 	}
 }
 
+func TestEnsurePRDraftRules(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{name: "both missing", src: "[models]\nrefresh_interval_hours = 24\n"},
+		{name: "custom title preserved", src: "[[rule]]\nverb = \"pr.title\"\nuse = \"codex\"\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := EnsurePRDraftRules(tt.src)
+			if !changed {
+				t.Fatal("expected missing PR drafting rules to be injected")
+			}
+			for _, verb := range []string{"pr.title", "pr.body"} {
+				want := 2
+				if strings.Contains(tt.src, `verb = "`+verb+`"`) {
+					want = 1
+				}
+				if strings.Count(got, `verb = "`+verb+`"`) != want {
+					t.Errorf("expected %d %s rule(s):\n%s", want, verb, got)
+				}
+			}
+			if strings.Contains(tt.src, `use = "codex"`) && !strings.Contains(got, `use = "codex"`) {
+				t.Error("custom PR title rule was not preserved")
+			}
+			again, changed := EnsurePRDraftRules(got)
+			if changed || again != got {
+				t.Error("second PR drafting upgrade must be a no-op")
+			}
+		})
+	}
+}
+
 func TestEnsureAgyModelPin(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -264,32 +298,35 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, _, _, _, hostInjected, watchInjected, debugInjected, deadCodeInjected, mapImpactInjected, crossRepoInjected, agyPinned, err := UpgradeRoutingFile(routingPath)
+	result, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("expected 1 substitution, got %d", n)
+	if result.GeminiRewrites != 1 {
+		t.Errorf("expected 1 substitution, got %d", result.GeminiRewrites)
 	}
-	if !watchInjected {
+	if !result.WatchInjected {
 		t.Error("expected [watch] section to be injected on a config that lacks one")
 	}
-	if !hostInjected {
+	if !result.HostInjected {
 		t.Error("expected [conductor] host to be injected on a config that lacks one")
 	}
-	if !debugInjected {
+	if !result.DebugInjected {
 		t.Error("expected debug rules to be injected on a pre-debug config")
 	}
-	if !deadCodeInjected {
+	if !result.DeadCodeInjected {
 		t.Error("expected dead-code rule to be injected on an old config")
 	}
-	if !mapImpactInjected {
+	if !result.MapImpactInjected {
 		t.Error("expected map-impact rule to be injected on an old config")
 	}
-	if !crossRepoInjected {
+	if !result.CrossRepoInjected {
 		t.Error("expected cross-repo rule to be injected on an old config")
 	}
-	if !agyPinned {
+	if !result.PRDraftInjected {
+		t.Error("expected PR drafting rules to be injected on an old config")
+	}
+	if !result.AgyPinned {
 		t.Error("expected migrated agy route to receive the model pin")
 	}
 	// Backup exists
@@ -316,6 +353,11 @@ use  = "gemini:flash"
 	if !strings.Contains(string(b), `verb = "cross-repo"`) {
 		t.Errorf("post-upgrade file missing cross-repo: %s", b)
 	}
+	for _, verb := range []string{"pr.title", "pr.body"} {
+		if !strings.Contains(string(b), `verb = "`+verb+`"`) {
+			t.Errorf("post-upgrade file missing %s: %s", verb, b)
+		}
+	}
 }
 
 func TestUpgrade_AgyModelPinRoundTrip(t *testing.T) {
@@ -330,11 +372,11 @@ fallback = ["claude:sonnet"]
 		t.Fatal(err)
 	}
 
-	_, _, _, _, _, _, _, _, _, _, pinned, err := UpgradeRoutingFile(routingPath)
+	result, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !pinned {
+	if !result.AgyPinned {
 		t.Fatal("expected upgrade to pin the unpinned agy route")
 	}
 	upgraded, err := os.ReadFile(routingPath)
@@ -359,11 +401,11 @@ fallback = ["claude:sonnet"]
 		t.Errorf("backup = %q, want original %q", backup, original)
 	}
 
-	_, _, _, _, _, _, _, _, _, _, pinnedAgain, err := UpgradeRoutingFile(routingPath)
+	result, err = UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pinnedAgain {
+	if result.AgyPinned {
 		t.Fatal("second upgrade must be a no-op")
 	}
 }

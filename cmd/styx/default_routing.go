@@ -101,6 +101,29 @@ verb = "cross-repo"
 use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet", "codex"]
 
+# ── PR drafting (bounded local prose, one cheap-cloud fallback) ──
+[[rule]]
+verb = "pr.title"
+signals = ["complex"]
+use  = "claude:sonnet"
+fallback = ["codex"]
+
+[[rule]]
+verb = "pr.title"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]
+
+[[rule]]
+verb = "pr.body"
+signals = ["complex"]
+use  = "claude:sonnet"
+fallback = ["codex"]
+
+[[rule]]
+verb = "pr.body"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]
+
 # ── grunt / think ──
 [[rule]]
 verb = "grunt"

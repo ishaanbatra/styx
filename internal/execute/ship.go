@@ -15,14 +15,18 @@ type ShipOptions struct {
 	Branch      string
 	NoPR        bool
 	NoPush      bool
+	PRTitle     string
 	PRBody      string // optional; defaults to a simple template if empty
+	Draft       bool
+	Labels      []string
 	Goal        string // used in default PR body
 }
 
 // ShipResult reports what happened.
 type ShipResult struct {
-	Pushed bool
-	PRURL  string
+	Pushed         bool
+	PRURL          string
+	MetadataErrors []string
 }
 
 // Ship pushes the branch and (unless --no-pr) opens a PR via gh.
@@ -40,14 +44,51 @@ func Ship(ctx context.Context, o ShipOptions) (ShipResult, error) {
 	if o.NoPR {
 		return res, nil
 	}
-	prCmd := exec.CommandContext(ctx, "gh", "pr", "create", "--fill", "--body", prBody(o))
+	title := strings.TrimSpace(o.PRTitle)
+	if title == "" {
+		title = strings.TrimSpace(o.Goal)
+	}
+	if title == "" {
+		title = "Update project"
+	}
+	args := []string{"pr", "create", "--title", title, "--body", prBody(o)}
+	if o.Draft {
+		args = append(args, "--draft")
+	}
+	prCmd := exec.CommandContext(ctx, "gh", args...)
 	prCmd.Dir = o.ProjectPath
 	out, err := prCmd.CombinedOutput()
 	if err != nil {
-		// gh missing or unauthenticated -> degrade gracefully.
+		// A resumed ship may find that the PR was created by the prior attempt.
+		// Recover that URL before preserving the existing graceful gh failure.
+		viewCmd := exec.CommandContext(ctx, "gh", "pr", "view", o.Branch, "--json", "url", "--jq", ".url")
+		viewCmd.Dir = o.ProjectPath
+		viewOut, viewErr := viewCmd.CombinedOutput()
+		if viewErr != nil {
+			return res, nil
+		}
+		res.PRURL = extractPRURL(string(viewOut))
+	} else {
+		res.PRURL = extractPRURL(string(out))
+	}
+	if res.PRURL == "" || len(o.Labels) == 0 {
 		return res, nil
 	}
-	res.PRURL = extractPRURL(string(out))
+	labelArgs := []string{"pr", "edit", res.PRURL}
+	for _, label := range o.Labels {
+		if label = strings.TrimSpace(label); label != "" {
+			labelArgs = append(labelArgs, "--add-label", label)
+		}
+	}
+	if len(labelArgs) == 3 {
+		return res, nil
+	}
+	labelCmd := exec.CommandContext(ctx, "gh", labelArgs...)
+	labelCmd.Dir = o.ProjectPath
+	if labelOut, labelErr := labelCmd.CombinedOutput(); labelErr != nil {
+		res.MetadataErrors = append(res.MetadataErrors,
+			fmt.Sprintf("apply PR labels: %v (%s)", labelErr, strings.TrimSpace(string(labelOut))))
+	}
 	return res, nil
 }
 

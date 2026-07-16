@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-16 # Slice 5 cross-repo
+last_verified: 2026-07-16 # PR microtask drafting
 ---
 
 # Styx Architecture
@@ -391,6 +391,15 @@ The `cross-repo` verb uses that same seeded agy pin and fallback chain.
 `EnsureCrossRepoRule` appends it to existing routing files when missing while
 preserving any custom rule; startup and `styx upgrade` report this migration
 separately.
+
+The `pr.title` and `pr.body` verbs seed a `complex` rule using Claude Sonnet
+with Codex fallback before the ordinary `ollama:qwen2.5-coder:7b` rule with one
+`claude:haiku` fallback. Complex goal language, deterministic risk flags, or
+diffs over 50 files / 2,000 changed lines raise the drafting floor. `EnsurePRDraftRules`
+independently appends either missing rule group and preserves customized routes. Bounded microtask callers use
+`Router.NextAvailableFallback` at the moment escalation is needed; it filters
+to the decision's capability-floor candidates and rechecks both caps and the
+circuit breaker, so validation-driven fallback cannot bypass routing safety.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -1101,6 +1110,27 @@ well-scoped work, claude for `complex` goals) and injects it into
 `execute.Options.Channel` — except claude, which is left nil so `Apply` uses its
 built-in live-streaming claude path.
 
+The ship closure only drafts when PR publication will actually run (neither
+`--no-pr` nor `--no-push`). `internal/prdraft` builds a deterministic context
+packet from pipeline state plus the default-branch diff: commits, touched paths,
+numstat, issue/test references, risk flags, allowlisted labels, and explicit
+test/review check states. A completed stage with `SkippedReason` is represented
+and rendered as skipped, never as successful. Pipeline-owned checks, draft
+policy, issue-linking lines, and core labels are not part of either model output
+schema. Ambiguous issue references render as related links rather than automatic
+closing directives, and failure to collect git evidence forces a draft PR.
+
+`cmd/styx/pr_draft.go` runs `pr.title` and `pr.body` independently through
+`internal/microtask`: primary, at most one lazily resolved fallback, then a
+deterministic static value. Strict JSON decoding, length/shape checks,
+evidence-grounding, contradiction checks, secret-like text rejection, and
+label allowlisting validate model prose. Every transport attempt writes usage;
+successful sends remain usage successes even when their prose fails validation,
+so validation cannot open an operational channel breaker. Outcomes separately
+carry validation error kinds plus `verb:<verb>`, `escalated`, and
+`static-fallback` signals as applicable, and use `<run-id>:<verb>` as a rateable
+task reference.
+
 ## Research (internal/research, internal/brief)
 
 Convergence loop: drafter (agy) drafts, critic (codex) critiques as structured
@@ -1303,7 +1333,12 @@ records a read-risk outcome.
 through that channel with `Write: true` and captures output; when nil it uses
 the built-in claude path (`--dangerously-skip-permissions -p`), which streams
 claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
-`--no-pr`/`--no-push`.
+`--no-pr`/`--no-push`. For PR publication, callers may supply drafted title,
+body, draft state, and labels, but `Ship` owns the final `gh pr create`
+arguments and appends styx attribution to the body. Label edits are best-effort
+metadata after creation: failures are reported in `MetadataErrors` without
+erasing the created or recovered PR URL. If create reports an existing PR,
+`Ship` recovers its URL with `gh pr view` before applying labels.
 
 ## Attribution (internal/attribution)
 
