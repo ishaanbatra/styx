@@ -204,6 +204,26 @@ func EnsureDebugRules(content string) (string, bool) {
 	return trimmed + "\n" + debugRulesHeader + strings.Join(missing, "\n"), true
 }
 
+const deadCodeRuleBlock = `
+# ── dead-code (agy sweep, deterministic grep, codex spot-check) ──
+[[rule]]
+verb = "dead-code"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+`
+
+var deadCodeVerbRE = regexp.MustCompile(`(?m)^\s*verb\s*=\s*"dead-code"`)
+
+// EnsureDeadCodeRule appends the dead-code routing rule when absent. Existing
+// custom rules are preserved verbatim and the operation is idempotent.
+func EnsureDeadCodeRule(content string) (string, bool) {
+	if deadCodeVerbRE.MatchString(content) {
+		return content, false
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	return trimmed + "\n" + deadCodeRuleBlock, true
+}
+
 // EnsureAgyModelPin replaces unpinned agy routing targets with the seeded
 // subscription-CLI model label. Agy remembers the user's last interactive
 // model choice, so "default" is not deterministic. Explicit custom models are
@@ -431,22 +451,23 @@ func RewriteRoutingGeminiToAgy(content string) (string, int) {
 // UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
 // injects the `implement` verb rules if missing (v0.3), restores the seeded fable
 // tier mapping (v0.4), seeds the [conductor] max_background_tasks cap (B1) and
-// interactive host, seeds the [watch] section (C5), injects ultraFerdDebug
-// rules, cleans stale budget keys, dedupes fallback arrays,
+// interactive host, seeds the [watch] section (C5), injects ultraFerdDebug and
+// dead-code rules, cleans stale budget keys, dedupes fallback arrays,
 // backs up the original to routing.v0.1.toml.bak, and atomically writes the new
 // content.
 // Returns the gemini-rule substitution count, whether implement rules were
 // injected, whether the fable tier was restored, whether the conductor task
 // cap and host were injected, whether the [watch] section was injected, and
-// whether any debug rules were injected and unpinned agy targets were pinned.
+// whether any debug rules and the dead-code rule were injected, and whether
+// unpinned agy targets were pinned.
 // Missing-file is not an error.
-func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, agyPinned bool, err error) {
+func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, deadCodeInjected, agyPinned bool, err error) {
 	b, err := os.ReadFile(routingPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, false, false, false, false, false, false, false, nil
+			return 0, false, false, false, false, false, false, false, false, nil
 		}
-		return 0, false, false, false, false, false, false, false, fmt.Errorf("read routing: %w", err)
+		return 0, false, false, false, false, false, false, false, false, fmt.Errorf("read routing: %w", err)
 	}
 	newContent, n := RewriteRoutingGeminiToAgy(string(b))
 	newContent, injected := EnsureImplementRules(newContent)
@@ -455,21 +476,22 @@ func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fab
 	newContent, host := EnsureConductorHost(newContent)
 	newContent, watch := EnsureWatchSection(newContent)
 	newContent, debug := EnsureDebugRules(newContent)
+	newContent, deadCode := EnsureDeadCodeRule(newContent)
 	newContent, pinned := EnsureAgyModelPin(newContent)
 	// Use content comparison: skip write if nothing changed at all
 	if newContent == string(b) {
-		return 0, false, false, false, false, false, false, false, nil
+		return 0, false, false, false, false, false, false, false, false, nil
 	}
 	backup := filepath.Join(filepath.Dir(routingPath), "routing.v0.1.toml.bak")
 	if err := os.WriteFile(backup, b, 0o644); err != nil {
-		return 0, false, false, false, false, false, false, false, fmt.Errorf("write backup %s: %w", backup, err)
+		return 0, false, false, false, false, false, false, false, false, fmt.Errorf("write backup %s: %w", backup, err)
 	}
 	tmp := routingPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
-		return 0, false, false, false, false, false, false, false, fmt.Errorf("write tmp: %w", err)
+		return 0, false, false, false, false, false, false, false, false, fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, routingPath); err != nil {
-		return 0, false, false, false, false, false, false, false, fmt.Errorf("atomic rename: %w", err)
+		return 0, false, false, false, false, false, false, false, false, fmt.Errorf("atomic rename: %w", err)
 	}
-	return n, injected, fable, taskCap, host, watch, debug, pinned, nil
+	return n, injected, fable, taskCap, host, watch, debug, deadCode, pinned, nil
 }

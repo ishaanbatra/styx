@@ -83,6 +83,12 @@ effort = "high"
 verb = "debug.review.claude"
 use  = "claude:sonnet"
 
+# ── dead-code (agy sweep, deterministic grep, codex spot-check) ──
+[[rule]]
+verb = "dead-code"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+
 # ── grunt / think ──
 [[rule]]
 verb = "grunt"

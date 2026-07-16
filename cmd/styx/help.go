@@ -32,6 +32,8 @@ VERBS
                              to code, then run one Codex review (no code edits)
   debug --review-only <brief> [bug]
                              Re-run only the cheap reviews for an existing brief
+  dead-code [path]           Sweep for unused files/functions/imports, verify
+                             symbols, then Codex spot-check confirmed findings
   deep-research <query>     Open Gemini + ChatGPT in browser; synthesis template
   plan <description>        Draft an implementation plan using the latest brief
   build [target]            Interactive Claude/Codex session in the project dir

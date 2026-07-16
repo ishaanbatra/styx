@@ -84,3 +84,25 @@ func TestDefaultRouting_DebugRules(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultRoutingDeadCodeRule(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(defaultRoutingTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := config.LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := router.FromConfig(routing, nil).Route(context.Background(), router.Request{Verb: "dead-code"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Channel != "agy" || got.Model != "Gemini 3.1 Pro (High)" {
+		t.Errorf("dead-code decision = %+v", got)
+	}
+	if len(got.Fallback) != 2 || got.Fallback[0].Channel != "claude" || got.Fallback[0].Model != "sonnet" || got.Fallback[1].Channel != "codex" {
+		t.Errorf("dead-code fallback = %+v", got.Fallback)
+	}
+}

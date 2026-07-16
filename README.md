@@ -143,6 +143,7 @@ restarting the session.
 | `debug --log <file...> [-- <failure description>]` | Failure-triage entry mode: agy reads one or more log/test-output files by path, clusters failures by root cause, and traces each cluster to repository code; one Codex review checks the clusters and traces. Log contents are never embedded in the prompt |
 | `debug --test <name> --file <hint> <bug>` | Add a failing-test name and repeatable starting-file hints to the normal diagnosis sweep |
 | `debug --review-only <brief> [bug]` | Skip the expensive sweep and run only the two short reviews plus verdict against an existing brief |
+| `dead-code [path]` | Agy on pinned Gemini 3.1 Pro (High) sweeps the repository for unused files, functions, and imports. Styx whole-word-checks every valid reported symbol outside its definition site, marks it CONFIRMED/REFUTED, then runs one Codex spot-check over up to five confirmed findings. Read-only; report saved under `styx/dead-code/` |
 
 ### Autonomy
 
@@ -218,6 +219,7 @@ timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 - `<project>/.claude/context.md` — rendered intel (Claude Code auto-loads this)
 - `<project>/.styx/runs/<run-id>/` — pipeline state per run
 - `<project>/styx/debug/` — recoverable ultraFerdDebug briefs and final reports (overridable with the project's `debug_dir`)
+- `<project>/styx/dead-code/` — atomic dead-code sweep, deterministic verification, and Codex spot-check reports
 - Secrets live in the platform secret store (macOS Keychain service `styx` /
   Windows Credential Manager target prefix `styx/`).
 
@@ -239,6 +241,9 @@ missing debug rules and upgrades `agy:default` targets to the pin without
 overwriting explicitly selected custom models. Log mode still routes its sweep
 through `debug.sweep`, but intentionally stops after the single Codex review;
 the full Codex+Claude review remains exclusive to the normal diagnosis mode.
+The `dead-code` rule uses the same agy pin with `claude:sonnet` then `codex`
+fallbacks. Existing routing files receive it idempotently during startup or
+`styx upgrade`; an existing customized `dead-code` target is preserved.
 
 ## Deps
 

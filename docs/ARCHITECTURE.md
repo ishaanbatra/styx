@@ -48,13 +48,15 @@ fallback chain when a channel is over its message caps.
 
 ## cmd/styx — verbs and app wiring
 
-One file per verb (`research.go`, `debug.go`, `plan.go`, `build.go`, `review.go`,
+One file per verb (`research.go`, `debug.go`, `dead_code.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
 `learn.go`, `repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
 
 - `main.go` — `parseGlobalFlags` strips `--quiet`/`--verbose` plus
   `--project <alias>` / `--dir <path>` / `--host claude|codex`;
+  help and version aliases dispatch before `ensureFirstRun`, so informational
+  queries never create or migrate user configuration;
   `ensureFirstRun` seeds config; bare
   `styx` constructs the app and calls `cmdLaunch(a)`, handing off to the
   configured conductor host (see "Launcher" below) — `styx repl` is the only way
@@ -68,8 +70,8 @@ Shared pieces:
   visible only with `--verbose` and can never change the command result.
 - `dispatch.go` — verb switch in two tiers: verbs that don't need the full app
   run first (including `help`/`-h`/`--help` and `version`/`--version`/`-V`,
-  which prints `"styx " + styxDisplayVersion()` and returns immediately — no
-  app, no conductor); the rest construct `app{routing, tracker, router, channels,
+  which print without first-run setup and return immediately — no app, no
+  conductor); the rest construct `app{routing, tracker, router, channels,
   progress}` via `loadApp()`. `loadApp()` runs a best-effort model refresh when
   `models.json` is stale and reloads routing if a de-pin migration ran, then
   shares the budget tracker with the router for both cap checks and
@@ -374,6 +376,11 @@ missing rules into existing configs and preserves customized role targets.
 `EnsureAgyModelPin` upgrades unpinned `agy:default` routing targets while
 leaving explicit custom agy models alone; both first-run and `styx upgrade`
 surface whether that migration changed the routing file.
+
+The `dead-code` verb routes to `agy:Gemini 3.1 Pro (High)` with
+`claude:sonnet` then `codex` fallbacks. `EnsureDeadCodeRule` appends that rule
+to existing routing files only when absent, preserving a user's custom rule;
+the startup and explicit-upgrade paths report the injection separately.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -1165,6 +1172,46 @@ the auto pipeline lock or `state.json`, so its state shape cannot affect
 `auto --resume`. `debug --review-only <brief> [bug]` is the normal mode's
 recovery path: it skips the sweep and reruns only the two cheap reviews plus
 verdict; combining it with `--log` is rejected.
+
+## Dead code (internal/deadcode, cmd/styx/dead_code.go)
+
+`styx dead-code [path]` performs one read-only repository sweep for unused
+files, functions, and imports. The optional path must resolve to a regular file
+or directory inside the active project (including after symlink resolution);
+it scopes agy's attention while verification still searches the whole project
+for callers. The command routes the sweep through `dead-code`, passes the
+project as `WorkingDir`, forwards the pinned agy model, and never sets
+`channel.Request.Write`.
+
+The sweep prompt requires one JSON object whose `findings` entries carry a
+`file|function|import` kind, exact searchable symbol, repo-relative definition
+path and 1-based line, and rationale. `ParseFindings` accepts strict JSON,
+fenced JSON, or an embedded object defensively. It validates each entry
+independently, caps the accepted input at 500, and turns malformed output,
+invalid entries, missing definitions, and scan errors into report warnings;
+garbage never panics or aborts an otherwise completed sweep.
+
+Because agy's headless CLI can write despite the read-only prompt, `cmdDeadCode`
+reuses `gitTreeState`/`treeStateDiff`: it snapshots immediately before the
+sweep and compares in the pathway's `AfterSweep` hook immediately after agy
+returns, before deterministic verification or Codex. New porcelain entries are
+narrated and rendered as `SweepDirtied` warnings.
+
+`Verify` walks the project once (excluding `.git` and binary files), searches
+each accepted symbol using Unicode identifier boundaries, and excludes only
+the reported definition file+line. No remaining whole-word reference marks a
+finding `CONFIRMED`; one or more references conservatively marks it `REFUTED`,
+with deterministic sorted `path:line` evidence. If any findings are confirmed,
+exactly one read-only Codex turn receives the first five as a bounded sample and
+checks reflection, registration, generated uses, build tags, interfaces, and
+entry-point semantics. With no confirmed findings the review is skipped;
+review failure is retained in the report instead of discarding verification.
+
+The final report includes warnings, tree-guard results, every deterministic
+status/reference, the Codex response or failure, and raw agy JSON. It is written
+atomically through `brief.WriteReport` under `styx/dead-code/`. Sweep and review
+calls share a run id in budget usage, and completion records a read-risk
+outcome. The pathway has no pipeline lock or resumable state.
 
 ## Execute (internal/execute)
 
@@ -2173,6 +2220,7 @@ should rotate the migrated keys.
 <project>/.styx/runs/<run-id>/state.json    pipeline state
 <project>/styx/research, styx/debug, styx/plans
                                              briefs + debug reports + plans (per-project config)
+<project>/styx/dead-code                    dead-code verification reports (fixed pathway dir)
 ```
 
 ## Testing conventions
