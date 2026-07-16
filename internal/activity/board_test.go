@@ -39,11 +39,26 @@ func TestBoardDone(t *testing.T) {
 
 func TestBoardRecentCap(t *testing.T) {
 	b := NewBoard()
+	base := time.Date(2026, 7, 15, 9, 0, 0, 0, time.UTC)
+	now := base
+	b.SetClock(func() time.Time { return now })
 	for i := 0; i < recentCap+5; i++ {
-		b.Record("claude", "event")
+		b.Record("claude", "event "+time.Duration(i).String())
+		now = now.Add(time.Second)
 	}
 	if got := len(b.Recent("claude")); got != recentCap {
 		t.Fatalf("recent cap = %d, want %d", got, recentCap)
+	}
+	events := b.RecentEvents("claude")
+	if len(events) != recentCap {
+		t.Fatalf("recent event cap = %d, want %d", len(events), recentCap)
+	}
+	if !events[0].At.Equal(base.Add(5*time.Second)) || !events[len(events)-1].At.Equal(base.Add(24*time.Second)) {
+		t.Fatalf("timestamped event order/cap wrong: first=%v last=%v", events[0].At, events[len(events)-1].At)
+	}
+	lines := b.Recent("claude")
+	if lines[0] != events[0].Summary || lines[len(lines)-1] != events[len(events)-1].Summary {
+		t.Fatalf("Recent must derive summaries from events: lines=%v events=%v", lines, events)
 	}
 }
 

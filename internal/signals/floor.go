@@ -58,6 +58,7 @@ func TierOf(channel, model string) Tier {
 var signalFloor = map[string]Tier{
 	SigComplex: TierSonnet,
 	SigDeep:    TierSonnet,
+	SigDebug:   TierSonnet,
 }
 
 // Floor returns the highest minimum tier required by any of the given signals,

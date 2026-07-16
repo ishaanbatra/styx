@@ -797,6 +797,7 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 			Model:    s.watchModel(),
 			Board:    s.board,
 			Interval: s.watchInterval(),
+			Stall:    s.watchStall(),
 		}
 		go w.Run(s.ctx)
 	}
@@ -808,6 +809,17 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 			err := cmdResearch(ctx, a, nil, []string{arg})
 			if err == nil {
 				indexNewestBrief(context.Background(), s.mem(), s.emb, filepath.Join(s.proj().Path, s.proj().ResearchDir))
+			}
+			return err
+		},
+		"debug": func(ctx context.Context, arg string) error {
+			err := cmdDebug(ctx, a, nil, []string{arg})
+			if err == nil {
+				debugDir := s.proj().DebugDir
+				if debugDir == "" {
+					debugDir = "styx/debug"
+				}
+				indexNewestReport(context.Background(), s.mem(), s.emb, filepath.Join(s.proj().Path, debugDir))
 			}
 			return err
 		},
@@ -862,6 +874,18 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 
 // indexNewestBrief stores the freshest research brief in memory (best-effort).
 func indexNewestBrief(ctx context.Context, mem *memory.Store, emb memory.Embedder, dir string) {
+	indexNewestArtifact(ctx, mem, emb, dir, "", "pipeline/research:")
+}
+
+// indexNewestReport stores the freshest ultraFerdDebug report in memory.
+func indexNewestReport(ctx context.Context, mem *memory.Store, emb memory.Embedder, dir string) {
+	indexNewestArtifact(ctx, mem, emb, dir, "-report.md", "pipeline/debug:")
+}
+
+func indexNewestArtifact(ctx context.Context, mem *memory.Store, emb memory.Embedder, dir, suffix, sourcePrefix string) {
+	if mem == nil || emb == nil {
+		return
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil || len(entries) == 0 {
 		return
@@ -869,6 +893,9 @@ func indexNewestBrief(ctx context.Context, mem *memory.Store, emb memory.Embedde
 	var newest os.DirEntry
 	var newestTime time.Time
 	for _, e := range entries {
+		if suffix != "" && !strings.HasSuffix(e.Name(), suffix) {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil || e.IsDir() {
 			continue
@@ -893,7 +920,7 @@ func indexNewestBrief(ctx context.Context, mem *memory.Store, emb memory.Embedde
 		return
 	}
 	_, _ = mem.Add(ctx, memory.Item{
-		Kind: memory.KindBrief, Text: text, Source: "pipeline/research:" + newest.Name(), Embedding: vec,
+		Kind: memory.KindBrief, Text: text, Source: sourcePrefix + newest.Name(), Embedding: vec,
 	})
 }
 

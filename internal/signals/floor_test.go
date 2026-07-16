@@ -40,6 +40,7 @@ func TestFloor(t *testing.T) {
 		{"lang only -> no floor", []string{"lang:go"}, TierLocal},
 		{"complex -> sonnet floor", []string{SigComplex}, TierSonnet},
 		{"deep -> sonnet floor", []string{SigDeep}, TierSonnet},
+		{"debug -> sonnet floor", []string{SigDebug}, TierSonnet},
 		{"complex + lang -> sonnet", []string{SigComplex, "lang:go"}, TierSonnet},
 		{"complex + deep -> highest (sonnet)", []string{SigComplex, SigDeep}, TierSonnet},
 	}

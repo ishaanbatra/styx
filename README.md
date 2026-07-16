@@ -133,6 +133,14 @@ restarting the session.
 | `build [target]` | Auto-refresh intel, write `.claude/context.md`, launch Claude interactively |
 | `review` | Parallel Claude + Codex diff review, synthesized |
 
+### Debugging
+
+| Verb | What it does |
+|---|---|
+| `debug <bug>` | **ultraFerdDebug**: agy sweeps the repository into a cited debug brief, then Codex and Claude independently review it and styx writes a deterministic diagnosis report. Diagnosis only; no code edits |
+| `debug --test <name> --log <path> --file <hint> <bug>` | Add a failing test, a capped log/stack file, and repeatable starting-file hints to the sweep |
+| `debug --review-only <brief> [bug]` | Skip the expensive sweep and run only the two short reviews plus verdict against an existing brief |
+
 ### Autonomy
 
 | Verb | What it does |
@@ -175,7 +183,7 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 | `route --explain <verb> "..."` | Why did styx pick that channel? |
 | `project ls/add/rm/rename/scan` | Manage project registry |
 | `project scan [root] [--depth N]` | Walk down from `root` (default `~`), find git repos, bulk-register them (prunes node_modules/vendor; depth default 4) |
-| `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0) exposing fourteen tools to OpenClaw, Claude Code, and any MCP host (see [`docs/openclaw-integration.md`](docs/openclaw-integration.md)): `route` — pick a channel for a task (budget-aware, capability-floor-aware, with fallback chain); `budget_status` — per-channel usage/limits/cooldowns; `record_usage` — log usage a consumer ran outside styx; `channel_health` — circuit-breaker state, recent failures, error-kind buckets, cooldown; `get_intel` — read the per-project codebase intel index (or one section), with staleness; `refresh_intel` — rebuild that index; `recall` — semantic top-k recall over project + global long-term memory; plus the conductor dispatch surface: `dispatch` — send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task, awaited by default (or, with `background: true`, as a task you `collect` later); `dispatch_parallel` — fan out an array of dispatches at once, awaited together, per-task results in input order; `thread_status` — list this project's persistent agent threads with turn counts and context usage, plus live/unclaimed background tasks; `collect` — fetch background dispatch results by `task_id` or everything finished (claims them); `memory_save` — persist a durable fact, decision, todo, or routing preference to styx memory; `pipeline_run` — run a styx pipeline (research/review/intel/auto), with a confirm-token handshake for `auto`'s ship step; `rate_dispatch` — rate a recent dispatch outcome good/bad to feed styx's learning loop |
+| `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0) exposing fourteen tools to OpenClaw, Claude Code, and any MCP host (see [`docs/openclaw-integration.md`](docs/openclaw-integration.md)): `route` — pick a channel for a task (budget-aware, capability-floor-aware, with fallback chain); `budget_status` — per-channel usage/limits/cooldowns; `record_usage` — log usage a consumer ran outside styx; `channel_health` — circuit-breaker state, recent failures, error-kind buckets, cooldown; `get_intel` — read the per-project codebase intel index (or one section), with staleness; `refresh_intel` — rebuild that index; `recall` — semantic top-k recall over project + global long-term memory; plus the conductor dispatch surface: `dispatch` — send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task, awaited by default (or, with `background: true`, as a task you `collect` later); `dispatch_parallel` — fan out an array of dispatches at once, awaited together, per-task results in input order; `thread_status` — list this project's persistent agent threads with turn counts and context usage, plus live/unclaimed background tasks; `collect` — fetch results by `task_id` or sweep everything finished, or set `wait: true` (optionally `timeout_s`) to block with live heartbeats until one task or all currently-outstanding tasks finish; `memory_save` — persist a durable fact, decision, todo, or routing preference to styx memory; `pipeline_run` — run a styx pipeline (research/review/intel/auto/debug), with a confirm-token handshake only for `auto`'s ship step; `rate_dispatch` — rate a recent dispatch outcome good/bad to feed styx's learning loop |
 | `hook <event>` | Internal plumbing — the route-gate hook the launcher installs into conductor sessions (Claude Code invokes it, not you); denies inline WebSearch/WebFetch/Task/external-curl + MCP web tools and redirects to dispatch/pipeline_run, per `[conductor] route_gate` |
 | `migrate-secrets` | Move env-var secrets to the platform secret store (macOS Keychain / Windows Credential Manager) |
 | `update` | Replace styx with the latest GitHub release after SHA-256 verification; Scoop/WinGet installs stay package-manager-owned |
@@ -188,9 +196,12 @@ host's UI as progress notifications — no tokens, no polling — and the
 findings return inline the moment the work finishes. `dispatch_parallel`
 does the same for several agents at once. `background: true` detaches
 instead; `styx watch` in a second terminal is live either way. Interrupting
-an awaited call (Esc) detaches it — the agents keep working and `collect`
-fetches their results. For very long dispatches, raise your MCP client's
-tool-call timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
+an awaited call (Esc) detaches it — the agents keep working. When background
+work is needed, call `collect` with `wait: true` instead of polling; it blocks,
+streams the same heartbeats, and returns the result inline. A `timeout_s`
+expiry or Esc detaches only the wait, leaving the tasks running and
+collectible. For very long dispatches, raise your MCP client's tool-call
+timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 
 ## Configuration
 
@@ -203,8 +214,14 @@ tool-call timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 - `~/.config/styx/state/intel/<id>/index.json` — per-project codebase intel, keyed by stable project id
 - `<project>/.claude/context.md` — rendered intel (Claude Code auto-loads this)
 - `<project>/.styx/runs/<run-id>/` — pipeline state per run
+- `<project>/styx/debug/` — recoverable ultraFerdDebug briefs and final reports (overridable with the project's `debug_dir`)
 - Secrets live in the platform secret store (macOS Keychain service `styx` /
   Windows Credential Manager target prefix `styx/`).
+
+The seeded routing table uses `debug.sweep` for agy with
+`claude:sonnet` fallback, `debug.review.codex` for the high-effort Codex pass,
+and `debug.review.claude` for the Claude Sonnet pass. `styx upgrade` injects
+missing debug rules without overwriting customized ones.
 
 ## Deps
 

@@ -22,6 +22,7 @@ type Project struct {
 	Language     string   `toml:"language"`
 	Description  string   `toml:"description,omitempty"`
 	ResearchDir  string   `toml:"research_dir,omitempty"`
+	DebugDir     string   `toml:"debug_dir,omitempty"`
 	PlansDir     string   `toml:"plans_dir,omitempty"`
 	DefaultVerbs []string `toml:"default_verbs,omitempty"`
 }

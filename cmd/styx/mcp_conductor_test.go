@@ -277,6 +277,28 @@ func TestPipelineRunRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestPipelineRunDebug(t *testing.T) {
+	fx := newDebugCommandFixture(t)
+	// Pre-seed the manager cache so the post-run best-effort indexing path does
+	// not need to construct agent adapters; cmdDebug itself is still exercised.
+	d := &conductorDeps{
+		a: fx.a, gate: shipgate.New(shipgate.ModeOff),
+		managers: map[string]*managed{fx.projectID: {}},
+	}
+	res, err := callTool(t, d, "pipeline_run", map[string]any{
+		"pipeline": "debug", "arg": "panic in cache",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["done"] != true || res["pipeline"] != "debug" {
+		t.Fatalf("pipeline_run debug result = %v", res)
+	}
+	if len(fx.sweep.snapshot()) != 1 || len(fx.codex.snapshot()) != 1 || len(fx.claude.snapshot()) != 1 {
+		t.Fatal("pipeline_run debug did not execute all three roles")
+	}
+}
+
 // TestPipelineRunIntelResolvesCwdProject proves the intel branch resolves the
 // server's cwd project (the Task 6 launcher starts `styx mcp` in the project
 // dir) the same way research/review/auto resolve theirs internally, instead of

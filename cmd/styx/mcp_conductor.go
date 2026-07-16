@@ -116,6 +116,7 @@ func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 			Model:    a.routing.Brain.Model,
 			Board:    board,
 			Interval: a.routing.Watch.Interval(),
+			Stall:    a.routing.Watch.StallThreshold(),
 		}
 		go w.Run(rootCtx)
 	}
@@ -755,9 +756,9 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 		{
 			Name:        "pipeline_run",
 			Serial:      true,
-			Description: "Run a styx pipeline: research | review | intel | auto. auto ships (branch→push→PR) and requires the confirm_token handshake.",
+			Description: "Run a styx pipeline: research | review | intel | auto | debug. debug is ultraFerdDebug: an agy repository sweep plus independent codex/claude review, diagnosis-only with no edits. auto ships (branch→push→PR) and requires the confirm_token handshake.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
-				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto"}},
+				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto", "debug"}},
 				"arg":           map[string]any{"type": "string"},
 				"confirm_token": map[string]any{"type": "string"},
 			}, "required": []string{"pipeline"}},
@@ -767,7 +768,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					return nil, fmt.Errorf("pipeline_run args: %w", err)
 				}
 				switch in.Pipeline {
-				case "research", "review", "intel", "auto":
+				case "research", "review", "intel", "auto", "debug":
 				default:
 					return nil, fmt.Errorf("unknown pipeline %q", in.Pipeline)
 				}
@@ -803,6 +804,21 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					} else {
 						indexNewestBrief(ctx, m.mem, d.emb, filepath.Join(proj.Path, proj.ResearchDir))
 					}
+				case "debug":
+					if err := cmdDebug(ctx, d.a, prog, []string{in.Arg}); err != nil {
+						return nil, fmt.Errorf("pipeline debug: %w", err)
+					}
+					if proj, err := resolveGlobalTarget(""); err != nil {
+						logStatus("pipeline debug: report not indexed: %v", err)
+					} else if m, err := d.managerForProject(proj); err != nil {
+						logStatus("pipeline debug: report not indexed: %v", err)
+					} else {
+						debugDir := proj.DebugDir
+						if debugDir == "" {
+							debugDir = "styx/debug"
+						}
+						indexNewestReport(ctx, m.mem, d.emb, filepath.Join(proj.Path, debugDir))
+					}
 				case "review":
 					if err := cmdReview(ctx, d.a, nil); err != nil {
 						return nil, fmt.Errorf("pipeline review: %w", err)
@@ -826,7 +842,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					}
 				}
 				return map[string]any{"pipeline": in.Pipeline, "done": true,
-					"note": "artifacts under styx/research/ and styx/plans/; runs ls for pipeline state"}, nil
+					"note": "artifacts under styx/research/, styx/debug/, and styx/plans/; runs ls for pipeline state"}, nil
 			},
 		},
 		{
@@ -859,39 +875,116 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 		},
 		{
 			Name: "collect",
-			Description: "Fetch background dispatch results. With task_id: that task's result " +
-				"(or its live status). Without: every finished-unclaimed result plus one-line " +
-				"summaries of running/queued tasks.",
+			Description: "Fetch background dispatch results. With task_id: that task's result (or its " +
+				"live status). Without task_id: every finished-unclaimed result plus one-line summaries " +
+				"of running/queued tasks. Set wait:true to BLOCK until the target task(s) — or, with no " +
+				"task_id, ALL currently-outstanding background tasks — finish, streaming live progress; " +
+				"this is how you wait on background work — never poll with timers. timeout_s caps the " +
+				"wait (default: none); on timeout the call returns current status and the tasks keep running.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
-				"task_id": map[string]any{"type": "string", "description": "task id from dispatch background:true; omit to collect everything finished"},
+				"task_id":   map[string]any{"type": "string", "description": "task id from dispatch background:true; omit to collect/await everything outstanding"},
+				"wait":      map[string]any{"type": "boolean", "description": "block until the target task(s) reach a terminal state; streams heartbeats while blocked"},
+				"timeout_s": map[string]any{"type": "integer", "description": "max seconds to block when wait:true; omit for no timeout"},
 			}},
 			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
 				var in struct {
-					TaskID string `json:"task_id"`
+					TaskID  string `json:"task_id"`
+					Wait    bool   `json:"wait"`
+					Timeout int    `json:"timeout_s"`
 				}
 				if err := json.Unmarshal(raw, &in); err != nil {
 					return nil, fmt.Errorf("collect args: %w", err)
 				}
-				if in.TaskID != "" {
+				if in.Timeout < 0 {
+					return nil, fmt.Errorf("timeout_s must be non-negative")
+				}
+
+				collectAll := func() map[string]any {
+					results := []map[string]any{}
+					pending := []string{}
+					for _, tk := range d.reg.Snapshot() {
+						switch tk.State {
+						case taskQueued, taskRunning:
+							pending = append(pending, taskLine(tk))
+						default:
+							if !tk.Claimed {
+								results = append(results, collectOne(d.reg, tk))
+							}
+						}
+					}
+					return map[string]any{"results": results, "pending": pending}
+				}
+
+				if !in.Wait {
+					if in.TaskID == "" {
+						return collectAll(), nil
+					}
 					tk, ok := d.reg.Get(in.TaskID)
 					if !ok {
 						return nil, fmt.Errorf("unknown task %q — thread_status lists live and unclaimed tasks", in.TaskID)
 					}
 					return collectOne(d.reg, tk), nil
 				}
-				results := []map[string]any{}
-				pending := []string{}
-				for _, tk := range d.reg.Snapshot() {
-					switch tk.State {
-					case taskQueued, taskRunning:
-						pending = append(pending, taskLine(tk))
-					default:
-						if !tk.Claimed {
-							results = append(results, collectOne(d.reg, tk))
+
+				ids := []string{}
+				if in.TaskID != "" {
+					if _, ok := d.reg.Get(in.TaskID); !ok {
+						return nil, fmt.Errorf("unknown task %q — thread_status lists live and unclaimed tasks", in.TaskID)
+					}
+					ids = append(ids, in.TaskID)
+				} else {
+					for _, tk := range d.reg.Snapshot() {
+						if tk.State == taskQueued || tk.State == taskRunning {
+							ids = append(ids, tk.ID)
 						}
 					}
+					if len(ids) == 0 {
+						return collectAll(), nil
+					}
 				}
-				return map[string]any{"results": results, "pending": pending}, nil
+
+				obsCtx := ctx
+				if in.Timeout > 0 {
+					var cancel context.CancelFunc
+					obsCtx, cancel = context.WithTimeout(ctx, time.Duration(in.Timeout)*time.Second)
+					defer cancel()
+				}
+				notify, _ := mcpserver.ProgressFn(ctx)
+				out := d.awaitTasks(obsCtx, ids, notify)
+				if !out.Detached {
+					if in.TaskID != "" {
+						if len(out.Results) == 0 {
+							return nil, fmt.Errorf("collect awaited task %q disappeared", in.TaskID)
+						}
+						return out.Results[0], nil
+					}
+					return map[string]any{"results": out.Results, "pending": []string{}}, nil
+				}
+
+				timedOut := in.Timeout > 0 && ctx.Err() == nil
+				if in.TaskID != "" {
+					if timedOut {
+						tk, ok := d.reg.Get(in.TaskID)
+						if !ok {
+							return nil, fmt.Errorf("collect timed-out task %q disappeared", in.TaskID)
+						}
+						res := collectOne(d.reg, tk)
+						res["timed_out"] = true
+						return res, nil
+					}
+					return map[string]any{
+						"detached": true, "task_id": in.TaskID,
+						"note": "await interrupted; the task keeps running — collect fetches its result",
+					}, nil
+				}
+				res := collectAll()
+				if timedOut {
+					res["timed_out"] = true
+				} else {
+					res["detached"] = true
+					res["note"] = "await interrupted; tasks keep running — collect fetches their results"
+				}
+				return res, nil
 			},
 		},
 		{

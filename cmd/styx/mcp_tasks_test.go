@@ -135,12 +135,12 @@ func TestRegistryErrorsCollectAndClaim(t *testing.T) {
 	if !ok || tk.Err == "" {
 		t.Fatalf("failed task must carry its error text, got %+v", tk)
 	}
-	if line := r.StatusLine(); !strings.Contains(line, id) || !strings.Contains(line, "unclaimed") {
-		t.Fatalf("unclaimed error must appear in the status line, got %q", line)
+	if line := r.doneStatusLine(); !strings.Contains(line, "DONE: "+id+" error") {
+		t.Fatalf("unclaimed error must appear in the done line, got %q", line)
 	}
 	r.Claim(id)
-	if line := r.StatusLine(); line != "" {
-		t.Fatalf("claimed task must leave the status line, got %q", line)
+	if line := r.doneStatusLine(); line != "" {
+		t.Fatalf("claimed task must leave the done line, got %q", line)
 	}
 }
 
@@ -189,8 +189,8 @@ func TestTaskStateMirrorAndOrphanScan(t *testing.T) {
 	if !strings.Contains(snap[0].Err, "styx mcp exited") {
 		t.Fatalf("orphan must explain the loss, got %q", snap[0].Err)
 	}
-	if line := r2.StatusLine(); !strings.Contains(line, "o1 orphaned") {
-		t.Fatalf("orphans must be reported in the status line, got %q", line)
+	if line := r2.doneStatusLine(); !strings.Contains(line, "DONE: o1 orphaned") {
+		t.Fatalf("orphans must be reported in the done line, got %q", line)
 	}
 
 	// The on-disk file was flipped to orphaned; a third scan adopts it again
@@ -204,51 +204,267 @@ func TestTaskStateMirrorAndOrphanScan(t *testing.T) {
 	}
 }
 
-func TestWithBackgroundStatusPiggyback(t *testing.T) {
-	reg := newTaskRegistry(context.Background(), 4, nil)
-	tools := withBackgroundStatus([]mcpserver.Tool{
-		{Name: "mapper", Handler: func(context.Context, json.RawMessage) (any, error) {
-			return map[string]any{"ok": true}, nil
-		}},
-		{Name: "structer", Handler: func(context.Context, json.RawMessage) (any, error) {
-			return "plain string", nil
-		}},
-		{Name: "failer", Handler: func(context.Context, json.RawMessage) (any, error) {
-			return nil, errors.New("boom")
-		}},
-	}, reg)
-	call := func(name string) (any, error) {
-		for _, tl := range tools {
-			if tl.Name == name {
-				return tl.Handler(context.Background(), nil)
+func TestLiveVsDoneStatusLine(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name          string
+		tasks         []*bgTask
+		wantLiveParts []string
+		wantDone      string
+	}{
+		{name: "empty"},
+		{name: "running and queued", tasks: []*bgTask{
+			{ID: "t1", State: taskRunning, Started: now, Spec: taskSpec{CLI: "codex", Thread: "impl"}},
+			{ID: "t2", State: taskQueued, Created: now, QueuedBehind: "t1", Spec: taskSpec{CLI: "claude", Thread: "review"}},
+		}, wantLiveParts: []string{"t1 running", "t2 queued behind t1"}, wantDone: ""},
+		{name: "done", tasks: []*bgTask{
+			{ID: "t3", State: taskDone, Spec: taskSpec{CLI: "codex", Thread: "windows-impl"}},
+		}, wantDone: "DONE: t3 (codex, thread windows-impl) — call collect"},
+		{name: "error and claimed", tasks: []*bgTask{
+			{ID: "t4", State: taskError, Spec: taskSpec{CLI: "claude", Thread: "review"}},
+			{ID: "t5", State: taskDone, Claimed: true, Spec: taskSpec{CLI: "codex", Thread: "claimed"}},
+		}, wantDone: "DONE: t4 error (claude, thread review) — call collect"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTaskRegistry(context.Background(), 4, nil)
+			for _, tk := range tc.tasks {
+				r.tasks[tk.ID] = tk
+				r.order = append(r.order, tk.ID)
 			}
+			live, done := r.liveStatusLine(), r.doneStatusLine()
+			if len(tc.wantLiveParts) == 0 && live != "" {
+				t.Fatalf("liveStatusLine() = %q, want empty", live)
+			}
+			for _, want := range tc.wantLiveParts {
+				if !strings.Contains(live, want) {
+					t.Fatalf("liveStatusLine() = %q, want containing %q", live, want)
+				}
+			}
+			if done != tc.wantDone {
+				t.Fatalf("doneStatusLine() = %q, want %q", done, tc.wantDone)
+			}
+		})
+	}
+}
+
+func TestWithBackgroundStatusResultShapes(t *testing.T) {
+	type objectResult struct {
+		OK bool `json:"ok"`
+	}
+	reg := newTaskRegistry(context.Background(), 4, nil)
+	reg.tasks["t1"] = &bgTask{ID: "t1", State: taskRunning, Started: time.Now(), Spec: taskSpec{CLI: "codex", Thread: "impl"}}
+	reg.tasks["t2"] = &bgTask{ID: "t2", State: taskDone, Spec: taskSpec{CLI: "claude", Thread: "review"}}
+	reg.order = []string{"t1", "t2"}
+
+	for _, tc := range []struct {
+		name             string
+		result           any
+		err              error
+		wantObject       bool
+		wantExistingDone bool
+	}{
+		{name: "map", result: map[string]any{"ok": true}, wantObject: true},
+		{name: "map preserves existing done", result: map[string]any{"done": true}, wantObject: true, wantExistingDone: true},
+		{name: "struct object", result: objectResult{OK: true}, wantObject: true},
+		{name: "slice", result: []string{"one"}},
+		{name: "error", err: errors.New("boom")},
+		{name: "nil"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := withBackgroundStatus([]mcpserver.Tool{{
+				Name: "test", Handler: func(context.Context, json.RawMessage) (any, error) {
+					return tc.result, tc.err
+				},
+			}}, reg)
+			got, err := tools[0].Handler(context.Background(), nil)
+			if tc.err != nil {
+				if !errors.Is(err, tc.err) || got != tc.result {
+					t.Fatalf("error result changed: got=%v err=%v", got, err)
+				}
+				return
+			}
+			m, ok := got.(map[string]any)
+			if ok != tc.wantObject {
+				t.Fatalf("object-shaped = %v, want %v (result %T)", ok, tc.wantObject, got)
+			}
+			if tc.wantObject {
+				if !strings.Contains(m["bg"].(string), "t1 running") {
+					t.Fatalf("bg missing live task: %v", m)
+				}
+				if m["background_done"] != "DONE: t2 (claude, thread review) — call collect" {
+					t.Fatalf("background completion notice mismatch: %v", m)
+				}
+				if tc.wantExistingDone && m["done"] != true {
+					t.Fatalf("existing done result was overwritten: %v", m)
+				}
+			}
+		})
+	}
+}
+
+func collectHandler(t *testing.T, d *conductorDeps) func(context.Context, json.RawMessage) (any, error) {
+	t.Helper()
+	for _, tool := range conductorTools(d) {
+		if tool.Name == "collect" {
+			return tool.Handler
 		}
-		t.Fatalf("no tool %s", name)
-		return nil, nil
 	}
+	t.Fatal("collect tool not registered")
+	return nil
+}
 
-	// Idle registry: no bg field.
-	res, _ := call("mapper")
-	if _, ok := res.(map[string]any)["bg"]; ok {
-		t.Fatal("no tasks => no bg field")
+func TestCollectWaitTaskID(t *testing.T) {
+	fastAwait(t)
+	reg := newTaskRegistry(context.Background(), 4, nil)
+	d := &conductorDeps{reg: reg}
+	run, started, release := blockingRun(map[string]any{"text": "done"})
+	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "impl", CLI: "codex", Risk: "read"}, run)
+	<-started
+
+	type response struct {
+		value any
+		err   error
 	}
+	ch := make(chan response, 1)
+	raw, _ := json.Marshal(map[string]any{"task_id": id, "wait": true})
+	go func() {
+		value, err := collectHandler(t, d)(context.Background(), raw)
+		ch <- response{value: value, err: err}
+	}()
+	close(release)
+	got := <-ch
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	m := got.value.(map[string]any)
+	if m["status"] != taskDone || m["text"] != "done" {
+		t.Fatalf("wait result = %v", m)
+	}
+	if tk, _ := reg.Get(id); !tk.Claimed {
+		t.Fatal("waited task must be claimed")
+	}
+}
 
-	run1, started1, release1 := blockingRun(nil)
-	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "codex", CLI: "codex", Risk: "read"}, run1)
+func TestCollectWaitAllOutstanding(t *testing.T) {
+	fastAwait(t)
+	reg := newTaskRegistry(context.Background(), 4, nil)
+	d := &conductorDeps{reg: reg}
+	run1, started1, release1 := blockingRun(map[string]any{"text": "one"})
+	run2, started2, release2 := blockingRun(map[string]any{"text": "two"})
+	id1, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "one", CLI: "codex", Risk: "read"}, run1)
+	id2, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "two", CLI: "claude", Risk: "read"}, run2)
 	<-started1
-	defer close(release1)
+	<-started2
 
-	res, _ = call("mapper")
-	bg, _ := res.(map[string]any)["bg"].(string)
-	if !strings.Contains(bg, id) || !strings.Contains(bg, "running") {
-		t.Fatalf("live task must piggyback on map results, got %q", bg)
+	raw, _ := json.Marshal(map[string]any{"wait": true})
+	// Let the handler take its one-time outstanding-task snapshot before the
+	// controlled runs finish; otherwise this becomes a non-waiting sweep test.
+	time.AfterFunc(50*time.Millisecond, func() {
+		close(release1)
+		close(release2)
+	})
+	value, err := collectHandler(t, d)(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Non-map results and errors pass through untouched.
-	if res, _ := call("structer"); res != "plain string" {
-		t.Fatalf("non-map results must pass through, got %v", res)
+	m := value.(map[string]any)
+	results := m["results"].([]map[string]any)
+	if len(results) != 2 || results[0]["task_id"] != id1 || results[1]["task_id"] != id2 {
+		t.Fatalf("wait-all results = %v", results)
 	}
-	if _, err := call("failer"); err == nil || err.Error() != "boom" {
-		t.Fatalf("errors must pass through, got %v", err)
+	for _, id := range []string{id1, id2} {
+		if tk, _ := reg.Get(id); !tk.Claimed {
+			t.Fatalf("task %s not claimed", id)
+		}
+	}
+}
+
+func TestCollectWaitTimeout(t *testing.T) {
+	fastAwait(t)
+	reg := newTaskRegistry(context.Background(), 4, nil)
+	d := &conductorDeps{reg: reg}
+	run, started, release := blockingRun(map[string]any{"text": "late"})
+	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "impl", CLI: "codex", Risk: "read"}, run)
+	<-started
+
+	res, err := callTool(t, d, "collect", map[string]any{"task_id": id, "wait": true, "timeout_s": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res["timed_out"] != true || res["status"] != taskRunning {
+		t.Fatalf("timeout result = %v", res)
+	}
+	if tk, _ := reg.Get(id); tk.Claimed || tk.State != taskRunning {
+		t.Fatalf("timed-out task = %+v", tk)
+	}
+	close(release)
+	waitFor(t, "timed-out task completion", func() bool { return state(reg, id) == taskDone })
+	collected, err := callTool(t, d, "collect", map[string]any{"task_id": id})
+	if err != nil || collected["status"] != taskDone || collected["text"] != "late" {
+		t.Fatalf("post-timeout collect = %v, err %v", collected, err)
+	}
+}
+
+func TestCollectWaitNoOutstanding(t *testing.T) {
+	reg := newTaskRegistry(context.Background(), 4, nil)
+	d := &conductorDeps{reg: reg}
+	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "done", CLI: "codex", Risk: "read"},
+		func(context.Context, string) (map[string]any, error) { return map[string]any{"text": "ready"}, nil })
+	waitFor(t, "task done", func() bool { return state(reg, id) == taskDone })
+	res, err := callTool(t, d, "collect", map[string]any{"wait": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := res["results"].([]any)
+	if len(results) != 1 || results[0].(map[string]any)["task_id"] != id {
+		t.Fatalf("immediate results = %v", res)
+	}
+}
+
+func TestCollectWaitCancel(t *testing.T) {
+	fastAwait(t)
+	reg := newTaskRegistry(context.Background(), 4, nil)
+	d := &conductorDeps{reg: reg}
+	run, started, release := blockingRun(nil)
+	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "impl", CLI: "codex", Risk: "read"}, run)
+	<-started
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	raw, _ := json.Marshal(map[string]any{"task_id": id, "wait": true})
+	type response struct {
+		value any
+		err   error
+	}
+	ch := make(chan response, 1)
+	go func() {
+		value, err := collectHandler(t, d)(ctx, raw)
+		ch <- response{value: value, err: err}
+	}()
+	cancel()
+	got := <-ch
+	if got.err != nil || got.value.(map[string]any)["detached"] != true {
+		t.Fatalf("cancel result = %v, err %v", got.value, got.err)
+	}
+	if tk, _ := reg.Get(id); tk.Claimed || tk.State != taskRunning {
+		t.Fatalf("detached task = %+v", tk)
+	}
+}
+
+func TestCollectNoWaitUnchanged(t *testing.T) {
+	reg := newTaskRegistry(context.Background(), 4, nil)
+	d := &conductorDeps{reg: reg}
+	run, started, release := blockingRun(nil)
+	id, _ := reg.Spawn(taskSpec{ProjectID: "p1", Thread: "impl", CLI: "codex", Risk: "read"}, run)
+	<-started
+	defer close(release)
+	res, err := callTool(t, d, "collect", map[string]any{"task_id": id})
+	if err != nil || res["status"] != taskRunning {
+		t.Fatalf("single non-wait = %v, err %v", res, err)
+	}
+	all, err := callTool(t, d, "collect", map[string]any{})
+	if err != nil || len(all["pending"].([]any)) != 1 {
+		t.Fatalf("bare non-wait = %v, err %v", all, err)
 	}
 }
 

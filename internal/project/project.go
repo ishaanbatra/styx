@@ -147,6 +147,7 @@ func autoRegister(root string, existing []Project) Project {
 		Path:        root,
 		Language:    SniffLanguage(root),
 		ResearchDir: "styx/research",
+		DebugDir:    "styx/debug",
 		PlansDir:    "styx/plans",
 	}
 }

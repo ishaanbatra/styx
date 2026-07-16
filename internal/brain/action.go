@@ -44,7 +44,7 @@ type Dispatch struct {
 type Action struct {
 	Action     ActionType `json:"action"`
 	Dispatches []Dispatch `json:"dispatches,omitempty"`
-	Pipeline   string     `json:"pipeline,omitempty"` // research | auto | review | intel
+	Pipeline   string     `json:"pipeline,omitempty"` // research | auto | review | intel | debug
 	Reply      string     `json:"reply,omitempty"`
 	Remember   string     `json:"remember,omitempty"`
 	Risk       RiskLevel  `json:"risk,omitempty"`
@@ -52,7 +52,7 @@ type Action struct {
 }
 
 var validThreads = map[string]bool{"claude": true, "codex": true, "agy": true, "ollama": true}
-var validPipelines = map[string]bool{"research": true, "auto": true, "review": true, "intel": true}
+var validPipelines = map[string]bool{"research": true, "auto": true, "review": true, "intel": true, "debug": true}
 
 func validRisk(r RiskLevel) bool {
 	switch r {
@@ -80,6 +80,9 @@ func riskRank(r RiskLevel) int {
 // defaulting to edit. The auto pipeline can commit/push/PR, so it is always
 // ship-class regardless of what the model claimed.
 func (a Action) EffectiveRisk() RiskLevel {
+	if a.Action == ActionPipeline && a.Pipeline == "debug" {
+		return RiskRead
+	}
 	r := a.Risk
 	for _, d := range a.Dispatches {
 		if riskRank(d.Risk) > riskRank(r) {
@@ -151,7 +154,7 @@ var ActionSchema = json.RawMessage(`{
         "required": ["thread", "message"]
       }
     },
-	"pipeline": {"type": "string", "enum": ["research", "auto", "review", "intel", ""]},
+	"pipeline": {"type": "string", "enum": ["research", "auto", "review", "intel", "debug", ""]},
 	"reply": {"type": "string"},
 	"remember": {"type": "string"},
 	"confidence": {"type": "number"}

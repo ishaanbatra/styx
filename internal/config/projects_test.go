@@ -18,6 +18,7 @@ func TestSaveAndLoadProjects(t *testing.T) {
 			Path:         "/Users/x/Documents/GitHub/ai-ta-backend",
 			Language:     "python",
 			ResearchDir:  "docs/research",
+			DebugDir:     "docs/debug",
 			PlansDir:     "docs/plans",
 			DefaultVerbs: []string{"plan", "build", "review"},
 		},

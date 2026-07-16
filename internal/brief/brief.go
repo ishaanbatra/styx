@@ -1,5 +1,5 @@
-// Package brief writes research briefs and implementation plans into a
-// project's configured directories and resolves the most recent brief.
+// Package brief writes research briefs, debug reports, and implementation
+// plans into a project's configured directories and resolves recent artifacts.
 package brief
 
 import (
@@ -16,19 +16,25 @@ import (
 
 var slugRE = regexp.MustCompile(`[^a-z0-9]+`)
 
-// WriteOpts configures WriteBrief / WritePlan.
+// WriteOpts configures WriteBrief, WriteReport, and WritePlan.
 type WriteOpts struct {
 	ProjectPath string    // absolute project root
 	SubDir      string    // relative to ProjectPath; e.g. "docs/research" or "styx/research"
 	Query       string    // used for the slug and as a header
 	Body        string    // markdown body
-	Kind        string    // "brief" or "plan"
+	Kind        string    // "brief", "report", or "plan"
 	Now         time.Time // defaults to time.Now() when zero
 }
 
 // WriteBrief writes a research brief markdown file and returns its absolute path.
 func WriteBrief(o WriteOpts) (string, error) {
 	o.Kind = "brief"
+	return writeMarkdown(o)
+}
+
+// WriteReport writes an ultraFerdDebug report and returns its absolute path.
+func WriteReport(o WriteOpts) (string, error) {
+	o.Kind = "report"
 	return writeMarkdown(o)
 }
 
@@ -56,8 +62,25 @@ func writeMarkdown(o WriteOpts) (string, error) {
 	slug := slugify(o.Query)
 	name := fmt.Sprintf("%s-%s-%s.md", stamp, slug, o.Kind)
 	full := filepath.Join(dir, name)
-	if err := os.WriteFile(full, []byte(o.Body), 0o644); err != nil {
-		return "", fmt.Errorf("write %s: %w", full, err)
+	tmp, err := os.CreateTemp(dir, ".styx-artifact-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("create temporary artifact in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("chmod temporary artifact %s: %w", tmpName, err)
+	}
+	if _, err := tmp.WriteString(o.Body); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("write temporary artifact %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close temporary artifact %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, full); err != nil {
+		return "", fmt.Errorf("rename temporary artifact to %s: %w", full, err)
 	}
 	return full, nil
 }

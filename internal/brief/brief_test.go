@@ -35,6 +35,33 @@ func TestWriteBrief_WritesMarkdownToResearchDir(t *testing.T) {
 	}
 }
 
+func TestWriteReport_WritesMarkdownToDebugDir(t *testing.T) {
+	root := t.TempDir()
+	p, err := WriteReport(WriteOpts{
+		ProjectPath: root,
+		SubDir:      "styx/debug",
+		Query:       "panic on empty input",
+		Body:        "# ultraFerdDebug report\n",
+		Now:         time.Date(2026, 7, 15, 20, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(p, "20260715-203000-panic-on-empty-input-report.md") {
+		t.Fatalf("report path = %q", p)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "# ultraFerdDebug report\n" {
+		t.Fatalf("report body = %q", b)
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(root, "styx/debug/.styx-artifact-*.tmp")); len(leftovers) != 0 {
+		t.Fatalf("temporary artifacts left behind: %v", leftovers)
+	}
+}
+
 func TestLoadLatest_ReturnsNewestBrief(t *testing.T) {
 	dir := t.TempDir()
 	files := []string{

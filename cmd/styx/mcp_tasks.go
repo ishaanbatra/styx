@@ -8,6 +8,7 @@ package main
 // task for crash honesty (orphan reporting), never for resumption.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -223,9 +224,9 @@ func (r *taskRegistry) Snapshot() []bgTask {
 	return out
 }
 
-// StatusLine renders the compact piggyback line: every live task and every
-// unclaimed finished one. "" when there is nothing to report. Nil-safe.
-func (r *taskRegistry) StatusLine() string {
+// liveStatusLine renders the compact piggyback line for queued and running
+// tasks. "" when there is nothing live to report. Nil-safe.
+func (r *taskRegistry) liveStatusLine() string {
 	if r == nil {
 		return ""
 	}
@@ -257,13 +258,33 @@ func (r *taskRegistry) StatusLine() string {
 			} else {
 				parts = append(parts, fmt.Sprintf("%s queued at cap (%s)", t.ID, elapsedShort(time.Since(t.Created))))
 			}
-		case taskDone, taskError, taskOrphaned:
-			if !t.Claimed {
-				parts = append(parts, fmt.Sprintf("%s %s unclaimed — call collect", t.ID, t.State))
-			}
 		}
 	}
 	return strings.Join(parts, "; ")
+}
+
+// doneStatusLine renders unclaimed terminal tasks as a distinct, loud notice
+// so completions cannot be buried in routine live-task status. Nil-safe.
+func (r *taskRegistry) doneStatusLine() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var parts []string
+	for _, id := range r.order {
+		t := r.tasks[id]
+		if !isTerminal(t.State) || t.Claimed {
+			continue
+		}
+		state := ""
+		if t.State != taskDone {
+			state = " " + t.State
+		}
+		parts = append(parts, fmt.Sprintf("DONE: %s%s (%s, thread %s) — call collect",
+			t.ID, state, t.Spec.CLI, t.Spec.Thread))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // taskLine renders one task for thread_status / collect pending summaries.
@@ -441,12 +462,31 @@ func (r *taskRegistry) adoptOrphans(files []taskFile) {
 	}
 }
 
+// setKey adds a sibling string field to JSON object-shaped results. Structs
+// are converted through JSON so their public wire shape stays unchanged;
+// arrays, scalars, nil, and values that cannot be marshaled pass through.
+func setKey(res any, key, value string) any {
+	if m, ok := res.(map[string]any); ok && m != nil {
+		m[key] = value
+		return m
+	}
+	raw, err := json.Marshal(res)
+	if err != nil || len(bytes.TrimSpace(raw)) == 0 || bytes.TrimSpace(raw)[0] != '{' {
+		return res
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+		return res
+	}
+	m[key] = value
+	return m
+}
+
 // withBackgroundStatus is the piggyback decoration point (spec §Piggyback):
-// whenever the registry holds live or unclaimed tasks, every conductor tool's
-// map-shaped result gains a compact "bg" status line, so any tool activity
-// resurfaces background work — the conductor cannot forget for long. Non-map
-// results (shipgate token relays) and errors pass through untouched; the
-// JSON-RPC transport is untouched.
+// every object-shaped tool result carries routine live status under "bg" and
+// unclaimed completions under the distinct "background_done" key. The name
+// avoids colliding with pipeline_run's existing boolean "done" result. Bare-
+// array and scalar results cannot carry sibling keys; errors pass through.
 func withBackgroundStatus(tools []mcpserver.Tool, reg *taskRegistry) []mcpserver.Tool {
 	out := make([]mcpserver.Tool, len(tools))
 	for i, tl := range tools {
@@ -456,10 +496,11 @@ func withBackgroundStatus(tools []mcpserver.Tool, reg *taskRegistry) []mcpserver
 			if err != nil {
 				return res, err
 			}
-			if line := reg.StatusLine(); line != "" {
-				if m, ok := res.(map[string]any); ok {
-					m["bg"] = line
-				}
+			if line := reg.liveStatusLine(); line != "" {
+				res = setKey(res, "bg", line)
+			}
+			if line := reg.doneStatusLine(); line != "" {
+				res = setKey(res, "background_done", line)
 			}
 			return res, nil
 		}

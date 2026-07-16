@@ -22,6 +22,15 @@ type AgentState struct {
 	Done    bool
 	Elapsed time.Duration
 	Recent  []string
+
+	recentEvents []recentEvent
+}
+
+// recentEvent is one timestamped entry in the watcher's bounded activity
+// window. It stays in memory; the cross-process mirror shape is unchanged.
+type recentEvent struct {
+	At      time.Time
+	Summary string
 }
 
 type agentRec struct {
@@ -29,7 +38,7 @@ type agentRec struct {
 	lastAt  time.Time
 	done    bool
 	elapsed time.Duration
-	recent  []string
+	recent  []recentEvent
 }
 
 // Board is the shared, concurrency-safe liveness map for one styx session,
@@ -67,10 +76,11 @@ func (b *Board) Record(label, summary string) {
 		b.ag[label] = r
 		b.order = append(b.order, label)
 	}
+	now := b.now()
 	r.last = summary
-	r.lastAt = b.now()
+	r.lastAt = now
 	r.done = false
-	r.recent = append(r.recent, summary)
+	r.recent = append(r.recent, recentEvent{At: now, Summary: summary})
 	if len(r.recent) > recentCap {
 		r.recent = r.recent[len(r.recent)-recentCap:]
 	}
@@ -98,10 +108,14 @@ func (b *Board) Snapshot() []AgentState {
 	for _, label := range b.order {
 		r := b.ag[label]
 		recent := make([]string, len(r.recent))
-		copy(recent, r.recent)
+		events := make([]recentEvent, len(r.recent))
+		copy(events, r.recent)
+		for i, ev := range events {
+			recent[i] = ev.Summary
+		}
 		out = append(out, AgentState{
 			Label: label, Last: r.last, LastAt: r.lastAt,
-			Done: r.done, Elapsed: r.elapsed, Recent: recent,
+			Done: r.done, Elapsed: r.elapsed, Recent: recent, recentEvents: events,
 		})
 	}
 	return out
@@ -116,8 +130,31 @@ func (b *Board) Recent(label string) []string {
 		return nil
 	}
 	out := make([]string, len(r.recent))
+	for i, ev := range r.recent {
+		out[i] = ev.Summary
+	}
+	return out
+}
+
+// RecentEvents returns a copy of label's timestamped recent activity (oldest
+// first). The entries are in-memory watcher input and are never mirrored.
+func (b *Board) RecentEvents(label string) []recentEvent {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r := b.ag[label]
+	if r == nil {
+		return nil
+	}
+	out := make([]recentEvent, len(r.recent))
 	copy(out, r.recent)
 	return out
+}
+
+// clockNow reads the board's injected clock (tests) under the board lock.
+func (b *Board) clockNow() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.now()
 }
 
 // SetWatcherNote stores the ollama watcher's latest health read.

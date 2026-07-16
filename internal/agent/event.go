@@ -101,9 +101,14 @@ type codexLine struct {
 	Type     string `json:"type"`
 	ThreadID string `json:"thread_id"`
 	Item     struct {
-		Type    string `json:"type"`
-		Text    string `json:"text"`
-		Command string `json:"command"`
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		Command  string `json:"command"`
+		Path     string `json:"path"`
+		FilePath string `json:"file_path"`
+		Changes  []struct {
+			Path string `json:"path"`
+		} `json:"changes"`
 	} `json:"item"`
 	Usage struct {
 		InputTokens       int `json:"input_tokens"`
@@ -137,12 +142,21 @@ func ParseCodexEvent(line []byte) (Event, bool) {
 			return Event{Type: EventText, Text: l.Item.Text}, true
 		case "":
 			return Event{}, false
+		case "command_execution":
+			return Event{Type: EventTool, Tool: "Bash", Text: firstLine(l.Item.Command)}, true
+		case "file_change":
+			target := l.Item.Path
+			if target == "" {
+				target = l.Item.FilePath
+			}
+			if target == "" && len(l.Item.Changes) > 0 {
+				target = l.Item.Changes[0].Path
+			}
+			return Event{Type: EventTool, Tool: "Edit", Text: firstLine(target)}, true
 		default:
 			// Any non-message completed item is tool/command activity. codex item
-			// types include command_execution, file_change, mcp_tool_call; exact
-			// sub-field names vary by codex version, so surface the item type as
-			// the tool label plus a best-effort command string. Verified against a
-			// live `codex exec --json` stream; tighten if a richer field appears.
+			// types include mcp_tool_call; exact sub-field names vary by codex
+			// version, so surface the item type plus a best-effort command string.
 			return Event{Type: EventTool, Tool: l.Item.Type, Text: firstLine(l.Item.Command)}, true
 		}
 	case "turn.completed":

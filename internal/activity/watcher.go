@@ -11,9 +11,16 @@ import (
 	"time"
 )
 
-const watcherSystem = `You are a watch process observing parallel AI coding agents.
-In 1-2 terse sentences, say whether they look healthy or stuck. Call out loops,
-repeated identical actions, and long idles. Do not give advice; just report.`
+const watcherSystem = `You judge whether parallel AI coding agents are stuck.
+You are given only agents that mechanical checks already flagged as suspicious
+(a long run of identical actions, a long ping-pong between two actions, or a
+long idle). Repeated edits, tests, or reads of the SAME file are NORMAL
+forward progress — do not call that a loop.
+A real loop is the SAME action (or the same two actions alternating) repeating
+with NO state change (same command, same target, same result, over and over).
+A stall is a long idle with no new action. For EACH agent, reply with one JSON object per line:
+{"agent":"<label>","verdict":"healthy|watch|stuck","reason":"<one short line>"}
+Return only JSON lines, nothing else.`
 
 // Watcher periodically summarizes cross-agent activity via local ollama and
 // writes the result to the board. Strictly best-effort: every failure path
@@ -23,6 +30,7 @@ type Watcher struct {
 	Model    string
 	Board    *Board
 	Interval time.Duration // 0 => 15s
+	Stall    time.Duration // 0 => DefaultStall
 
 	client *http.Client
 }
@@ -73,9 +81,9 @@ type chatResponse struct {
 	} `json:"message"`
 }
 
-// pollOnce runs one watch cycle. It is a no-op (nil error) when no agents are
-// live. On success it stores the note; on failure it returns the error and
-// leaves the existing note untouched.
+// pollOnce runs one watch cycle. Healthy mechanical signals skip ollama and
+// clear stale alarms. On model failure it returns the error and leaves the
+// existing note untouched.
 func (w *Watcher) pollOnce(ctx context.Context) error {
 	snap := w.Board.Snapshot()
 	live := snap[:0]
@@ -85,14 +93,38 @@ func (w *Watcher) pollOnce(ctx context.Context) error {
 		}
 	}
 	if len(live) == 0 {
+		w.Board.SetWatcherNote("")
+		return nil
+	}
+	now := w.Board.clockNow()
+	stall := w.Stall
+	if stall <= 0 {
+		stall = DefaultStall
+	}
+	type flaggedAgent struct {
+		state   AgentState
+		signals signalSet
+	}
+	flagged := make([]flaggedAgent, 0, len(live))
+	for _, s := range live {
+		signals, result := classify(s, now, stall)
+		if result == suspicious {
+			flagged = append(flagged, flaggedAgent{state: s, signals: signals})
+		}
+	}
+	if len(flagged) == 0 {
+		w.Board.SetWatcherNote("")
 		return nil
 	}
 
 	var u strings.Builder
-	for _, s := range live {
-		fmt.Fprintf(&u, "agent %s (last: %s):\n", s.Label, s.Last)
-		for _, line := range w.Board.Recent(s.Label) {
-			fmt.Fprintf(&u, "  - %s\n", line)
+	for _, flagged := range flagged {
+		s := flagged.state
+		sig := flagged.signals
+		fmt.Fprintf(&u, "agent %s — idle %s, %d identical in a row, trailing run of %d events within 2 distinct actions, %d distinct recent actions, %d distinct files, %.1f ev/min\n",
+			s.Label, short(sig.Idle), sig.ConsecutiveIdentical, sig.TrailingLowVariety, sig.DistinctRecent, sig.DistinctFiles, sig.EventsPerMin)
+		for _, ev := range w.Board.RecentEvents(s.Label) {
+			fmt.Fprintf(&u, "  -%s  %s\n", short(now.Sub(ev.At)), ev.Summary)
 		}
 	}
 
@@ -131,9 +163,34 @@ func (w *Watcher) pollOnce(ctx context.Context) error {
 	if err := json.Unmarshal(raw, &cr); err != nil {
 		return fmt.Errorf("parse watch response: %w", err)
 	}
-	note := strings.TrimSpace(cr.Message.Content)
-	if note != "" {
-		w.Board.SetWatcherNote(note)
+	type modelVerdict struct {
+		Agent   string `json:"agent"`
+		Verdict string `json:"verdict"`
+		Reason  string `json:"reason"`
+	}
+	var notes []string
+	usable := 0
+	for _, line := range strings.Split(strings.TrimSpace(cr.Message.Content), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var v modelVerdict
+		if err := json.Unmarshal([]byte(line), &v); err != nil {
+			continue
+		}
+		v.Agent = strings.TrimSpace(v.Agent)
+		v.Verdict = strings.ToLower(strings.TrimSpace(v.Verdict))
+		v.Reason = strings.TrimSpace(v.Reason)
+		if v.Agent == "" || v.Reason == "" || (v.Verdict != "healthy" && v.Verdict != "watch" && v.Verdict != "stuck") {
+			continue
+		}
+		usable++
+		if v.Verdict == "watch" || v.Verdict == "stuck" {
+			notes = append(notes, fmt.Sprintf("%s %s: %s", v.Verdict, v.Agent, v.Reason))
+		}
+	}
+	if usable > 0 {
+		w.Board.SetWatcherNote(strings.Join(notes, " · "))
 	}
 	return nil
 }
