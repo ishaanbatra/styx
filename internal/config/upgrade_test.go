@@ -132,6 +132,31 @@ func TestEnsureMapImpactRule(t *testing.T) {
 	}
 }
 
+func TestEnsureCrossRepoRule(t *testing.T) {
+	tests := []struct {
+		name, src, wantUse string
+		wantChanged        bool
+	}{
+		{name: "missing", src: "[models]\nrefresh_interval_hours = 24\n", wantUse: `use  = "agy:Gemini 3.1 Pro (High)"`, wantChanged: true},
+		{name: "custom present", src: "[[rule]]\nverb = \"cross-repo\"\nuse = \"claude:opus\"\n", wantUse: `use = "claude:opus"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := EnsureCrossRepoRule(tt.src)
+			if changed != tt.wantChanged {
+				t.Fatalf("changed = %t, want %t", changed, tt.wantChanged)
+			}
+			if strings.Count(got, `verb = "cross-repo"`) != 1 || !strings.Contains(got, tt.wantUse) {
+				t.Errorf("cross-repo rule mismatch:\n%s", got)
+			}
+			again, changed := EnsureCrossRepoRule(got)
+			if changed || again != got {
+				t.Error("second cross-repo upgrade must be a no-op")
+			}
+		})
+	}
+}
+
 func TestEnsureAgyModelPin(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -239,7 +264,7 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, _, _, _, hostInjected, watchInjected, debugInjected, deadCodeInjected, mapImpactInjected, agyPinned, err := UpgradeRoutingFile(routingPath)
+	n, _, _, _, hostInjected, watchInjected, debugInjected, deadCodeInjected, mapImpactInjected, crossRepoInjected, agyPinned, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,6 +285,9 @@ use  = "gemini:flash"
 	}
 	if !mapImpactInjected {
 		t.Error("expected map-impact rule to be injected on an old config")
+	}
+	if !crossRepoInjected {
+		t.Error("expected cross-repo rule to be injected on an old config")
 	}
 	if !agyPinned {
 		t.Error("expected migrated agy route to receive the model pin")
@@ -285,6 +313,9 @@ use  = "gemini:flash"
 	if !strings.Contains(string(b), `verb = "map-impact"`) {
 		t.Errorf("post-upgrade file missing map-impact: %s", b)
 	}
+	if !strings.Contains(string(b), `verb = "cross-repo"`) {
+		t.Errorf("post-upgrade file missing cross-repo: %s", b)
+	}
 }
 
 func TestUpgrade_AgyModelPinRoundTrip(t *testing.T) {
@@ -299,7 +330,7 @@ fallback = ["claude:sonnet"]
 		t.Fatal(err)
 	}
 
-	_, _, _, _, _, _, _, _, _, pinned, err := UpgradeRoutingFile(routingPath)
+	_, _, _, _, _, _, _, _, _, _, pinned, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +359,7 @@ fallback = ["claude:sonnet"]
 		t.Errorf("backup = %q, want original %q", backup, original)
 	}
 
-	_, _, _, _, _, _, _, _, _, pinnedAgain, err := UpgradeRoutingFile(routingPath)
+	_, _, _, _, _, _, _, _, _, _, pinnedAgain, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}

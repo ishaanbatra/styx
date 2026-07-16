@@ -95,6 +95,12 @@ verb = "map-impact"
 use  = "agy:Gemini 3.1 Pro (High)"
 fallback = ["claude:sonnet", "codex"]
 
+# ── cross-repo (agy multi-root link trace, codex spot-check) ──
+[[rule]]
+verb = "cross-repo"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["claude:sonnet", "codex"]
+
 # ── grunt / think ──
 [[rule]]
 verb = "grunt"

@@ -21,7 +21,17 @@ type readPathwayChannelAdapter struct {
 	projectID   string
 	runID       string
 	projectPath string
+	extraRoots  []string
 	response    channel.Response
+}
+
+// withExtraRoots attaches the exact additional repository roots required by a
+// multi-root read pathway. The copy prevents caller mutation after setup.
+func (a *readPathwayChannelAdapter) withExtraRoots(roots []string) *readPathwayChannelAdapter {
+	if a != nil {
+		a.extraRoots = append([]string(nil), roots...)
+	}
+	return a
 }
 
 func newReadPathwayChannelAdapter(a *app, ch channel.Channel, channelName, model, effort, role, projectID, runID, projectPath string) *readPathwayChannelAdapter {
@@ -37,6 +47,7 @@ func (a *readPathwayChannelAdapter) Send(ctx context.Context, prompt string) (st
 	}
 	resp, err := a.ch.Send(ctx, channel.Request{
 		Model: a.model, Effort: a.effort, Prompt: prompt, WorkingDir: a.projectPath,
+		ExtraRoots: a.extraRoots,
 	})
 	a.response = resp
 	if a.tracker != nil {

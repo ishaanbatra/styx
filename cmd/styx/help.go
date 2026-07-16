@@ -37,6 +37,9 @@ VERBS
   map-impact <symbol|file|diff-spec>
                              Trace repository dependents and change impact,
                              then Codex spot-check claimed dependency edges
+  cross-repo <root2> [root3...] [-- <question>]
+                             Trace APIs and consumer links across exactly the
+                             named git repository roots, then Codex spot-check
   deep-research <query>     Open Gemini + ChatGPT in browser; synthesis template
   plan <description>        Draft an implementation plan using the latest brief
   build [target]            Interactive Claude/Codex session in the project dir

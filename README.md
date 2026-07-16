@@ -145,6 +145,7 @@ restarting the session.
 | `debug --review-only <brief> [bug]` | Skip the expensive sweep and run only the two short reviews plus verdict against an existing brief |
 | `dead-code [path]` | Agy on pinned Gemini 3.1 Pro (High) sweeps the repository for unused files, functions, and imports. Styx whole-word-checks every valid reported symbol outside its definition site, marks it CONFIRMED/REFUTED, then runs one Codex spot-check over up to five confirmed findings. Read-only; report saved under `styx/dead-code/` |
 | `map-impact <symbol\|file\|diff-spec>` | Agy on pinned Gemini 3.1 Pro (High) traces direct dependents and transitive change impact across the repository from a symbol, file, or git diff/ref such as `HEAD~1`. Findings are structured dependency edges; one Codex turn spot-checks up to five claimed edges against the cited code. Read-only; report saved under `styx/map-impact/` |
+| `cross-repo <root2> [root3...] [-- <question>]` | Agy traces machine-readable producer/consumer links across exactly the named git repository roots, then one Codex turn spot-checks up to five links. Every mounted tree is guarded; any mutation refuses success. Sensitive credential directories are never mounted. Report saved atomically under the primary repo's `styx/cross-repo/` |
 
 ### Autonomy
 
@@ -222,6 +223,7 @@ timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 - `<project>/styx/debug/` — recoverable ultraFerdDebug briefs and final reports (overridable with the project's `debug_dir`)
 - `<project>/styx/dead-code/` — atomic dead-code sweep, deterministic verification, and Codex spot-check reports
 - `<project>/styx/map-impact/` — atomic impact maps with canonical dependency-edge JSON and a Codex spot-check
+- `<project>/styx/cross-repo/` — atomic multi-root link reports with canonical findings and all-roots guard evidence
 - Secrets live in the platform secret store (macOS Keychain service `styx` /
   Windows Credential Manager target prefix `styx/`).
 
@@ -248,6 +250,8 @@ fallbacks. Existing routing files receive it idempotently during startup or
 `styx upgrade`; an existing customized `dead-code` target is preserved.
 The `map-impact` rule uses the same pin and fallback chain; its missing-rule
 migration is likewise idempotent and preserves existing customized routing.
+The `cross-repo` rule follows the same pattern; existing routing files receive
+it idempotently without replacing a customized `cross-repo` target.
 
 ## Deps
 

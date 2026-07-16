@@ -96,7 +96,7 @@ func TestDefaultRoutingReadSweepRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := router.FromConfig(routing, nil)
-	for _, verb := range []string{"dead-code", "map-impact"} {
+	for _, verb := range []string{"dead-code", "map-impact", "cross-repo"} {
 		t.Run(verb, func(t *testing.T) {
 			got, err := r.Route(context.Background(), router.Request{Verb: verb})
 			if err != nil {

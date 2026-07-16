@@ -9,6 +9,7 @@
 #   FAKEAGENT_ARGS_LOG     append "$@" to this file (arg assertions)
 #   FAKEAGENT_PROTO        "codex": emit codex exec --json events instead
 #   FAKEAGENT_SLEEP        sleep N seconds before emitting (background tests)
+#   FAKEAGENT_MUTATE_PATH  write a marker file before emitting (tree-guard tests)
 if [ -n "$FAKEAGENT_ARGS_LOG" ]; then
   echo "$@" >> "$FAKEAGENT_ARGS_LOG"
 fi
@@ -26,6 +27,9 @@ IN=${FAKEAGENT_IN:-100}
 OUT=${FAKEAGENT_OUT:-20}
 if [ -n "$FAKEAGENT_SLEEP" ]; then
   sleep "$FAKEAGENT_SLEEP"
+fi
+if [ -n "$FAKEAGENT_MUTATE_PATH" ]; then
+  echo "fakeagent mutation" > "$FAKEAGENT_MUTATE_PATH"
 fi
 if [ "$FAKEAGENT_PROTO" = "codex" ]; then
   if [ "$FAKEAGENT_FAIL_RESUME" = "1" ]; then

@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-16 # Slice 4 map-impact
+last_verified: 2026-07-16 # Slice 5 cross-repo
 ---
 
 # Styx Architecture
@@ -48,7 +48,7 @@ fallback chain when a channel is over its message caps.
 
 ## cmd/styx — verbs and app wiring
 
-One file per verb (`research.go`, `debug.go`, `dead_code.go`, `map_impact.go`, `plan.go`, `build.go`, `review.go`,
+One file per verb (`research.go`, `debug.go`, `dead_code.go`, `map_impact.go`, `cross_repo.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
 `learn.go`, `repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
@@ -386,6 +386,11 @@ The `map-impact` verb uses the identical seeded agy pin and fallback chain.
 `EnsureMapImpactRule` appends it to existing routing files when missing while
 preserving any custom rule, and both startup and explicit upgrade report that
 migration separately.
+
+The `cross-repo` verb uses that same seeded agy pin and fallback chain.
+`EnsureCrossRepoRule` appends it to existing routing files when missing while
+preserving any custom rule; startup and `styx upgrade` report this migration
+separately.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -1219,10 +1224,11 @@ calls share a run id in budget usage, and completion records a read-risk
 outcome. The pathway has no pipeline lock or resumable state.
 
 `internal/modeljson.Candidates` is the shared defensive recovery seam used by
-dead-code and map-impact for strict, fenced, or embedded model JSON; each
-pathway still owns and validates its concrete schema. Their command adapters
+dead-code, map-impact, and cross-repo for strict, fenced, or embedded model
+JSON; each pathway still owns and validates its concrete schema. Their command adapters
 share `readPathwayChannelAdapter`, which forwards routed model/effort and
-records correlated sweep/review usage without enabling writes.
+records correlated sweep/review usage without enabling writes; cross-repo adds
+only its validated repository roots through the adapter's `ExtraRoots` copy.
 
 ## Impact mapping (internal/mapimpact, cmd/styx/map_impact.go)
 
@@ -1257,6 +1263,38 @@ structured edge, the bounded Codex review, and raw agy JSON. `brief.WriteReport`
 writes it atomically under `styx/map-impact/`. Sweep and review share a run id,
 completion records a read-risk outcome, and the pathway has no pipeline lock or
 resumable state.
+
+## Cross-repository links (internal/crossrepo, cmd/styx/cross_repo.go)
+
+`styx cross-repo <root2> [root3...] [-- <question>]` analyzes concrete
+producer/consumer relationships across the active repository and exactly the
+additional git repository roots named before `--`. Every root is resolved
+through symlinks, must name a git top-level directory exactly, and is
+deduplicated. Styx refuses the home directory, `.git`, `.ssh`, known cloud/CLI
+credential directories, keyrings, and keychains before any model is invoked.
+This keeps the agy mount set to the smallest explicitly requested set.
+
+The sweep routes through the seeded `cross-repo` rule, forwards the pinned agy
+model, uses the primary repository as `WorkingDir`, and copies only the other
+validated roots into `channel.Request.ExtraRoots`; the same roots are available
+to one read-only Codex review turn. The agy prompt requires a single JSON
+`findings` object with exact mounted-root strings, repository-relative producer
+and consumer sites, a relationship, contract, and evidence. Parsing uses
+`modeljson.Candidates`, validates each entry independently, caps consideration
+at 500, rejects unknown/same roots and escaping paths, and preserves canonical
+machine-readable findings separately from raw model output.
+
+Because agy cannot enforce read-only access, the command snapshots
+`gitTreeState` for every mounted root before the sweep and diffs every root in
+the mandatory `AfterSweep` hook immediately after it returns. Any changed root
+or post-sweep guard error is a hard failure: parsing and Codex are skipped,
+success is refused, and a loud forensic report identifies the affected root and
+porcelain paths. With a clean guard and valid findings, exactly one Codex turn
+spot-checks the first five producer/consumer links. The final report includes
+all roots, parser warnings, canonical JSON findings, the Codex result or error,
+and raw agy output; `brief.WriteReport` writes it atomically under
+`styx/cross-repo/`. Sweep and review share one run id and the completed command
+records a read-risk outcome.
 
 ## Execute (internal/execute)
 
@@ -2267,6 +2305,7 @@ should rotate the migrated keys.
                                              briefs + debug reports + plans (per-project config)
 <project>/styx/dead-code                    dead-code verification reports (fixed pathway dir)
 <project>/styx/map-impact                  impact-map reports (fixed pathway dir)
+<project>/styx/cross-repo                  guarded multi-root link reports (fixed pathway dir)
 ```
 
 ## Testing conventions

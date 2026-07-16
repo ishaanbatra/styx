@@ -101,6 +101,7 @@ func TestSetupFreeVerb(t *testing.T) {
 		{verb: "upgrade", want: false},
 		{verb: "dead-code", want: false},
 		{verb: "map-impact", want: false},
+		{verb: "cross-repo", want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.verb, func(t *testing.T) {
