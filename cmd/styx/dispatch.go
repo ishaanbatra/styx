@@ -32,10 +32,11 @@ var (
 	globalVerbose bool
 )
 
-// Global target flags, set by main() after parseGlobalFlags.
+// Global target and conductor-host flags, set by main() after parseGlobalFlags.
 var (
 	globalProjectAlias string
 	globalDirArg       string
+	globalHost         string
 )
 
 // resolveGlobalTarget resolves the active project. A non-empty positional arg
@@ -409,7 +410,7 @@ func ensureFirstRun() error {
 	}
 	// Auto-upgrade: v0.2 rewrites gemini:* -> agy:default; v0.3 injects the
 	// `implement` verb rules. Both back up to routing.v0.1.toml.bak.
-	if n, injected, fableRestored, taskCapInjected, watchInjected, debugInjected, err := config.UpgradeRoutingFile(routingPath); err != nil {
+	if n, injected, fableRestored, taskCapInjected, hostInjected, watchInjected, debugInjected, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
 	} else {
 		if n > 0 {
@@ -423,6 +424,9 @@ func ensureFirstRun() error {
 		}
 		if taskCapInjected {
 			logStatus("auto-upgraded routing.toml: seeded [conductor] max_background_tasks = 4")
+		}
+		if hostInjected {
+			logStatus("auto-upgraded routing.toml: seeded [conductor] host = \"claude\"")
 		}
 		if watchInjected {
 			logStatus("auto-upgraded routing.toml: seeded [watch] stall_threshold_seconds=90 interval_seconds=15 ollama_enabled=true")

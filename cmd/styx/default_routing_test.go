@@ -31,6 +31,9 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	if r.Models.RefreshIntervalHours == 0 {
 		t.Error("seeded routing missing [models] (defaults not applied?)")
 	}
+	if r.Conductor.Host != "claude" || !strings.Contains(defaultRoutingTOML, `host = "claude"`) {
+		t.Errorf("seeded conductor host = %q, want claude", r.Conductor.Host)
+	}
 }
 
 func TestDefaultRouting_DebugRules(t *testing.T) {

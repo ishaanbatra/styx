@@ -1,4 +1,4 @@
-// Package launcher opens a frontier-brain host session (Claude Code first)
+// Package launcher opens a frontier-brain host session (Claude Code or Codex)
 // with styx attached as an MCP toolbelt. Host adapters are the ONLY
 // host-specific code in the conductor; everything else is portable MCP.
 package launcher
@@ -19,14 +19,15 @@ type Opts struct {
 	ProjectPath string
 	StyxBin     string
 	Guidance    string
-	RouteGate   string   // block | audit | off — installs the styx hook that enforces dispatch-over-inline routing
+	RouteGate   string   // block | audit | off — Claude installs enforcement hooks; Codex degrades to guidance-only
 	ExtraRepos  []string // absolute paths of additional bound repos
-	ExtraArgs   []string // host CLI args appended after the standard flags (e.g. --resume <id>)
+	ResumeArgs  []string // host-specific resume argv, positioned by the host adapter
 }
 
 // Host launches one brain CLI wired to the styx MCP server.
 type Host interface {
 	Name() string
+	ResumeArgs(sessionID string) []string
 	Launch(ctx context.Context, o Opts) error
 }
 
@@ -36,6 +37,14 @@ type ClaudeHost struct {
 }
 
 func (h *ClaudeHost) Name() string { return "claude" }
+
+// ResumeArgs maps a styx resume request onto Claude Code's CLI.
+func (h *ClaudeHost) ResumeArgs(sessionID string) []string {
+	if sessionID == "" {
+		return []string{"--continue"}
+	}
+	return []string{"--resume", sessionID}
+}
 
 // Launch writes an MCP config binding the "styx" server to `<StyxBin> mcp`,
 // then execs claude in the project dir with stdio passthrough so the user
@@ -88,7 +97,7 @@ func claudeArgs(cfgPath, settingsPath string, o Opts) []string {
 	for _, r := range o.ExtraRepos {
 		args = append(args, "--add-dir", r)
 	}
-	return append(args, o.ExtraArgs...)
+	return append(args, o.ResumeArgs...)
 }
 
 // writeConductorSettings writes the styx-owned Claude Code settings file for a

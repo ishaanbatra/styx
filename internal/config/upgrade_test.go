@@ -141,7 +141,7 @@ use  = "gemini:flash"
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, _, _, _, watchInjected, debugInjected, err := UpgradeRoutingFile(routingPath)
+	n, _, _, _, hostInjected, watchInjected, debugInjected, err := UpgradeRoutingFile(routingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +150,9 @@ use  = "gemini:flash"
 	}
 	if !watchInjected {
 		t.Error("expected [watch] section to be injected on a config that lacks one")
+	}
+	if !hostInjected {
+		t.Error("expected [conductor] host to be injected on a config that lacks one")
 	}
 	if !debugInjected {
 		t.Error("expected debug rules to be injected on a pre-debug config")
@@ -286,6 +289,49 @@ func TestEnsureConductorTaskCap(t *testing.T) {
 	got4, changed4 := EnsureConductorTaskCap(bare)
 	if !changed4 || !strings.Contains(got4, "[conductor]") || !strings.Contains(got4, "max_background_tasks = 4") {
 		t.Fatalf("missing section must be appended whole:\n%s", got4)
+	}
+}
+
+func TestEnsureConductorHost(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		wantChanged bool
+		wantHost    string
+	}{
+		{
+			name:        "existing section receives default",
+			content:     "[conductor]\nship_gate = \"handshake\"\n",
+			wantChanged: true,
+			wantHost:    `host = "claude"`,
+		},
+		{
+			name:        "custom host is preserved",
+			content:     "[conductor]\nhost = \"codex\"\n",
+			wantChanged: false,
+			wantHost:    `host = "codex"`,
+		},
+		{
+			name:        "missing section is appended",
+			content:     "[tiers]\nfable = \"fable\"\n",
+			wantChanged: true,
+			wantHost:    `host = "claude"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, changed := EnsureConductorHost(tt.content)
+			if changed != tt.wantChanged {
+				t.Errorf("changed = %v, want %v", changed, tt.wantChanged)
+			}
+			if !strings.Contains(got, tt.wantHost) {
+				t.Errorf("output missing %q:\n%s", tt.wantHost, got)
+			}
+			again, changedAgain := EnsureConductorHost(got)
+			if changedAgain || again != got {
+				t.Error("second run must be a no-op")
+			}
+		})
 	}
 }
 

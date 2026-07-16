@@ -93,30 +93,32 @@ the standard routing file is seeded silently and unchanged. After setup, run
 |---|---|
 | `--project <alias>` | Run the verb against a registered project, from anywhere (exact name or unique prefix) |
 | `--dir <path>` | Run the verb against the repo at `<path>`, from anywhere |
+| `--host claude\|codex` | Override `[conductor] host` for this conductor launch |
 
-Without either flag, styx uses the current directory's repo. An explicit target
-that can't be resolved is a clear error, never a silent fallback.
+Without a project or directory flag, styx uses the current directory's repo.
+An explicit target that can't be resolved is a clear error, never a silent
+fallback.
 
 ### Conversational
 
 | Verb | What it does |
 |---|---|
-| `styx` | Launch the Claude Code conductor with the styx MCP toolbelt — from any directory, git repo or not (repl for the classic v0.2 REPL) |
+| `styx` | Launch the configured Claude Code or Codex conductor with the styx MCP toolbelt — from any directory, git repo or not (`repl` opens the classic v0.2 REPL) |
 | `styx <repo...>` | Launch the conductor bound to one or more named repos (first is focus) |
 | `styx launch [repo...]` | Same as the two rows above, explicit verb form |
-| `styx resume [sessionID]` | Relaunch the conductor resuming a Claude Code session — most recent for the cwd without an ID (`--continue`), a specific one with (`--resume <id>`); the styx toolbelt and guidance are rewired either way |
+| `styx resume [sessionID]` | Relaunch the configured conductor and rewire the styx toolbelt/guidance: Claude uses `--continue` / `--resume <id>`; Codex uses `resume --last` / `resume <id>` |
 | `styx repl [repo...]` | Open the classic v0.2 REPL, kept until the conductor reaches parity |
 | `styx "<anything>"` | Run one brain-routed turn, then exit |
 
-`styx`/`styx launch` writes an MCP config binding a `styx` server (`styx mcp`)
-and execs `claude --mcp-config <file> --append-system-prompt <guidance>` in
-the project directory, handing control to Claude Code with styx's routing
-brain, budget, memory, and dispatch surface attached as tools. Guidance comes
-from `internal/guidance` plus any recalled routing preferences; extra repos
-beyond the focus are added to the Claude Code session directly (`--add-dir`
-per repo) and noted in that guidance so the brain also passes them as the
-`dispatch` tool's `extra_roots`, giving dispatched agent threads the same
-access.
+`styx`/`styx launch` starts `[conductor] host` (default `claude`, overridable
+for one launch with `--host`). Claude Code receives a styx-owned MCP config and
+appended system prompt; Codex receives equivalent per-invocation
+`mcp_servers.styx.*` and TOML-encoded `developer_instructions` overrides, so
+neither path mutates the host's user config. Both run in the project directory
+with stdio passthrough. Extra repos are added directly with `--add-dir` and
+noted in guidance so the brain also passes them as the `dispatch` tool's
+`extra_roots`. Claude Code enforces non-`off` `route_gate` modes with hooks;
+Codex currently degrades to guidance-only routing and narrates that limitation.
 
 Within a multi-repo classic-REPL session, `/repos` lists all bound repos
 (focus-marked), `/focus <name>` switches to a different bound repo (binding it
@@ -187,7 +189,7 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 | `hook <event>` | Internal plumbing — the route-gate hook the launcher installs into conductor sessions (Claude Code invokes it, not you); denies inline WebSearch/WebFetch/Task/external-curl + MCP web tools and redirects to dispatch/pipeline_run, per `[conductor] route_gate` |
 | `migrate-secrets` | Move env-var secrets to the platform secret store (macOS Keychain / Windows Credential Manager) |
 | `update` | Replace styx with the latest GitHub release after SHA-256 verification; Scoop/WinGet installs stay package-manager-owned |
-| `upgrade` | Re-run routing migrations manually (v0.1->v0.2 gemini->agy; v0.3 adds the `implement` verb) |
+| `upgrade` | Re-run routing migrations manually (including seeded conductor host/task settings) |
 | `version` / `styx --version` | Print the styx version and exit |
 
 Dispatches wait by default: while an agent works, live progress (tool-by-tool
@@ -218,6 +220,15 @@ timeout (Claude Code: `MCP_TOOL_TIMEOUT`).
 - Secrets live in the platform secret store (macOS Keychain service `styx` /
   Windows Credential Manager target prefix `styx/`).
 
+The conductor host is configured in the routing file and defaults to Claude
+Code. Existing configs receive the default key through the normal idempotent
+routing upgrade without replacing a host already chosen by the user:
+
+```toml
+[conductor]
+host = "claude" # claude | codex
+```
+
 The seeded routing table uses `debug.sweep` for agy with
 `claude:sonnet` fallback, `debug.review.codex` for the high-effort Codex pass,
 and `debug.review.claude` for the Claude Sonnet pass. `styx upgrade` injects
@@ -225,8 +236,8 @@ missing debug rules without overwriting customized ones.
 
 ## Deps
 
-- `claude` CLI (Anthropic) — **required**; everything else is optional
-- `codex` CLI (OpenAI, signed in via ChatGPT Plus)
+- `claude` CLI (Anthropic) — required for Claude channels or conductor sessions
+- `codex` CLI (OpenAI, signed in via ChatGPT Plus) — required for Codex channels or conductor sessions
 - `agy` CLI (Antigravity, replaces gemini-cli): `curl -fsSL https://antigravity.google/cli/install.sh | bash`
 - `ollama` (local)
 - `gh` (for PR creation in `auto`)

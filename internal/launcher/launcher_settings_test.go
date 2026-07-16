@@ -128,7 +128,7 @@ func TestWriteConductorSettingsBlockWritesFile(t *testing.T) {
 }
 
 func TestClaudeArgsSettingsInAllModesAndNoStrict(t *testing.T) {
-	o := Opts{Guidance: "guide", ExtraRepos: []string{"/repo2"}, ExtraArgs: []string{"--continue"}}
+	o := Opts{Guidance: "guide", ExtraRepos: []string{"/repo2"}, ResumeArgs: []string{"--continue"}}
 
 	for _, mode := range []string{"off", "audit", "block", "unknown"} {
 		t.Run(mode, func(t *testing.T) {
@@ -154,7 +154,7 @@ func TestClaudeArgsSettingsInAllModesAndNoStrict(t *testing.T) {
 		t.Errorf("expected extra repo --add-dir, got %v", args)
 	}
 	if args[len(args)-1] != "--continue" {
-		t.Errorf("ExtraArgs must be last, got %v", args)
+		t.Errorf("ResumeArgs must be last, got %v", args)
 	}
 	// Locked decision: we do NOT strip the user's other MCP servers.
 	if strings.Contains(joined, "--strict-mcp-config") {

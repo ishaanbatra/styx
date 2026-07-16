@@ -52,7 +52,7 @@ func resolveStyxDisplayVersion(version string, info debug.BuildInfo) string {
 
 // parseGlobalFlags strips global flags from argv (long form only), returning
 // the remaining tokens plus the parsed values.
-func parseGlobalFlags(argv []string) (rest []string, quiet, verbose bool, projectAlias, dirArg string) {
+func parseGlobalFlags(argv []string) (rest []string, quiet, verbose bool, projectAlias, dirArg, host string) {
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		switch {
@@ -74,24 +74,32 @@ func parseGlobalFlags(argv []string) (rest []string, quiet, verbose bool, projec
 			}
 		case strings.HasPrefix(a, "--dir="):
 			dirArg = strings.TrimPrefix(a, "--dir=")
+		case a == "--host":
+			if i+1 < len(argv) {
+				host = argv[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--host="):
+			host = strings.TrimPrefix(a, "--host=")
 		default:
 			rest = append(rest, a)
 		}
 	}
-	return rest, quiet, verbose, projectAlias, dirArg
+	return rest, quiet, verbose, projectAlias, dirArg, host
 }
 
 func main() {
-	rest, quiet, verbose, projectAlias, dirArg := parseGlobalFlags(os.Args[1:])
+	rest, quiet, verbose, projectAlias, dirArg, host := parseGlobalFlags(os.Args[1:])
 
 	if len(rest) == 0 {
-		// Bare `styx` launches the conductor (Claude Code + styx MCP
-		// toolbelt) in the current project. `styx repl` still opens the
+		// Bare `styx` launches the configured conductor host with the styx MCP
+		// toolbelt in the current project. `styx repl` still opens the
 		// classic v0.2 REPL.
 		globalQuiet = quiet
 		globalVerbose = verbose
 		globalProjectAlias = projectAlias
 		globalDirArg = dirArg
+		globalHost = host
 		runLaunchUpdateChecks()
 		if err := ensureFirstRun(); err != nil {
 			fmt.Fprintf(os.Stderr, "styx: setup error: %v\n", err)
@@ -115,6 +123,7 @@ func main() {
 	globalVerbose = verbose
 	globalProjectAlias = projectAlias
 	globalDirArg = dirArg
+	globalHost = host
 
 	verb := rest[0]
 	args := rest[1:]
