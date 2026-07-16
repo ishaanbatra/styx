@@ -192,4 +192,15 @@ func TestRenderReport(t *testing.T) {
 			t.Errorf("report missing %q:\n%s", want, got)
 		}
 	}
+	if strings.Contains(got, "Sweep modified the working tree") {
+		t.Errorf("clean report must not carry a dirty-tree warning:\n%s", got)
+	}
+
+	rep.SweepDirtied = []string{"?? stray.txt", " M internal/a.go"}
+	dirty := RenderReport(rep)
+	for _, want := range []string{"Sweep modified the working tree", "?? stray.txt", " M internal/a.go"} {
+		if !strings.Contains(dirty, want) {
+			t.Errorf("dirty report missing %q:\n%s", want, dirty)
+		}
+	}
 }

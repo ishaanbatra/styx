@@ -268,3 +268,34 @@ func TestCmdDebugRefusesBlockedSweep(t *testing.T) {
 		t.Fatal("blocked sweep must not call a channel")
 	}
 }
+
+func TestTreeStateDiff(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		pre, post string
+		want      []string
+	}{
+		{name: "identical states", pre: "?? a.txt\n", post: "?? a.txt\n", want: nil},
+		{name: "sweep adds a file", pre: "", post: "?? stray.txt\n", want: []string{"?? stray.txt"}},
+		{name: "sweep edits a tracked file", pre: "?? a.txt\n", post: "?? a.txt\n M internal/a.go\n", want: []string{"M internal/a.go"}},
+		{name: "pre-existing dirt is ignored", pre: " M internal/a.go\n?? a.txt\n", post: " M internal/a.go\n?? a.txt\n", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := treeStateDiff(tc.pre, tc.post)
+			if len(got) != len(tc.want) {
+				t.Fatalf("treeStateDiff = %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("treeStateDiff = %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+func TestGitTreeStateSkipsNonGitDir(t *testing.T) {
+	if _, err := gitTreeState(context.Background(), t.TempDir()); err == nil {
+		t.Fatal("non-git dir must return an error so the tree guard is skipped")
+	}
+}

@@ -13,11 +13,12 @@ import (
 
 const watcherSystem = `You judge whether parallel AI coding agents are stuck.
 You are given only agents that mechanical checks already flagged as suspicious
-(a long run of identical actions, or a long idle). Repeated edits, tests, or
-reads of the SAME file are NORMAL forward progress — do not call that a loop.
-A real loop is the SAME action repeating with NO state change (same command,
-same target, same result, over and over). A stall is a long idle with no new
-action. For EACH agent, reply with one JSON object per line:
+(a long run of identical actions, a long ping-pong between two actions, or a
+long idle). Repeated edits, tests, or reads of the SAME file are NORMAL
+forward progress — do not call that a loop.
+A real loop is the SAME action (or the same two actions alternating) repeating
+with NO state change (same command, same target, same result, over and over).
+A stall is a long idle with no new action. For EACH agent, reply with one JSON object per line:
 {"agent":"<label>","verdict":"healthy|watch|stuck","reason":"<one short line>"}
 Return only JSON lines, nothing else.`
 
@@ -120,8 +121,8 @@ func (w *Watcher) pollOnce(ctx context.Context) error {
 	for _, flagged := range flagged {
 		s := flagged.state
 		sig := flagged.signals
-		fmt.Fprintf(&u, "agent %s — idle %s, %d identical in a row, %d distinct recent actions, %d distinct files, %.1f ev/min\n",
-			s.Label, short(sig.Idle), sig.ConsecutiveIdentical, sig.DistinctRecent, sig.DistinctFiles, sig.EventsPerMin)
+		fmt.Fprintf(&u, "agent %s — idle %s, %d identical in a row, trailing run of %d events within 2 distinct actions, %d distinct recent actions, %d distinct files, %.1f ev/min\n",
+			s.Label, short(sig.Idle), sig.ConsecutiveIdentical, sig.TrailingLowVariety, sig.DistinctRecent, sig.DistinctFiles, sig.EventsPerMin)
 		for _, ev := range w.Board.RecentEvents(s.Label) {
 			fmt.Fprintf(&u, "  -%s  %s\n", short(now.Sub(ev.At)), ev.Summary)
 		}

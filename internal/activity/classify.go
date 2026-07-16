@@ -8,9 +8,16 @@ import (
 // loopRun is the trailing identical-action count that merits model review.
 const loopRun = 4
 
+// alternateRun is the trailing low-variety run length (events drawn from at
+// most two distinct summaries) that merits model review. It is deliberately
+// looser than loopRun: a short edit-test cycle is normal iteration, but eight
+// straight events ping-ponging between the same two actions is loop-shaped.
+const alternateRun = 8
+
 // signalSet is the mechanical read of one agent's recent board events.
 type signalSet struct {
 	ConsecutiveIdentical int
+	TrailingLowVariety   int // trailing run drawn from <=2 distinct summaries
 	DistinctRecent       int
 	DistinctFiles        int
 	Idle                 time.Duration
@@ -56,7 +63,20 @@ func classify(s AgentState, now time.Time, stall time.Duration) (signalSet, verd
 		}
 		sig.ConsecutiveIdentical++
 	}
-	if sig.ConsecutiveIdentical >= loopRun || sig.Idle > stall {
+
+	// Trailing low-variety run: how far back the event stream stays within
+	// two distinct summaries. Catches A,B,A,B loops that a strict identical
+	// run can never see.
+	variety := map[string]struct{}{}
+	for i := len(s.recentEvents) - 1; i >= 0; i-- {
+		variety[s.recentEvents[i].Summary] = struct{}{}
+		if len(variety) > 2 {
+			break
+		}
+		sig.TrailingLowVariety++
+	}
+
+	if sig.ConsecutiveIdentical >= loopRun || sig.TrailingLowVariety >= alternateRun || sig.Idle > stall {
 		return sig, suspicious
 	}
 	return sig, healthy

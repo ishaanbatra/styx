@@ -59,6 +59,12 @@ type Report struct {
 	CodexReview  Review    `json:"codex_review"`
 	ClaudeReview Review    `json:"claude_review"`
 	Verdict      Verdict   `json:"verdict"`
+
+	// SweepDirtied lists working-tree paths the sweep modified despite the
+	// diagnosis-only instruction. The caller populates it (the pathway itself
+	// has no repo access); non-empty means the sweep channel did not honor
+	// read-only and its evidence should be re-verified.
+	SweepDirtied []string `json:"sweep_dirtied,omitempty"`
 }
 
 // Options bundles the pathway input, channels, narration, and persistence.
@@ -217,6 +223,13 @@ func RenderReport(r *Report) string {
 	fmt.Fprintf(&b, "- Verdict: %s confidence; confirmed=%t\n", r.Verdict.Confidence, r.Verdict.Confirmed)
 	if r.BriefPath != "" {
 		fmt.Fprintf(&b, "- Recoverable brief: %s\n", r.BriefPath)
+	}
+	if len(r.SweepDirtied) > 0 {
+		b.WriteString("\n## ⚠ Sweep modified the working tree\n\n")
+		b.WriteString("The sweep is instructed to be diagnosis-only, but these paths changed during it. Review and revert them; treat the brief's evidence with suspicion.\n\n")
+		for _, p := range r.SweepDirtied {
+			fmt.Fprintf(&b, "- %s\n", p)
+		}
 	}
 	fmt.Fprintf(&b, "\n## Debug Brief\n\n%s\n", r.Brief)
 	renderReview(&b, "Codex Review", r.CodexReview)

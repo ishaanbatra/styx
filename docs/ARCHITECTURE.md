@@ -1110,7 +1110,14 @@ recent brief.
 read-only **ultraFerdDebug** pathway. The routed sweeper receives the project as
 `WorkingDir` but never receives `channel.Request.Write`; it reads broadly and
 returns a markdown debug brief with symptom, file:line evidence, ranked
-hypotheses, a described minimal fix, and open questions. That expensive brief
+hypotheses, a described minimal fix, and open questions. Read-only is enforced
+by the claude/codex channels but NOT by agy — its headless CLI auto-approves
+tool use and has no read-only mode (verified empirically: `--sandbox` restricts
+the terminal, not file writes) — so `cmdDebug` guards the default sweep channel
+itself: it snapshots `git status --porcelain` before the sweep, re-checks right
+after it (inside the `PersistBrief` hook, before reviews), and any paths the
+sweep touched are narrated loudly and recorded in `Report.SweepDirtied`, which
+renders as a warning section at the top of the report. That expensive brief
 is atomically persisted under the project's `DebugDir` (default `styx/debug`)
 before review starts.
 
@@ -1920,14 +1927,19 @@ spam or crash the session.
 
 Before any HTTP call, `classify` computes deterministic `signalSet` values per
 live agent from the timestamped ring: trailing identical-action count,
-distinct recent summaries, distinct file targets, idle duration, and events
-per minute. Only an identical run of at least `loopRun` (4) or idle beyond
+trailing low-variety run (how far back the stream stays within two distinct
+summaries — catches A,B,A,B ping-pong loops a strict identical run never
+sees), distinct recent summaries, distinct file targets, idle duration, and
+events per minute. Only an identical run of at least `loopRun` (4), a
+low-variety run of at least `alternateRun` (8), or idle beyond
 `Stall` is suspicious enough to reach ollama. Healthy cycles — including
-changing edits/tests around one file — skip the model entirely and clear any
+changing edits/tests around one file and short edit-test alternations — skip
+the model entirely and clear any
 stale watcher alarm. For suspicious agents, `pollOnce` sends only the flagged
 subset with timestamps, tool/target summaries, and all mechanical signals.
 The system prompt explicitly treats repeated work on one file as normal and
-defines a loop as the same action with no state change. Ollama must return one
+defines a loop as the same action (or same two actions alternating) with no
+state change. Ollama must return one
 JSON object per line with `agent`, `healthy|watch|stuck`, and a short `reason`;
 only `watch`/`stuck` lines render into the board note. A response with no
 usable JSON verdict, an unreachable endpoint, or another transport/parse

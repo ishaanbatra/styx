@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -113,6 +114,12 @@ func cmdDebug(ctx context.Context, a *app, prog *progress.Tracker, args []string
 		FileHints:   append([]string(nil), parsed.fileHints...),
 		ProjectPath: proj.Path,
 	}
+	// Tree guard: agy's headless CLI auto-approves file writes (no read-only
+	// flag exists), so "diagnosis only" cannot be enforced upstream. Snapshot
+	// the working tree before the sweep and compare right after it (inside
+	// PersistBrief, which Run calls between sweep and reviews).
+	preTree, treeErr := gitTreeState(ctx, proj.Path)
+	var sweepDirtied []string
 	start := time.Now()
 	rep, err := ferddebug.Run(ctx, ferddebug.Options{
 		Input:         input,
@@ -125,6 +132,14 @@ func cmdDebug(ctx context.Context, a *app, prog *progress.Tracker, args []string
 		ClaudeChannel: claudeName,
 		PresetBrief:   presetBrief,
 		PersistBrief: func(body string) (string, error) {
+			if treeErr == nil {
+				if postTree, err := gitTreeState(ctx, proj.Path); err == nil {
+					sweepDirtied = treeStateDiff(preTree, postTree)
+				}
+			}
+			if len(sweepDirtied) > 0 {
+				logStatus("⚠ %s sweep modified the working tree (%s) — review and revert; treating brief with suspicion", ferddebug.PipelineName, strings.Join(sweepDirtied, ", "))
+			}
 			return brief.WriteBrief(brief.WriteOpts{
 				ProjectPath: proj.Path,
 				SubDir:      debugDir,
@@ -137,6 +152,7 @@ func cmdDebug(ctx context.Context, a *app, prog *progress.Tracker, args []string
 	if err != nil {
 		return fmt.Errorf("run %s: %w", ferddebug.PipelineName, err)
 	}
+	rep.SweepDirtied = sweepDirtied
 
 	out, err := brief.WriteReport(brief.WriteOpts{
 		ProjectPath: proj.Path,
@@ -294,6 +310,45 @@ func parseDebugArgs(args []string) (debugCLIArgs, error) {
 		return debugCLIArgs{}, fmt.Errorf("usage: styx debug [--test <name>] [--log <path>] [--file <hint>]... [--review-only <brief-path>] <bug description>")
 	}
 	return out, nil
+}
+
+// gitTreeState returns the porcelain status of dir's working tree, bounded so
+// a hung git can never stall the pathway. A non-git dir (or missing git)
+// returns an error and the caller skips the tree guard.
+func gitTreeState(ctx context.Context, dir string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git status in %s: %w", dir, err)
+	}
+	return string(out), nil
+}
+
+// treeStateDiff returns the porcelain lines present after the sweep but not
+// before it — the paths the sweep itself touched.
+func treeStateDiff(pre, post string) []string {
+	if pre == post {
+		return nil
+	}
+	before := map[string]struct{}{}
+	for _, line := range strings.Split(pre, "\n") {
+		if line != "" {
+			before[line] = struct{}{}
+		}
+	}
+	var dirtied []string
+	for _, line := range strings.Split(post, "\n") {
+		if line == "" {
+			continue
+		}
+		if _, ok := before[line]; !ok {
+			dirtied = append(dirtied, strings.TrimSpace(line))
+		}
+	}
+	return dirtied
 }
 
 func readDebugLog(path string) (string, error) {
