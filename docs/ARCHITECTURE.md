@@ -48,7 +48,7 @@ fallback chain when a channel is over its message caps.
 
 ## cmd/styx — verbs and app wiring
 
-One file per verb (`research.go`, `plan.go`, `build.go`, `review.go`,
+One file per verb (`research.go`, `debug.go`, `plan.go`, `build.go`, `review.go`,
 `auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
 `learn.go`, `repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
@@ -363,9 +363,16 @@ The `implement` verb routes autonomous plan application: codex is primary
 `config.UpgradeRoutingFile` injects these rules into pre-v0.3 configs
 (`EnsureImplementRules`) on next run, alongside the v0.2 gemini→agy rewrite.
 
+The three ultraFerdDebug roles have dedicated rules: `debug.sweep` routes to
+`agy:default` with only `claude:sonnet` as fallback,
+`debug.review.codex` routes to Codex with high effort, and
+`debug.review.claude` routes to Claude Sonnet. `EnsureDebugRules` injects only
+missing rules into existing configs and preserves customized role targets.
+
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
-rewrite keywords), etc. `styx route --explain` prints the full trace via
+rewrite keywords), and `debug` for debug-verb inputs containing panic/crash/
+stack/failing-test vocabulary. `styx route --explain` prints the full trace via
 `Router.Explain`.
 
 Budget/reliability degradation: if the chosen channel's `UsedPct` (max of
@@ -407,7 +414,7 @@ only when no `[watch]` section exists yet, leaving any existing section
 (hand-curated channel/model → tier map, biased toward inclusion — an unknown
 cloud channel is treated as sonnet-class so it's never wrongly excluded), and
 `Floor(sigs []string)`, which looks up each signal in a `signalFloor` map kept
-beside the signal definitions (currently `complex` and `deep` → `TierSonnet`)
+beside the signal definitions (currently `complex`, `deep`, and `debug` → `TierSonnet`)
 and returns the highest tier any signal requires (`TierLocal` = no floor).
 `Router.Route` computes `floor := signals.Floor(req.Signals)` and restricts
 fallback-chain degradation to floor-clearing candidates only — a request with
@@ -507,12 +514,14 @@ non-reasoning local ollama instruct model (default `qwen2.5-coder:7b`; reasoning
 models such as qwen3 are deliberately avoided — they add many seconds per turn).
 `BuildPrompt`'s preamble is an example-led routing spec tuned for a small local model: it
 defines each action, draws the high-confusion boundaries explicitly (pipeline
-verbs are reserved for the four exact styx operations and never general code
+verbs are reserved for the five exact styx operations and never general code
 work; well-scoped implementation from a clear plan/spec is `dispatch:codex` (codex is the primary implementer), while ambiguous/architectural/refactor work, debugging with repo context, plan/design critique, and "explain what X does" are `dispatch:claude`; `research` is for answers that
 live *outside* the repo; `review` is the current diff/changes vs a PR/design;
+`debug` is reserved for a repository-wide cited diagnosis and is forced to
+read risk;
 status questions are `reply`; "remember/note" facts are `remember`, not an
 acknowledging `reply`; size routes large-file explains to `agy`), and carries
-~40 few-shot examples (including codex-implementation, reply/review/intel/auto, handoff, and `parallel_dispatch` anchors) that empirically
+~40 few-shot examples (including codex-implementation, reply/review/intel/auto/debug, handoff, and `parallel_dispatch` anchors) that empirically
 matter more than prose rules for steering a 3B. This preamble previously scored **96% on `TestRoutingAccuracy`** (up from 84.8%) on the original 99-utterance set under the prior code-work->claude policy. Adopting codex-as-implementer (2026-06-15) reworked the preamble/cards AND the labelled set: `testdata/brain/utterances.json` was expanded to **190 utterances** (well-scoped implementation fixtures relabelled to `codex`, plus new fixtures for how the user actually prompts -- exa/websearch/deep `research`, superpowers handoff-vs-plan -- and previously-untested `escalate` and internal-vs-external "find out" boundaries). On the expanded set the pre-rework prompt scored 80% (it routes the new/relabelled `codex` cases to claude by the old policy); the reworked-but-untuned preamble scored 83.7% (159/190). Re-tuning it with **few-shot example anchors only** (no model/dataset/code/label change, no new prose rules) brought the shipped preamble to **91% (173/190) on `TestRoutingAccuracy`**, stable across two runs with an identical 17-miss set. The re-tune was driven by the byte-faithful promptfoo harness in `eval/promptfoo/` (see its `README.md`/`RESULTS.md`), which reproduces the Go gate's request shape and match logic exactly and predicted the gate's miss set byte-for-byte -- but the Go test stays canonical. Residual misses are dominated by the codex/claude implementation frontier and a handful of documented-hard/contentious cases (the `cosine()` structured-output limit, the 2 `escalate` exemplars, compound terminal-intent, and label disputes); the 3B has a hard "example budget" where anchoring one bucket destabilizes another, so further accuracy needs a bigger brain or more fixtures, not more rules. Acting on that, the default brain was upgraded `llama3.2:3b` → `qwen2.5-coder:7b` (2026-06-16) and the set extended to **192** (adding 2 explicit-`ship` fixtures; 8 now carry a `want_risk` label). On the 7b, the shipped preamble (`v15`) scores **routing 178/192 (93%), risk-emission 6/8 (75%), folded gate 176/192 (92%)** on `TestRoutingAccuracy`, reproduced byte-for-byte by the promptfoo harness; adding the per-dispatch risk prose was routing-neutral (the no-risk `v14` baseline scored 177/192) while lifting risk emission from 2/8 to 6/8. Residual misses are the codex/claude implementation frontier, pipeline-`review`/`research` keyword leakage, and a few `reply`-vs-`claude` label disputes (is-this-sound / blast-radius); the 2 risk misses are `read`-class "explain … end to end" cases where the model omits `risk` and falls back to the safe `edit` default.
 Task-level actions are structural decisions: direct reply, single or parallel
 agent dispatch, pipeline invocation, interactive handoff, memory write, or
@@ -772,7 +781,8 @@ v0.3/v0.4 `ALTER TABLE` migrations — additive, so it never touches existing
 
 `project.Current()` walks up to the git root and auto-registers unknown repos
 into `~/.config/styx/projects.toml` (stable `id`, slugged name, sniffed
-language, default `styx/research` + `styx/plans` dirs). `config.Project.ID` is
+language, default `styx/research` + `styx/debug` + `styx/plans` dirs).
+`config.Project.ID` is
 a stable 12-hex-character hash of the absolute project path, produced by
 `config.ProjectID(path)`. `LoadProjects` backfills missing IDs for legacy
 registry entries, so old `projects.toml` files remain loadable while new
@@ -1090,8 +1100,35 @@ body is embedded in the summarize prompt via
 `buildSummarizePrompt`, fenced between `BEGIN UNTRUSTED CONTENT`/
 `END UNTRUSTED CONTENT` markers with an explicit instruction to treat it as
 data, not instructions (prompt-injection mitigation: fetched pages are
-attacker-controlled input). `brief` writes timestamped briefs/plans into the
-project's configured dirs and resolves the most recent brief.
+attacker-controlled input). `brief` atomically writes timestamped
+briefs/reports/plans into the project's configured dirs and resolves the most
+recent brief.
+
+## Debug (internal/debug, cmd/styx/debug.go)
+
+`styx debug [--test <name>] [--log <path>] [--file <hint>]... <bug>` runs the
+read-only **ultraFerdDebug** pathway. The routed sweeper receives the project as
+`WorkingDir` but never receives `channel.Request.Write`; it reads broadly and
+returns a markdown debug brief with symptom, file:line evidence, ranked
+hypotheses, a described minimal fix, and open questions. That expensive brief
+is atomically persisted under the project's `DebugDir` (default `styx/debug`)
+before review starts.
+
+Codex and Claude then review the brief concurrently and independently: Codex
+checks cited-code misreads, while Claude checks whether the proposed cause/fix
+is fundamental. Both produce the `research.Critique` JSON shape. Reviewer
+errors remain visible in the report instead of discarding the sweep. Go code
+computes the verdict without a third model call: any BLOCKING finding makes it
+low-confidence and unconfirmed; IMPORTANT-only findings make it medium; two
+clean reviews make it high. Each role records a correlated `budget.Event`, and
+the completed run records a read-risk outcome.
+
+The final `# ultraFerdDebug report` contains the brief, both raw reviews, and
+the deterministic verdict, then is atomically written beside the recoverable
+brief and best-effort indexed as `memory.KindBrief`. This diagnosis pathway
+does not use the auto pipeline lock or `state.json`, so its state shape cannot
+affect `auto --resume`. `debug --review-only <brief> [bug]` is its recovery
+path: it skips the sweep and reruns only the two cheap reviews plus verdict.
 
 ## Execute (internal/execute)
 
@@ -1248,7 +1285,7 @@ tools" below): `route`/`budget_status`/`channel_health`/`get_intel`/
 `refresh_intel`/`recall` for the routing brain and memory, `dispatch`/
 `thread_status` for delegating to persistent claude/codex/agy/ollama
 threads, and `memory_save`/`pipeline_run` for writing memories and running
-the research/review/intel/auto pipelines (the last gated by
+the research/review/intel/auto/debug pipelines (`auto` alone is gated by
 `internal/shipgate`). No code path in the launcher itself talks to a
 provider API or the MCP protocol — it only shells out to the `claude` CLI
 and writes a config file for it to read.
@@ -1593,7 +1630,7 @@ REPL loop.
   Every write uses `Source: "conductor"`, `Confidence: 0.9`. Returns
   `{saved, id}`.
 - `pipeline_run(pipeline, arg?, confirm_token?)` — `pipeline` is one of
-  `research|review|intel|auto`; an unknown value is rejected **before** the
+  `research|review|intel|auto|debug`; an unknown value is rejected **before** the
   ship gate so it errors loudly regardless of gate mode. `auto` (which
   ships: branch→push→PR) then runs the same `internal/shipgate` handshake
   as `dispatch` risk=ship, keyed `"pipeline:auto"` — denied gates return the
@@ -1604,7 +1641,8 @@ REPL loop.
   REPL's entry; failures are narrated via `logStatus`, never fail the
   completed research); `review` → `cmdReview(ctx, d.a, nil)`; `intel` →
   `cmdIntel(ctx, d.a, []string{proj.Name})`; `auto` → `cmdAuto(ctx, d.a,
-  []string{arg})`. All four pipeline commands now take the caller's context
+  []string{arg})`; `debug` → `cmdDebug(ctx, d.a, prog, []string{arg})`, then
+  best-effort indexes the newest report. All five pipeline commands now take the caller's context
   as their first parameter (CLI paths pass `context.Background()`; the REPL
   passes its per-command ctx) — the handler passes its per-call ctx so a
   host cancel actually kills the drafter/critic subprocesses via
@@ -1625,8 +1663,8 @@ REPL loop.
   an empty alias to the same cwd project via `resolveGlobalTarget("")`,
   while a named alias still resolves strictly (no fallback) via
   `target.Resolve`; `managerForProject` binds an already-resolved project
-  for the research indexing step. On success returns `{pipeline, done:
-  true, note}` pointing at `styx/research/` and `styx/plans/` for
+  for the research/debug indexing step. On success returns `{pipeline, done:
+  true, note}` pointing at `styx/research/`, `styx/debug/`, and `styx/plans/` for
   artifacts.
 - `rate_dispatch(thread_or_task, ok, note?)` — stamps a rating onto the
   **most recent matching outcome row** (by thread name or background task
@@ -2077,7 +2115,8 @@ should rotate the migrated keys.
 ~/.config/styx/state/intel/<id>/index.json  per-project codebase intel
 <project>/.claude/context.md                rendered intel (Claude Code loads it)
 <project>/.styx/runs/<run-id>/state.json    pipeline state
-<project>/styx/research, styx/plans         briefs + plans (per-project config)
+<project>/styx/research, styx/debug, styx/plans
+                                             briefs + debug reports + plans (per-project config)
 ```
 
 ## Testing conventions

@@ -10,11 +10,12 @@ Actions:
 - reply: answer small talk OR a question about styx's OWN current state - which threads are running, budget/usage, which model the brain uses, what's left in the plan/phase, what the last dispatch did. Answer from the context below and put it in "reply". Do NOT use reply to acknowledge a fact the user told you to keep - that is "remember".
 - dispatch: send work to ONE agent thread. This is the DEFAULT for any request to do work on this repo's code - write, change, debug, refactor, plan, explain a normal-sized piece of THIS repo's code, run a script, or a trivial grunt one-shot. Set "dispatches" to a single-element array; each element needs "thread" and a short "message" (the task in your own words). Pick the thread per the rules below.
 - parallel_dispatch: only when 2+ threads should work independently (e.g. cross-review by claude AND codex). Use 2+ dispatch elements.
-- pipeline: run a styx pipeline. Set "pipeline" to ONE of these four - and use pipeline ONLY for these exact operations, never for general code work:
+- pipeline: run a styx pipeline. Set "pipeline" to ONE of these five - and use pipeline ONLY for these exact operations, never for general code work:
   - "research": the answer lives OUTSIDE this repo - the web, a third-party product/CLI/library, or what other projects do ("look up", "websearch", "research X", "what's the latest", "find out if <external lib> supports Y", "is <external product> still available"). If the answer is in THIS codebase or its config, it's dispatch:claude (e.g. "find out how our cooldown is configured" -> claude).
   - "auto": full plan->build->ship of a feature to a PR ("take it to a PR", "build X end to end", "do the whole feature").
   - "review": review the user's CURRENT/uncommitted work - the diff, the changes, or staged changes ("review my diff", "go over the changes for anything I missed", "do a critical pass on the diff", "review the staged changes and flag risks"). Reviewing a PR, a whole module, a plan, or a design is dispatch:claude.
   - "intel": rebuild or refresh the codebase INDEX ("refresh/rebuild intel", "re-index the codebase", "rebuild the context index"). Explaining what code does, or a code change that merely mentions "context", is dispatch:claude.
+	- "debug": diagnose a bug with the ultraFerdDebug read-only pathway when the request calls for a repository-wide investigation, cited debug brief, and independent codex+claude review. A straightforward named fix remains a dispatch.
   When torn between a pipeline and doing code work, choose dispatch:claude.
 - handoff: the user wants to work interactively / together ("let's pair", "I want to drive", "work through X together", "hand me / open an interactive session").
 - remember: the user states a durable fact, decision, or preference to keep ("remember...", "note...", "for next time...") OR corrects a past routing choice. You MUST copy the fact into the "remember" field verbatim - an empty "remember" is INVALID. Prefix routing corrections with "routing-preference: ". A request to CHANGE CODE (even code about routing, the brain, or the preamble) is dispatch:claude, not remember.
@@ -62,6 +63,7 @@ Examples (utterance -> JSON):
 - "give my working tree a once-over and flag anything risky" -> {"action":"pipeline","pipeline":"review","confidence":0.85}
 - "rebuild the codebase index, it's stale" -> {"action":"pipeline","pipeline":"intel","confidence":0.9}
 - "regenerate context.md, the index is missing some packages" -> {"action":"pipeline","pipeline":"intel","confidence":0.85}
+- "why does TestFoo panic on empty input" -> {"action":"pipeline","pipeline":"debug","confidence":0.9}
 - "take this all the way to a PR" -> {"action":"pipeline","pipeline":"auto","confidence":0.85}
 - "run the full build cycle on this change" -> {"action":"pipeline","pipeline":"auto","confidence":0.85}
 - "let's pair on this gnarly bug" -> {"action":"handoff","confidence":0.9}

@@ -24,6 +24,10 @@ VERBS
                              conductor reaches parity
   styx "<anything>"         One brain-routed turn, then exit
   research <query>          Gemini draft + Codex critique -> brief
+  debug <bug>               ultraFerdDebug: agy sweep + independent Codex/Claude
+                             review -> diagnosis report (no code edits)
+  debug --review-only <brief> [bug]
+                             Re-run only the cheap reviews for an existing brief
   deep-research <query>     Open Gemini + ChatGPT in browser; synthesis template
   plan <description>        Draft an implementation plan using the latest brief
   build [target]            Interactive Claude/Codex session in the project dir

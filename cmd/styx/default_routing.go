@@ -68,6 +68,21 @@ verb = "review"
 parallel = ["claude:sonnet", "codex"]
 synthesize_with = "claude:sonnet"
 
+# ── debug (ultraFerdDebug: agy sweep, codex+claude review) ──
+[[rule]]
+verb = "debug.sweep"
+use  = "agy:default"
+fallback = ["claude:sonnet"]
+
+[[rule]]
+verb = "debug.review.codex"
+use  = "codex"
+effort = "high"
+
+[[rule]]
+verb = "debug.review.claude"
+use  = "claude:sonnet"
+
 # ── grunt / think ──
 [[rule]]
 verb = "grunt"

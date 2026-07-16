@@ -161,6 +161,47 @@ func EnsureImplementRules(content string) (string, bool) {
 // implementVerbRE matches a routing rule whose verb is "implement".
 var implementVerbRE = regexp.MustCompile(`(?m)^\s*verb\s*=\s*"implement"`)
 
+const debugRulesHeader = `
+# ── debug (ultraFerdDebug: agy sweep, codex+claude review) ──
+`
+
+var debugRuleBlocks = []struct {
+	verb  string
+	block string
+}{
+	{"debug.sweep", `[[rule]]
+verb = "debug.sweep"
+use  = "agy:default"
+fallback = ["claude:sonnet"]
+`},
+	{"debug.review.codex", `[[rule]]
+verb = "debug.review.codex"
+use  = "codex"
+effort = "high"
+`},
+	{"debug.review.claude", `[[rule]]
+verb = "debug.review.claude"
+use  = "claude:sonnet"
+`},
+}
+
+// EnsureDebugRules appends each missing ultraFerdDebug routing rule. Existing
+// rules are preserved verbatim so a user's custom target is never overwritten.
+func EnsureDebugRules(content string) (string, bool) {
+	missing := make([]string, 0, len(debugRuleBlocks))
+	for _, rule := range debugRuleBlocks {
+		re := regexp.MustCompile(`(?m)^\s*verb\s*=\s*"` + regexp.QuoteMeta(rule.verb) + `"`)
+		if !re.MatchString(content) {
+			missing = append(missing, rule.block)
+		}
+	}
+	if len(missing) == 0 {
+		return content, false
+	}
+	trimmed := strings.TrimRight(content, "\n")
+	return trimmed + "\n" + debugRulesHeader + strings.Join(missing, "\n"), true
+}
+
 // EnsureFableTier upgrades the exact seeded suspension-era mapping
 // `fable  = "opus"` to `fable  = "fable"`. Only the seeded spelling is
 // rewritten — any user-customized mapping is preserved. Returns the new
@@ -321,40 +362,42 @@ func RewriteRoutingGeminiToAgy(content string) (string, int) {
 // UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
 // injects the `implement` verb rules if missing (v0.3), restores the seeded fable
 // tier mapping (v0.4), seeds the [conductor] max_background_tasks cap (B1), seeds
-// the [watch] section (C5), cleans stale budget keys, dedupes fallback arrays,
+// the [watch] section (C5), injects ultraFerdDebug rules, cleans stale budget
+// keys, dedupes fallback arrays,
 // backs up the original to routing.v0.1.toml.bak, and atomically writes the new
 // content.
 // Returns the gemini-rule substitution count, whether implement rules were
 // injected, whether the fable tier was restored, whether the conductor task
-// cap was injected, and whether the [watch] section was injected. Missing-file
-// is not an error.
-func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fableRestored, taskCapInjected, watchInjected bool, err error) {
+// cap was injected, whether the [watch] section was injected, and whether any
+// debug rules were injected. Missing-file is not an error.
+func UpgradeRoutingFile(routingPath string) (geminiN int, implementInjected, fableRestored, taskCapInjected, watchInjected, debugInjected bool, err error) {
 	b, err := os.ReadFile(routingPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, false, false, false, false, nil
+			return 0, false, false, false, false, false, nil
 		}
-		return 0, false, false, false, false, fmt.Errorf("read routing: %w", err)
+		return 0, false, false, false, false, false, fmt.Errorf("read routing: %w", err)
 	}
 	newContent, n := RewriteRoutingGeminiToAgy(string(b))
 	newContent, injected := EnsureImplementRules(newContent)
 	newContent, fable := EnsureFableTier(newContent)
 	newContent, taskCap := EnsureConductorTaskCap(newContent)
 	newContent, watch := EnsureWatchSection(newContent)
+	newContent, debug := EnsureDebugRules(newContent)
 	// Use content comparison: skip write if nothing changed at all
 	if newContent == string(b) {
-		return 0, false, false, false, false, nil
+		return 0, false, false, false, false, false, nil
 	}
 	backup := filepath.Join(filepath.Dir(routingPath), "routing.v0.1.toml.bak")
 	if err := os.WriteFile(backup, b, 0o644); err != nil {
-		return 0, false, false, false, false, fmt.Errorf("write backup %s: %w", backup, err)
+		return 0, false, false, false, false, false, fmt.Errorf("write backup %s: %w", backup, err)
 	}
 	tmp := routingPath + ".tmp"
 	if err := os.WriteFile(tmp, []byte(newContent), 0o644); err != nil {
-		return 0, false, false, false, false, fmt.Errorf("write tmp: %w", err)
+		return 0, false, false, false, false, false, fmt.Errorf("write tmp: %w", err)
 	}
 	if err := os.Rename(tmp, routingPath); err != nil {
-		return 0, false, false, false, false, fmt.Errorf("atomic rename: %w", err)
+		return 0, false, false, false, false, false, fmt.Errorf("atomic rename: %w", err)
 	}
-	return n, injected, fable, taskCap, watch, nil
+	return n, injected, fable, taskCap, watch, debug, nil
 }
