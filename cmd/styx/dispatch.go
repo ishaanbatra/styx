@@ -341,6 +341,8 @@ func dispatch(verb string, args []string) error {
 		return cmdMCP(a, args)
 	case "auto":
 		return cmdAuto(context.Background(), a, args)
+	case "ship":
+		return cmdShip(context.Background(), a, args)
 	case "grunt", "think", "explain", "summarize", "critique":
 		return cmdOneShot(a, verb, args)
 	case "repl": // classic v0.2 REPL, kept until the conductor reaches parity

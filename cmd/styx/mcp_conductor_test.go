@@ -290,6 +290,61 @@ func TestPipelineRunGatesAuto(t *testing.T) {
 	}
 }
 
+func TestPipelineRunShipHandshake(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	repo := initShipTestRepo(t, true)
+	shipTestFeatureCommit(t, repo)
+	withShipTestTarget(t, repo)
+
+	binDir := t.TempDir()
+	gh := []byte("#!/bin/sh\nif [ \"$1\" = pr ] && [ \"$2\" = create ]; then\n  echo https://example.test/pr/17\nfi\n")
+	if err := os.WriteFile(filepath.Join(binDir, "gh"), gh, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	d := &conductorDeps{a: &app{}, gate: shipgate.New(shipgate.ModeHandshake)}
+
+	t.Run("unknown token is not allowed", func(t *testing.T) {
+		res, err := callTool(t, d, "pipeline_run", map[string]any{
+			"pipeline": "ship", "arg": "publish feature", "confirm_token": "unknown",
+		})
+		if err != nil {
+			t.Fatalf("gated call must return result, not error: %v", err)
+		}
+		if res["allowed"] == true || !strings.Contains(res["message"].(string), "invalid or expired") {
+			t.Fatalf("unknown token must be denied, got %v", res)
+		}
+	})
+
+	var token string
+	t.Run("missing token returns confirmation token", func(t *testing.T) {
+		res, err := callTool(t, d, "pipeline_run", map[string]any{
+			"pipeline": "ship", "arg": "publish feature",
+		})
+		if err != nil {
+			t.Fatalf("gated call must return result, not error: %v", err)
+		}
+		token, _ = res["token"].(string)
+		if res["allowed"] == true || token == "" {
+			t.Fatalf("ship must be denied with a token, got %v", res)
+		}
+	})
+
+	t.Run("valid token runs ship", func(t *testing.T) {
+		res, err := callTool(t, d, "pipeline_run", map[string]any{
+			"pipeline": "ship", "arg": "publish feature", "confirm_token": token,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res["done"] != true || res["pipeline"] != "ship" {
+			t.Fatalf("pipeline_run ship result = %v", res)
+		}
+	})
+}
+
 func TestPipelineRunRejectsUnknown(t *testing.T) {
 	d := &conductorDeps{gate: shipgate.New(shipgate.ModeOff)}
 	if _, err := callTool(t, d, "pipeline_run", map[string]any{"pipeline": "yolo"}); err == nil {
