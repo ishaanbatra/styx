@@ -2,7 +2,7 @@ package main
 
 // Conductor tools give a frontier-brain MCP consumer (e.g. Claude Code) a
 // dispatch surface onto styx's existing agent-thread machinery: send work to
-// a persistent claude/codex/agy thread (or a one-shot local ollama task) and
+// a persistent claude/codex/agy thread (or a one-shot local ollama/MLX task) and
 // inspect thread status. Ship-risk dispatches are gated by internal/shipgate
 // before any project is even resolved. See docs/ARCHITECTURE.md "Conductor
 // MCP tools" and the conductor spec (docs/superpowers/specs/).
@@ -26,6 +26,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
+	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -467,7 +468,7 @@ func collectOne(reg *taskRegistry, tk bgTask) map[string]any {
 // attributedMessage appends the styx commit-trailer instruction to
 // write-capable dispatch messages so agent commits credit styx.
 // Read-risk agents never commit; their messages pass through untouched.
-// (Ollama one-shots never route through here — they don't commit.)
+// (Local one-shots never route through here — they don't commit.)
 func attributedMessage(msg, risk string) string {
 	if risk == "read" {
 		return msg
@@ -493,7 +494,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 	return []mcpserver.Tool{
 		{
 			Name: "dispatch",
-			Description: "Send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task. " +
+			Description: "Send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama/MLX task. " +
 				"By default this WAITS: live progress streams while the agent works and the result returns inline — " +
 				"use it for anything the user is waiting on. background:true detaches instead (returns a task_id; " +
 				"collect fetches the result) — only when the user explicitly wants to keep working meanwhile. " +
@@ -503,9 +504,9 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				"properties": map[string]any{
 					"project":       map[string]any{"type": "string", "description": "registered project alias; empty = the project styx was launched in"},
 					"thread":        map[string]any{"type": "string", "description": "thread name; empty = cli name"},
-					"cli":           map[string]any{"type": "string", "enum": []string{"claude", "codex", "agy", "ollama"}},
+					"cli":           map[string]any{"type": "string", "enum": []string{"claude", "codex", "agy", "ollama", "mlx"}},
 					"message":       map[string]any{"type": "string"},
-					"model":         map[string]any{"type": "string", "description": "tier (opus|sonnet|haiku) or raw model id; empty = channel default (ollama defaults to the routing brain model)"},
+					"model":         map[string]any{"type": "string", "description": "tier (opus|sonnet|haiku) or raw model id; empty = channel default (ollama uses the routing brain model; mlx uses its adapter default)"},
 					"risk":          map[string]any{"type": "string", "enum": []string{"read", "edit", "ship"}},
 					"extra_roots":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 					"confirm_token": map[string]any{"type": "string"},
@@ -519,9 +520,9 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					return nil, fmt.Errorf("dispatch args: %w", err)
 				}
 				switch in.CLI {
-				case "claude", "codex", "agy", "ollama":
+				case "claude", "codex", "agy", "ollama", "mlx":
 				default:
-					return nil, fmt.Errorf("unknown cli %q (claude|codex|agy|ollama)", in.CLI)
+					return nil, fmt.Errorf("unknown cli %q (claude|codex|agy|ollama|mlx)", in.CLI)
 				}
 				if in.Message == "" {
 					return nil, fmt.Errorf("message is required")
@@ -529,12 +530,13 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				if in.Risk != "read" && in.Risk != "edit" && in.Risk != "ship" {
 					return nil, fmt.Errorf("risk must be read|edit|ship, got %q", in.Risk)
 				}
+				oneShot := in.CLI == "ollama" || in.CLI == "mlx"
 				if in.Background {
 					if in.Risk == "ship" {
 						return nil, fmt.Errorf("ship-risk dispatch cannot run in background — the confirmation handshake is interactive; dispatch it synchronously")
 					}
-					if in.CLI == "ollama" {
-						return nil, fmt.Errorf("ollama one-shots are synchronous (local and fast) — drop background")
+					if oneShot {
+						return nil, fmt.Errorf("%s one-shots are synchronous (local) — drop background", in.CLI)
 					}
 					if d.reg == nil {
 						return nil, fmt.Errorf("background dispatch unavailable (no task registry)")
@@ -553,17 +555,20 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 						return res, nil // brain reads token+message from the result
 					}
 				}
-				if in.CLI == "ollama" { // one-shot, no thread machinery
-					ch, ok := d.a.channels["ollama"]
+				if oneShot { // local subprocess/HTTP call, no thread machinery
+					ch, ok := d.a.channels[in.CLI]
 					if !ok {
-						return nil, fmt.Errorf("dispatch ollama: ollama channel unavailable")
+						return nil, fmt.Errorf("dispatch %s: %s channel unavailable", in.CLI, in.CLI)
 					}
 					model := in.Model
-					if model == "" {
+					if model == "" && in.CLI == "ollama" {
 						model = d.a.routing.Brain.Model // seeded default: qwen2.5-coder:7b
 					}
-					if model == "" {
+					if model == "" && in.CLI == "ollama" {
 						model = "qwen2.5-coder:7b"
+					}
+					if model == "" {
+						model = channelmlx.DefaultModel
 					}
 					resp, err := ch.Send(ctx, channel.Request{
 						Model: model, Prompt: in.Message,
@@ -573,24 +578,24 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 						errKind = "other"
 					}
 					if rerr := d.a.tracker.Record(ctx, budget.Event{
-						Channel: "ollama", Verb: "one-shot", Model: model,
+						Channel: in.CLI, Verb: "one-shot", Model: model,
 						TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
 						Success: err == nil, ErrorKind: errKind,
 					}); rerr != nil {
-						logStatus("budget record (ollama one-shot) failed: %v", rerr)
+						logStatus("budget record (%s one-shot) failed: %v", in.CLI, rerr)
 					}
 					if rerr := d.a.tracker.RecordOutcome(ctx, budget.Outcome{
-						CLI: "ollama", Model: model, Signals: dispatchSignals(in.Message),
+						CLI: in.CLI, Model: model, Signals: dispatchSignals(in.Message),
 						Risk: in.Risk, DurationS: math.Round(time.Since(start).Seconds()*10) / 10,
 						TokensIn: resp.EstTokensIn, TokensOut: resp.EstTokensOut,
 						ErrorKind: outcomeErrKind(err),
 					}); rerr != nil {
-						logStatus("outcome record (ollama one-shot) failed: %v", rerr)
+						logStatus("outcome record (%s one-shot) failed: %v", in.CLI, rerr)
 					}
 					if err != nil {
-						return nil, fmt.Errorf("ollama dispatch: %w", err)
+						return nil, fmt.Errorf("%s dispatch: %w", in.CLI, err)
 					}
-					return map[string]any{"cli": "ollama", "text": resp.Text,
+					return map[string]any{"cli": in.CLI, "text": resp.Text,
 						"model": model, "duration_s": math.Round(time.Since(start).Seconds()*10) / 10}, nil
 				}
 				m, err := d.managerFor(in.Project)
@@ -992,7 +997,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 			Name: "dispatch_parallel",
 			Description: "Run several agent dispatches in parallel and WAIT for all of them: live combined " +
 				"progress streams while they work and every result returns inline, in input order. This is the " +
-				"default for multi-agent work the user is waiting on. read|edit risk only (no ship, no ollama); " +
+				"default for multi-agent work the user is waiting on. read|edit risk only (no ship, no local one-shots); " +
 				"thread/project collisions queue per the ordering rules. Cancelling detaches: tasks keep running, " +
 				"collect fetches their results.",
 			InputSchema: map[string]any{
@@ -1041,7 +1046,7 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 					switch tin.CLI {
 					case "claude", "codex", "agy":
 					default:
-						fail(fmt.Errorf("unknown cli %q (claude|codex|agy — ollama one-shots and ship risk are single-dispatch only)", tin.CLI))
+						fail(fmt.Errorf("unknown cli %q (claude|codex|agy — ollama/mlx one-shots and ship risk are single-dispatch only)", tin.CLI))
 						continue
 					}
 					if tin.Message == "" {

@@ -65,8 +65,8 @@ func TestHandleBudgetStatus_AllChannels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != 4 {
-		t.Fatalf("want 4 channels, got %d", len(out))
+	if len(out) != 5 {
+		t.Fatalf("want 5 channels, got %d", len(out))
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/channel/agy"
 	"github.com/ishaanbatra/styx/internal/channel/claude"
 	"github.com/ishaanbatra/styx/internal/channel/codex"
+	"github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -224,6 +225,7 @@ func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channe
 		"codex":  codex.New(),
 		"agy":    a,
 		"gemini": a, // alias for backward-compatible routing rules
+		"mlx":    mlx.New(),
 		"ollama": ollama.New(r.Ollama.KeepAlive),
 	}
 	timeouts := map[string]int{
@@ -231,6 +233,7 @@ func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channe
 		"codex":  r.Budget.Codex.TimeoutMinutes,
 		"agy":    r.Budget.Agy.TimeoutMinutes,
 		"gemini": r.Budget.Agy.TimeoutMinutes,
+		"mlx":    int(ollama.DefaultTimeout / time.Minute),
 	}
 	wrapped := make(map[string]channel.Channel, len(raw))
 	for name, ch := range raw {

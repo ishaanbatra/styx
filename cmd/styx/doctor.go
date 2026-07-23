@@ -21,8 +21,9 @@ import (
 
 // cmdDoctor preflights the orchestrator: CLI presence and versions,
 // capability-card drift (--help vs ExpectedFlags), resume support, claude tier
-// callability, and ollama model availability. `styx doctor --fix` pulls
-// missing ollama models.
+// callability, optional MLX CLI presence, and ollama model availability.
+// `styx doctor --fix` pulls missing ollama models; MLX model pre-download is
+// deliberately deferred in this iteration.
 func cmdDoctor(args []string) error {
 	fix := false
 	for _, a := range args {
@@ -85,6 +86,8 @@ func cmdDoctor(args []string) error {
 		}
 	}
 
+	fmt.Println(mlxDoctorStatus(exec.LookPath))
+
 	required := requiredOllamaModels(r)
 	tags, err := fetchOllamaTags("http://localhost:11434")
 	if err != nil {
@@ -115,6 +118,14 @@ func cmdDoctor(args []string) error {
 		healthy = false
 	}
 	return reportDoctor(healthy)
+}
+
+func mlxDoctorStatus(lookPath func(string) (string, error)) string {
+	path, err := lookPath("mlx_lm.generate")
+	if err != nil {
+		return "! mlx_lm.generate not found on PATH - optional MLX channel unavailable (healthy; install separately to enable it)"
+	}
+	return fmt.Sprintf("ok mlx_lm.generate found at %s - optional MLX channel ready (model download/cache check deferred)", path)
 }
 
 // requiredOllamaModels returns the local models doctor reconciles. In the

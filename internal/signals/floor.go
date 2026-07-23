@@ -8,14 +8,14 @@ import "strings"
 type Tier int
 
 const (
-	TierLocal  Tier = iota // ollama / local models — weakest
+	TierLocal  Tier = iota // ollama / mlx local models — weakest
 	TierHaiku              // small cloud tier (claude haiku-class)
 	TierSonnet             // general capable cloud (sonnet / codex / agy)
 	TierOpus               // top cloud tier (opus / fable)
 )
 
 // String renders the tier as its lowercase keyword, matching the [tiers] vocab
-// in routing.toml (plus "local" for ollama).
+// in routing.toml (plus "local" for ollama and mlx).
 func (t Tier) String() string {
 	switch t {
 	case TierOpus:
@@ -32,10 +32,10 @@ func (t Tier) String() string {
 // TierOf ranks a routing target by its channel and model string. The mapping is
 // hand-curated (styx routing is a transparent table, not an LLM) and biased
 // toward inclusion: an unknown cloud channel is treated as sonnet-class so it is
-// never wrongly excluded from a capable-tier floor. Only ollama is below-floor.
+// never wrongly excluded from a capable-tier floor. Local channels are below-floor.
 func TierOf(channel, model string) Tier {
 	switch channel {
-	case "ollama":
+	case "ollama", "mlx":
 		return TierLocal
 	case "claude":
 		m := strings.ToLower(model)

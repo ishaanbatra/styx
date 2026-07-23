@@ -1,0 +1,7 @@
+==========
+The answer is 42.
+With a second line.
+==========
+Prompt: 18 tokens, 313.421 tokens-per-sec
+Generation: 11 tokens, 42.125 tokens-per-sec
+Peak memory: 4.219 GB

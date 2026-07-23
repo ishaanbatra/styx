@@ -19,7 +19,12 @@ import (
 	"github.com/ishaanbatra/styx/internal/channel"
 )
 
-const defaultBaseURL = "http://localhost:11434"
+const (
+	defaultBaseURL = "http://localhost:11434"
+
+	// DefaultTimeout bounds one local model generation.
+	DefaultTimeout = 15 * time.Minute
+)
 
 // goos is a package-level alias so tests can exercise non-darwin behavior.
 var goos = runtime.GOOS
@@ -39,7 +44,7 @@ func NewWithBaseURL(base, keepAlive string) *Channel {
 	return &Channel{
 		baseURL:   strings.TrimRight(base, "/"),
 		keepAlive: keepAlive,
-		client:    &http.Client{Timeout: 15 * time.Minute},
+		client:    &http.Client{Timeout: DefaultTimeout},
 	}
 }
 

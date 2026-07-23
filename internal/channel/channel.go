@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Channel is the provider abstraction (Claude, Codex, Gemini, Ollama).
+// Channel is the provider abstraction (Claude, Codex, Antigravity, Ollama, MLX).
 type Channel interface {
 	Name() string
 	Send(ctx context.Context, req Request) (Response, error)

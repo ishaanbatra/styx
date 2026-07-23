@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-23 # Phase C 7b Ollama routing defaults and migration
+last_verified: 2026-07-23 # Phase D MLX subprocess channel
 ---
 
 # Styx Architecture
@@ -17,9 +17,10 @@ code change that alters behavior described here.
 
 ## System overview
 
-Styx is a Go CLI that routes dev work between four AI channels — claude
-(Anthropic CLI), codex (OpenAI CLI), agy (Google Antigravity CLI), and ollama
-(local HTTP) — using a hand-curated rules table with budget-aware fallback.
+Styx is a Go CLI that routes dev work between five AI channels — claude
+(Anthropic CLI), codex (OpenAI CLI), agy (Google Antigravity CLI), ollama
+(local HTTP), and MLX (local `mlx_lm.generate` subprocess) — using a
+hand-curated rules table with budget-aware fallback.
 
 ```
 argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir --host)
@@ -40,7 +41,8 @@ argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir
               ├── channel/claude   exec `claude -p` / interactive
               ├── channel/codex    exec `codex exec`
               ├── channel/agy      exec `agy -p --dangerously-skip-permissions [--model <name>]`
-              └── channel/ollama   HTTP localhost:11434 (auto-launches the app)
+              ├── channel/mlx      exec `mlx_lm.generate` (load → generate → exit)
+              └── channel/ollama   HTTP localhost:11434 (resident daemon; auto-launches the app)
 ```
 
 Every send is recorded in the budget DB; routing degrades down each rule's
@@ -160,9 +162,11 @@ Shared pieces:
 - `doctor.go` — `cmdDoctor` runs model refresh/de-pin migration, preflights
   local CLIs against the brain capability cards, reports whether each CLI runs
   with native resume or styx-maintained continuity, checks distinct configured
-  Claude tier aliases with a cheap one-shot call, and verifies that Ollama has
-  both the brain model (`qwen2.5-coder:7b` by default) and embedding model
-  pulled. `--fix` pulls missing Ollama models.
+  Claude tier aliases with a cheap one-shot call, detects the optional
+  `mlx_lm.generate` binary on PATH without making absence unhealthy, and
+  verifies that Ollama has both the brain model (`qwen2.5-coder:7b` by default)
+  and embedding model pulled. `--fix` pulls missing Ollama models; MLX cache
+  inspection and model pre-download are explicitly deferred.
 - `learn.go` — `cmdLearn(a *app, args []string) error`, the `styx learn`
   verb surface (second-tier switch, right after `intel`). Flags:
   `--scorecard` (renders `internal/learn.Build(rows, 30).Render()` over
@@ -232,7 +236,7 @@ Shared pieces:
   `handleChannelHealth()`, `handleGetIntel()`, `handleRefreshIntel()`,
   `handleRecall()`, and `budgetSnapshotFor()` (package main). Handler logic is
   kept simple: route decision + snapshot for one task, budget snapshot for one
-  or all four channels, record usage rows (Messages>1 appends N rows with
+  or all five channels, record usage rows (Messages>1 appends N rows with
   token totals on the first), channel health/failure/cooldown per channel,
   intel read/rebuild per project, and decayed top-k memory recall. Project-
   scoped tools (`get_intel`, `refresh_intel`, `recall`) resolve their
@@ -319,7 +323,7 @@ counts in `Response` are `len/4` estimates.
 - Channel Sends classify failures into
   `channel.ClassifiedError{Kind: timeout|killed|mem-pressure|429|5xx|other}` so
   the router/budget can label them. The subprocess adapters (claude, codex,
-  agy) share
+  agy, mlx) share
   `channel.ClassifyExecError`: SIGKILL/SIGTERM detection lives in build-tagged
   `internal/channel/exit_unix.go` / `exit_other.go`
   (`channel.KilledBySignal`); a signal kill after the request context expires
@@ -346,6 +350,21 @@ counts in `Response` are `len/4` estimates.
   (`len(prompt+system)/4`) plus 1024 headroom exceed ollama's 4096-token
   default, `Send` also sets `options.num_ctx` to the estimate plus 2048 so
   large prompts aren't silently truncated.
+- `mlx` runs `mlx_lm.generate` via `exec.CommandContext` for every Send. It
+  passes the routing model through (defaulting to
+  `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit`), sends every user prompt on
+  stdin with `--prompt -` so large prompts never hit argv limits, and uses
+  `--system-prompt`, `--max-tokens 1024`, and `--verbose false`. Stderr is
+  streamed while also being captured for classified failures, so first-use
+  Hugging Face download progress is visible during the active progress stage.
+  Its stdout parser defensively removes `==========` framing and trailing
+  prompt/generation/peak-memory statistics. Interactive and write-capable
+  requests are unsupported `other` classified errors; budget state is the
+  zero-value unlimited posture used by local channels.
+- The local-channel lifecycles are intentionally different: Ollama keeps a
+  resident daemon and retains models according to `[ollama].keep_alive`; MLX
+  loads the model in a subprocess, generates once, and exits, releasing its
+  process and Metal allocations instead of holding idle residency.
 - `decorator.go` defines three decorators. `WithProgress` narrates each Send as
   a progress stage and is skipped for interactive sends (a spinner would fight
   the child for the TTY). `WithMemoryGuard` checks the injected
@@ -355,7 +374,8 @@ counts in `Response` are `len/4` estimates.
   `WithTimeout` gives non-interactive sends a deadline while leaving
   interactive handoffs unbounded. `defaultChannels` applies the memory guard
   to every registered channel when `[memory] guard = true` (the default),
-  between the outer progress decorator and any channel timeout.
+  between the outer progress decorator and any channel timeout. MLX uses a
+  15-minute `WithTimeout`, matching Ollama's local-generation timeout default.
 - `gemini` is a registered alias for agy (v0.1 routing-rule compat).
 
 ## Memory guard (internal/memguard)
@@ -433,6 +453,9 @@ independently appends either missing rule group and preserves customized routes.
 `Router.NextAvailableFallback` at the moment escalation is needed; it filters
 to the decision's capability-floor candidates and rechecks both caps and the
 circuit breaker, so validation-driven fallback cannot bypass routing safety.
+The seeded PR and grunt defaults remain on Ollama during MLX burn-in; adjacent
+commented `mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` examples make the
+opt-in a visible routing-file edit without changing fresh-install behavior.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -1394,7 +1417,7 @@ PR bodies). Four consumers: `execute.buildPrompt` (auto-pipeline
 implementers), `execute.Ship` via `prBody` (PR bodies, default and
 caller-supplied), and the conductor's `dispatch`/`dispatch_parallel`
 via `attributedMessage` (edit/ship-risk messages; read-risk dispatches
-and ollama one-shots pass through untouched), plus `conductorGuidance`,
+and local one-shots pass through untouched), plus `conductorGuidance`,
 which embeds `CommitInstruction` in the conductor guidance so
 commits made directly by the conductor carry the styx trailer.
 
@@ -1539,8 +1562,8 @@ server it just configured (`styx mcp`, started as a subprocess by Claude
 Code itself per the written config — see "MCP server" and "Conductor MCP
 tools" below): `route`/`budget_status`/`channel_health`/`get_intel`/
 `refresh_intel`/`recall` for the routing brain and memory, `dispatch`/
-`thread_status` for delegating to persistent claude/codex/agy/ollama
-threads, and `memory_save`/`pipeline_run` for writing memories and running
+`thread_status` for delegating to persistent claude/codex/agy threads or local
+ollama/MLX one-shots, and `memory_save`/`pipeline_run` for writing memories and running
 the research/review/intel/auto/debug pipelines (`auto` alone is gated by
 `internal/shipgate`). No code path in the launcher itself talks to a
 provider API or the MCP protocol — it only shells out to the `claude` CLI
@@ -1646,7 +1669,7 @@ respect:
   all five keys without a presence check.
 
 **Four new tools.**
-- `channel_health` — per-channel (or all four) circuit-breaker state,
+- `channel_health` — per-channel (or all five) circuit-breaker state,
   recent failure count, the zero-filled error-kind buckets above, and
   remaining cooldown seconds, read straight off the existing usage log (no
   new state). Backed by `budget.Tracker.ChannelHealth`.
@@ -1739,7 +1762,8 @@ REPL loop.
   "pass --dir" or "cd into a repo", so the error lists the registry instead
   of suggesting shell remedies.
 - `dispatch(project?, thread?, cli, message, model?, risk, extra_roots?,
-  confirm_token?, background?)` — `cli` is one of `claude|codex|agy|ollama`;
+  confirm_token?, background?)` — `cli` is one of
+  `claude|codex|agy|ollama|mlx`;
   `risk` is `read|edit|ship`. Validation (unknown cli, empty message, invalid
   risk) runs first and returns a plain error. For `risk: ship`, the
   **`internal/shipgate` check runs before project resolution** — a ship-risk
@@ -1757,7 +1781,10 @@ REPL loop.
   string) and `duration_s` (wall-clock seconds since a `start := time.Now()`
   taken right after arg validation, rounded via
   `math.Round(time.Since(start).Seconds()*10)/10` to one decimal) alongside
-  `{cli, text}`.
+  `{cli, text}`. `cli: mlx` follows the same synchronous one-shot accounting
+  path through `a.channels["mlx"]`; an empty model resolves to the MLX
+  adapter default. Neither local one-shot is accepted by `dispatch_parallel`
+  or as a background dispatch.
 
   Otherwise the call routes through `managerFor` and builds one shared
   `spec := agent.DispatchSpec{Thread, CLI, Model, Message, ExtraRoots,
@@ -1794,7 +1821,7 @@ REPL loop.
   itself is never lost, only the in-call observation of it. A nil `d.reg`
   (registry unavailable) is rejected loudly rather than silently falling
   back to a direct `Dispatch` call.
-  **Every dispatch completion — the ollama one-shot branch, the awaited
+  **Every dispatch completion — a local one-shot branch, the awaited
   fork, and the background fork alike — appends one `budget.Outcome` row**
   via `(*Tracker).RecordOutcome` (see "Budget tracker" `outcomes` table):
   CLI, resolved model, risk, wall-clock duration, real token counts, and

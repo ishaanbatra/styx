@@ -10,6 +10,7 @@ func TestTierOf(t *testing.T) {
 		want    Tier
 	}{
 		{"ollama local", "ollama", "qwen2.5-coder:14b", TierLocal},
+		{"mlx local", "mlx", "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit", TierLocal},
 		{"claude opus", "claude", "opus", TierOpus},
 		{"claude opus versioned", "claude", "opus-4-7", TierOpus},
 		{"claude sonnet", "claude", "sonnet", TierSonnet},

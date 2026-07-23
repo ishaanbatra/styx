@@ -3,7 +3,7 @@
 [![latest release](https://img.shields.io/github/v/release/ishaanbatra/styx)](https://github.com/ishaanbatra/styx/releases/latest)
 
 Personal multi-model dev orchestration CLI. Routes work between Claude, Codex,
-Antigravity (agy / Gemini), and Ollama via a hand-curated rules table.
+Antigravity (agy / Gemini), Ollama, and MLX via a hand-curated rules table.
 
 ## Prerequisites
 
@@ -11,10 +11,12 @@ Antigravity (agy / Gemini), and Ollama via a hand-curated rules table.
 - **`claude` CLI** ([Claude Code](https://claude.com/claude-code)) with an
   active subscription — the only hard requirement at runtime; the default
   `styx` verb launches it as the conductor.
-- **Optional channels** — `codex` (OpenAI), `agy` (Antigravity), and `ollama`
-  add routing targets; missing ones degrade gracefully down the routing
-  table's fallback chains. `gh` enables PR creation in `auto`; `graphify`
-  enables knowledge graphs. Run `styx doctor` to see what's wired up.
+- **Optional channels** — `codex` (OpenAI), `agy` (Antigravity), `ollama`,
+  and `mlx_lm.generate` (MLX) add routing targets; missing ones degrade
+  gracefully down the routing table's fallback chains. MLX models download
+  on first use and its channel exits after each generation, leaving no model
+  resident while idle. `gh` enables PR creation in `auto`; `graphify` enables
+  knowledge graphs. Run `styx doctor` to see what's wired up.
 
 styx rides your existing CLI subscriptions — there are no API keys to
 configure. Platform support is tiered: macOS is the primary target (secrets
@@ -197,11 +199,11 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 | `check` | Dashboard: git status, latest briefs/plans |
 | `budget` | Per-channel usage summary |
 | `learn [--scorecard\|--dry-run\|--list\|--forget <id>]` | Digest dispatch outcomes + session retrospectives into learned routing/user preferences — plain-text memories with provenance, injected into conductor guidance; `--list` inspects, `--forget` reverses |
-| `doctor [--fix]` | Preflight CLIs, capability-card drift, callable Claude tiers, and required Ollama models |
+| `doctor [--fix]` | Preflight CLIs (including optional MLX presence), capability-card drift, callable Claude tiers, and required Ollama models; MLX model pre-download is deferred |
 | `route --explain <verb> "..."` | Why did styx pick that channel? |
 | `project ls/add/rm/rename/scan` | Manage project registry |
 | `project scan [root] [--depth N]` | Walk down from `root` (default `~`), find git repos, bulk-register them (prunes node_modules/vendor; depth default 4) |
-| `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0) exposing fourteen tools to OpenClaw, Claude Code, and any MCP host (see [`docs/openclaw-integration.md`](docs/openclaw-integration.md)): `route` — pick a channel for a task (budget-aware, capability-floor-aware, with fallback chain); `budget_status` — per-channel usage/limits/cooldowns; `record_usage` — log usage a consumer ran outside styx; `channel_health` — circuit-breaker state, recent failures, error-kind buckets, cooldown; `get_intel` — read the per-project codebase intel index (or one section), with staleness; `refresh_intel` — rebuild that index; `recall` — semantic top-k recall over project + global long-term memory; plus the conductor dispatch surface: `dispatch` — send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task, awaited by default (or, with `background: true`, as a task you `collect` later); `dispatch_parallel` — fan out an array of dispatches at once, awaited together, per-task results in input order; `thread_status` — list this project's persistent agent threads with turn counts and context usage, plus live/unclaimed background tasks; `collect` — fetch results by `task_id` or sweep everything finished, or set `wait: true` (optionally `timeout_s`) to block with live heartbeats until one task or all currently-outstanding tasks finish; `memory_save` — persist a durable fact, decision, todo, or routing preference to styx memory; `pipeline_run` — run a styx pipeline (research/review/intel/auto/debug), with a confirm-token handshake only for `auto`'s ship step; `rate_dispatch` — rate a recent dispatch outcome good/bad to feed styx's learning loop |
+| `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0) exposing fourteen tools to OpenClaw, Claude Code, and any MCP host (see [`docs/openclaw-integration.md`](docs/openclaw-integration.md)): `route` — pick a channel for a task (budget-aware, capability-floor-aware, with fallback chain); `budget_status` — per-channel usage/limits/cooldowns; `record_usage` — log usage a consumer ran outside styx; `channel_health` — circuit-breaker state, recent failures, error-kind buckets, cooldown; `get_intel` — read the per-project codebase intel index (or one section), with staleness; `refresh_intel` — rebuild that index; `recall` — semantic top-k recall over project + global long-term memory; plus the conductor dispatch surface: `dispatch` — send work to a persistent agent thread (claude/codex/agy) or a synchronous one-shot local Ollama/MLX task, awaited by default (or, for persistent agents only, with `background: true` as a task you `collect` later); `dispatch_parallel` — fan out an array of persistent-agent dispatches at once, awaited together, per-task results in input order; `thread_status` — list this project's persistent agent threads with turn counts and context usage, plus live/unclaimed background tasks; `collect` — fetch results by `task_id` or sweep everything finished, or set `wait: true` (optionally `timeout_s`) to block with live heartbeats until one task or all currently-outstanding tasks finish; `memory_save` — persist a durable fact, decision, todo, or routing preference to styx memory; `pipeline_run` — run a styx pipeline (research/review/intel/auto/debug), with a confirm-token handshake only for `auto`'s ship step; `rate_dispatch` — rate a recent dispatch outcome good/bad to feed styx's learning loop |
 | `hook <event>` | Internal plumbing — the route-gate hook the launcher installs into conductor sessions (Claude Code invokes it, not you); denies inline WebSearch/WebFetch/Task/external-curl + MCP web tools and redirects to dispatch/pipeline_run, per `[conductor] route_gate` |
 | `migrate-secrets` | Move env-var secrets to the platform secret store (macOS Keychain / Windows Credential Manager) |
 | `update` | Replace styx with the latest GitHub release after SHA-256 verification; Scoop/WinGet installs stay package-manager-owned |
@@ -276,4 +278,5 @@ customized PR-drafting route.
 - `codex` CLI (OpenAI, signed in via ChatGPT Plus) — required for Codex channels or conductor sessions
 - `agy` CLI (Antigravity, replaces gemini-cli): `curl -fsSL https://antigravity.google/cli/install.sh | bash`
 - `ollama` (local)
+- `mlx_lm.generate` from `mlx-lm` (optional local load-generate-exit channel)
 - `gh` (for PR creation in `auto`)

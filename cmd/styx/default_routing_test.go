@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/ishaanbatra/styx/internal/channel"
+	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
+	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
@@ -46,6 +48,14 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	}
 	if ollamaTargets == 0 {
 		t.Error("seeded routing has no Ollama targets")
+	}
+	for _, rule := range r.Rules {
+		if strings.HasPrefix(rule.Use, "mlx:") {
+			t.Errorf("seeded routing default changed to MLX for %s; examples must remain commented out", rule.Verb)
+		}
+	}
+	if got := strings.Count(defaultRoutingTOML, "# use  = \"mlx:"+channelmlx.DefaultModel+"\""); got < 4 {
+		t.Errorf("seeded routing has %d commented MLX examples, want at least 4", got)
 	}
 	// Agy is intentionally exempt: its subscription CLI remembers the user's
 	// last interactive model, so a pin prevents a sweep from silently using it.
@@ -103,6 +113,24 @@ func TestDefaultChannelsMemoryGuard(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDefaultChannelsRegistersTimedMLX(t *testing.T) {
+	channels := defaultChannels(nil, config.Routing{})
+	outer, ok := channels["mlx"].(*channel.WithProgress)
+	if !ok {
+		t.Fatalf("mlx outer decorator = %T, want *channel.WithProgress", channels["mlx"])
+	}
+	timeout, ok := outer.Inner.(*channel.WithTimeout)
+	if !ok {
+		t.Fatalf("mlx inner decorator = %T, want *channel.WithTimeout", outer.Inner)
+	}
+	if timeout.D != ollama.DefaultTimeout {
+		t.Errorf("mlx timeout = %v, want %v", timeout.D, ollama.DefaultTimeout)
+	}
+	if timeout.Inner.Name() != "mlx" {
+		t.Errorf("timed inner channel name = %q, want mlx", timeout.Inner.Name())
 	}
 }
 

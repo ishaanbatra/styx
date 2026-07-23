@@ -122,6 +122,8 @@ fallback = ["codex"]
 
 [[rule]]
 verb = "pr.title"
+# MLX burn-in alternative (leave disabled until host smoke-testing):
+# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
 use  = "ollama:qwen2.5-coder:7b"
 fallback = ["claude:haiku"]
 
@@ -133,6 +135,8 @@ fallback = ["codex"]
 
 [[rule]]
 verb = "pr.body"
+# MLX burn-in alternative (leave disabled until host smoke-testing):
+# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
 use  = "ollama:qwen2.5-coder:7b"
 fallback = ["claude:haiku"]
 
@@ -140,10 +144,14 @@ fallback = ["claude:haiku"]
 [[rule]]
 verb = "grunt"
 signals = ["trivial"]
+# MLX burn-in alternative (leave disabled until host smoke-testing):
+# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
 use  = "ollama:qwen2.5-coder:7b"
 
 [[rule]]
 verb = "grunt"
+# MLX burn-in alternative (leave disabled until host smoke-testing):
+# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
 use  = "ollama:qwen2.5-coder:7b"
 
 [[rule]]

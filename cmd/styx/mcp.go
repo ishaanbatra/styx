@@ -164,9 +164,9 @@ type budgetStatusArgs struct {
 }
 
 // defaultChannelNames is the canonical channel set (mirrors cmd/styx/budget.go).
-var defaultChannelNames = []string{"claude", "codex", "agy", "ollama"}
+var defaultChannelNames = []string{"claude", "codex", "agy", "ollama", "mlx"}
 
-// handleBudgetStatus reports the budget snapshot for one channel, or all four
+// handleBudgetStatus reports the budget snapshot for one channel, or all five
 // when Channel is empty.
 func handleBudgetStatus(ctx context.Context, t *budget.Tracker, a budgetStatusArgs) ([]budgetSnapshot, error) {
 	channels := defaultChannelNames
@@ -250,7 +250,7 @@ var channelHealthSchema = map[string]any{
 	"properties": map[string]any{
 		"channel": map[string]any{
 			"type":        "string",
-			"description": "Channel to inspect (claude|codex|agy|ollama). Omit for all channels.",
+			"description": "Channel to inspect (claude|codex|agy|ollama|mlx). Omit for all channels.",
 		},
 	},
 }

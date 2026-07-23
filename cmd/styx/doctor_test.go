@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,39 @@ import (
 	"github.com/ishaanbatra/styx/internal/brain"
 	"github.com/ishaanbatra/styx/internal/config"
 )
+
+func TestMLXDoctorStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		err  error
+		want string
+	}{
+		{
+			name: "present",
+			path: "/opt/homebrew/bin/mlx_lm.generate",
+			want: "ok mlx_lm.generate found at /opt/homebrew/bin/mlx_lm.generate",
+		},
+		{
+			name: "absent is healthy note",
+			err:  errors.New("not found"),
+			want: "optional MLX channel unavailable (healthy;",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mlxDoctorStatus(func(name string) (string, error) {
+				if name != "mlx_lm.generate" {
+					t.Fatalf("lookPath(%q), want mlx_lm.generate", name)
+				}
+				return tt.path, tt.err
+			})
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("status = %q, want substring %q", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestMissingFlags(t *testing.T) {
 	card := brain.Card{

@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # Styx
 
-Go CLI that orchestrates dev work across four AI channels — claude, codex, agy
-(Antigravity), and ollama — via a hand-curated routing table with budget-aware
-fallback. Verb-first today (`styx research`, `styx auto`, …); evolving into a
-conversational REPL orchestrator (spec + plan in `docs/superpowers/`).
+Go CLI that orchestrates dev work across five AI channels — claude, codex, agy
+(Antigravity), ollama, and mlx — via a hand-curated routing table with
+budget-aware fallback. Verb-first today (`styx research`, `styx auto`, …);
+evolving into a conversational REPL orchestrator (spec + plan in
+`docs/superpowers/`).
 
 ## Doc tree — navigate docs first, code second
 
@@ -32,8 +33,8 @@ no docs. A PostToolUse hook in `.claude/settings.json` reminds you after every
 
 - **Verb dispatch** (`cmd/styx/dispatch.go`): two-tier verb switch; `loadApp()`
   wires routing + budget tracker + router + progress-decorated channels
-- **Channels** (`internal/channel/` + claude/codex/agy/ollama adapters): the
-  provider abstraction; subprocess CLIs or ollama HTTP, classified errors
+- **Channels** (`internal/channel/` + claude/codex/agy/ollama/mlx adapters):
+  the provider abstraction; subprocess CLIs or ollama HTTP, classified errors
 - **Router** (`internal/router/` + `internal/signals/`): first-match rules
   from `~/.config/styx/routing.toml`, signal tagging, budget degradation down
   fallback chains
