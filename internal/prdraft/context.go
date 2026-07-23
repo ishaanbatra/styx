@@ -133,6 +133,11 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 	return string(out), nil
 }
 
+// DefaultBranch exposes the same default-branch detection used by BuildContext.
+func DefaultBranch(ctx context.Context, repo string) string {
+	return defaultBranch(ctx, repo)
+}
+
 func defaultBranch(ctx context.Context, repo string) string {
 	if out, err := gitOutput(ctx, repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		if _, branch, ok := strings.Cut(strings.TrimSpace(out), "/"); ok && branch != "" {

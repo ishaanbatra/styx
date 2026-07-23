@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-16 # PR microtask drafting
+last_verified: 2026-07-22 # standalone ship pathway
 ---
 
 # Styx Architecture
@@ -49,7 +49,7 @@ fallback chain when a channel is over its message caps.
 ## cmd/styx — verbs and app wiring
 
 One file per verb (`research.go`, `debug.go`, `dead_code.go`, `map_impact.go`, `cross_repo.go`, `plan.go`, `build.go`, `review.go`,
-`auto.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
+`auto.go`, `ship.go`, `grunt.go`, `intel.go`, `budget.go`, `check.go`, `doctor.go`,
 `learn.go`, `repl.go`, `launch.go`, `runs.go`, …).
 Shared pieces:
 
@@ -90,9 +90,10 @@ Shared pieces:
   now launches the conductor bound to those repos (first becomes the focus,
   via `cmdLaunch`) rather than opening the REPL; otherwise the tokens are
   treated as a one-shot utterance (`styx "fix the flaky test"` is an
-  utterance, not an error) handled by `cmdBrainTurn`. `mcp` is also an app
-  verb (needs the full `app{router, tracker}` from `loadApp()`) and is
-  dispatched in the second switch alongside `auto`, `research`, etc.
+  utterance, not an error) handled by `cmdBrainTurn`. `mcp` and standalone
+  `ship` are also app verbs (need the full `app{router, tracker}` from
+  `loadApp()`) and are dispatched in the second switch alongside `auto`,
+  `research`, etc.
 - `update.go` — the first-tier `styx update` verb rejects development builds
   and Scoop/WinGet-owned executables, then uses `go-selfupdate` to replace the
   current binary from `ishaanbatra/styx` releases after verifying its archive
@@ -416,7 +417,7 @@ wiring. `Brain` configures the planned local ollama routing brain and memory
 embedding model; `Conductor` configures the frontier-brain launcher and MCP
 toolbelt (`host`: claude | codex, default claude, selecting the interactive
 conductor CLI; `ship_gate`: handshake | tty | off, default handshake, controlling
-ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`;
+ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto|ship`;
 `route_gate`: block | audit | off, default block, controlling the host-hook
 enforcement of dispatch-over-inline routing — see the `styx hook` section below; and
 `max_background_tasks`, the concurrent background-dispatch cap for the task
@@ -471,13 +472,15 @@ Data-driven routing guidance replacing the v0.2 brain's compiled-in preamble.
 A global guidance file is seeded at `~/.config/styx/guidance.md` on first call
 to `Load()` and is user-editable. User edits are never overwritten, but a file
 whose content exactly matches a previous seed version (the retained `seedV1`
-through `seedV6` constants — `seedV3` is the pre-async-dispatch seed, shipped
+through `seedV7` constants — `seedV3` is the pre-async-dispatch seed, shipped
 2026-07-07, kept verbatim from the live `Seed` at the moment background
 dispatch/collect/rate_dispatch were added; `seedV4` is the pre-route-gate seed,
 kept verbatim from before the "## Gated tools" section; `seedV5` is the
-route-gate-era seed, kept verbatim from before the learning-loop nudges; and
+route-gate-era seed, kept verbatim from before the learning-loop nudges;
 `seedV6` is the learning-loop seed from before blocking collect and loud
-completion notices)
+completion notices; and `seedV7` is the pre-ship-pathway seed from before
+the "## Shipping commits / PRs" section and the `pipeline_run ship` token
+line in "## Ship policy")
 is recognized as unmodified and transparently upgraded to the current `Seed`
 on load. `Load(projectPath string)` returns the global guidance with an
 optional per-repo override appended from `<repo>/styx/guidance.md` if it
@@ -1120,6 +1123,17 @@ policy, issue-linking lines, and core labels are not part of either model output
 schema. Ambiguous issue references render as related links rather than automatic
 closing directives, and failure to collect git evidence forces a draft PR.
 
+`styx ship [--no-pr] [--no-push] [goal...]` is the standalone publication
+path for work that is already committed on the current branch. It resolves the
+cwd/global target, reuses `prdraft.DefaultBranch`, and refuses before any side
+effect when the current branch is the default branch, the worktree is dirty,
+or the branch has no commits ahead of the default. With full publication it
+passes a minimal in-memory `pipeline.State{Goal, Branch}` through the same
+bounded PR drafter, so test and review checks truthfully render as not run;
+`--no-pr` and `--no-push` skip drafting entirely and stay model-free. The
+resulting title, body, draft flag, and labels flow through `execute.Ship`, with
+the PR URL or a push-skipped/PR-skipped note printed as the command result.
+
 `cmd/styx/pr_draft.go` runs `pr.title` and `pr.body` independently through
 `internal/microtask`: primary, at most one lazily resolved fallback, then a
 deterministic static value. Strict JSON decoding, length/shape checks,
@@ -1338,7 +1352,9 @@ body, draft state, and labels, but `Ship` owns the final `gh pr create`
 arguments and appends styx attribution to the body. Label edits are best-effort
 metadata after creation: failures are reported in `MetadataErrors` without
 erasing the created or recovered PR URL. If create reports an existing PR,
-`Ship` recovers its URL with `gh pr view` before applying labels.
+`Ship` recovers its URL with `gh pr view` before applying labels. Both the
+auto pipeline's ship stage and standalone `cmdShip` call this same publication
+boundary; `cmdShip` performs its branch/worktree/ahead preflight first.
 
 ## Attribution (internal/attribution)
 
@@ -1501,8 +1517,8 @@ tools" below): `route`/`budget_status`/`channel_health`/`get_intel`/
 `refresh_intel`/`recall` for the routing brain and memory, `dispatch`/
 `thread_status` for delegating to persistent claude/codex/agy/ollama
 threads, and `memory_save`/`pipeline_run` for writing memories and running
-the research/review/intel/auto/debug pipelines (`auto` alone is gated by
-`internal/shipgate`). No code path in the launcher itself talks to a
+the research/review/intel/auto/debug/ship pipelines (`auto` and `ship` are
+gated by `internal/shipgate`). No code path in the launcher itself talks to a
 provider API or the MCP protocol — it only shells out to the `claude` CLI
 and writes a config file for it to read.
 
@@ -1846,20 +1862,25 @@ REPL loop.
   Every write uses `Source: "conductor"`, `Confidence: 0.9`. Returns
   `{saved, id}`.
 - `pipeline_run(pipeline, arg?, confirm_token?)` — `pipeline` is one of
-  `research|review|intel|auto|debug`; an unknown value is rejected **before** the
-  ship gate so it errors loudly regardless of gate mode. `auto` (which
-  ships: branch→push→PR) then runs the same `internal/shipgate` handshake
-  as `dispatch` risk=ship, keyed `"pipeline:auto"` — denied gates return the
-  raw `shipgate.Result` for the brain to relay. The calls mirror the REPL's
-  `pipelines` map (`cmd/styx/repl.go` around line 625) exactly: `research`
+  `research|review|intel|auto|debug|ship`; an unknown value is rejected
+  **before** the ship gate so it errors loudly regardless of gate mode. `auto`
+  (which ships: branch→push→PR) and standalone `ship` then run the same
+  `internal/shipgate` handshake as `dispatch` risk=ship, keyed
+  `"pipeline:auto"` and `"pipeline:ship"` respectively — denied gates return
+  the raw `shipgate.Result` for the brain to relay. The original five calls
+  mirror the REPL's `pipelines` map (`cmd/styx/repl.go` around line 625), with
+  standalone ship added through the shared CLI function: `research`
   → `cmdResearch(ctx, d.a, prog, []string{arg})` then, on success,
   `indexNewestBrief` into the project's memory store (best-effort like the
   REPL's entry; failures are narrated via `logStatus`, never fail the
   completed research); `review` → `cmdReview(ctx, d.a, nil)`; `intel` →
   `cmdIntel(ctx, d.a, []string{proj.Name})`; `auto` → `cmdAuto(ctx, d.a,
   []string{arg})`; `debug` → `cmdDebug(ctx, d.a, prog, []string{arg})`, then
-  best-effort indexes the newest report. All five pipeline commands now take the caller's context
-  as their first parameter (CLI paths pass `context.Background()`; the REPL
+  best-effort indexes the newest report; `ship` → `cmdShip(ctx, d.a,
+  []string{arg})`, publishing the cwd branch's committed work through the same
+  validated drafting and execute path as the CLI verb. All six pipeline
+  commands now take the caller's context as their first parameter (CLI paths
+  pass `context.Background()`; the REPL
   passes its per-command ctx) — the handler passes its per-call ctx so a
   host cancel actually kills the drafter/critic subprocesses via
   `exec.CommandContext` instead of leaving a zombie pipeline burning

@@ -756,24 +756,29 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 		{
 			Name:        "pipeline_run",
 			Serial:      true,
-			Description: "Run a styx pipeline: research | review | intel | auto | debug. debug is ultraFerdDebug: an agy repository sweep plus independent codex/claude review, diagnosis-only with no edits. auto ships (branch→push→PR) and requires the confirm_token handshake.",
+			Description: "Run a styx pipeline: research | review | intel | auto | debug | ship. debug is ultraFerdDebug: an agy repository sweep plus independent codex/claude review, diagnosis-only with no edits. auto ships (branch→push→PR) and requires the confirm_token handshake. ship publishes the current branch's committed work as a validated PR (truth-rendered body, static fallback) and requires the confirm_token handshake.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{
-				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto", "debug"}},
+				"pipeline":      map[string]any{"type": "string", "enum": []string{"research", "review", "intel", "auto", "debug", "ship"}},
 				"arg":           map[string]any{"type": "string"},
 				"confirm_token": map[string]any{"type": "string"},
 			}, "required": []string{"pipeline"}},
 			Handler: func(ctx context.Context, raw json.RawMessage) (any, error) {
-				var in struct{ Pipeline, Arg, ConfirmToken string }
+				var in struct {
+					Pipeline     string `json:"pipeline"`
+					Arg          string `json:"arg"`
+					ConfirmToken string `json:"confirm_token"`
+				}
 				if err := json.Unmarshal(raw, &in); err != nil {
 					return nil, fmt.Errorf("pipeline_run args: %w", err)
 				}
 				switch in.Pipeline {
-				case "research", "review", "intel", "auto", "debug":
+				case "research", "review", "intel", "auto", "debug", "ship":
 				default:
 					return nil, fmt.Errorf("unknown pipeline %q", in.Pipeline)
 				}
-				if in.Pipeline == "auto" {
-					res, err := d.gate.Check("pipeline:auto", in.ConfirmToken)
+				if in.Pipeline == "auto" || in.Pipeline == "ship" {
+					action := "pipeline:" + in.Pipeline
+					res, err := d.gate.Check(action, in.ConfirmToken)
 					if err != nil {
 						return nil, err
 					}
@@ -839,6 +844,10 @@ func conductorTools(d *conductorDeps) []mcpserver.Tool {
 				case "auto":
 					if err := cmdAuto(ctx, d.a, []string{in.Arg}); err != nil {
 						return nil, fmt.Errorf("pipeline auto: %w", err)
+					}
+				case "ship":
+					if err := cmdShip(ctx, d.a, []string{in.Arg}); err != nil {
+						return nil, fmt.Errorf("pipeline ship: %w", err)
 					}
 				}
 				return map[string]any{"pipeline": in.Pipeline, "done": true,
