@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/brief"
 	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/execute"
@@ -252,6 +253,7 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		return err
 	}
 
+	reviewAttempt := 0
 	r.RunReview = func(ctx context.Context, rr *pipeline.Runner) (int, int, string, error) {
 		diff, err := gitDiffBase(proj.Path)
 		if err != nil {
@@ -264,6 +266,10 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 		if err != nil {
 			return 0, 0, "", err
 		}
+		reviewAttempt++
+		if err := writeReviewFindings(proj.Path, rr.State.RunID, reviewAttempt, text); err != nil {
+			return 0, 0, "", err
+		}
 		c, err := research.Parse(text)
 		if err != nil {
 			logStatus("review parse degraded: %v (raw text treated as one IMPORTANT finding)", err)
@@ -274,7 +280,10 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 	r.RunFixReview = func(ctx context.Context, rr *pipeline.Runner, findings string, attempt int) error {
 		fixPrompt := fmt.Sprintf("Review findings (attempt %d). Fix every BLOCKING and IMPORTANT item. Commit fixes.\n\n--- FINDINGS ---\n%s", attempt, findings)
 		_, err := execute.Apply(ctx, implementOptions(a, rr.State.Goal, fixPrompt, proj.Path), progress.Quiet())
-		return err
+		if err != nil {
+			return err
+		}
+		return commitReviewFixes(proj.Path, attempt)
 	}
 
 	r.RunShip = func(ctx context.Context, rr *pipeline.Runner) (string, bool, error) {
@@ -418,4 +427,59 @@ func gitDiffBase(repo string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+func commitReviewFixes(repo string, attempt int) error {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = repo
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git status --porcelain: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return nil
+	}
+
+	cmd = exec.Command("git", "add", "--all")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git add --all: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+
+	message := fmt.Sprintf("fix(review): apply review fixes (attempt %d)\n\n%s", attempt, attribution.Trailer)
+	cmd = exec.Command("git", "commit", "-m", message)
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit review fixes: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func writeReviewFindings(projectPath, runID string, attempt int, text string) error {
+	dir := filepath.Join(projectPath, "styx", "reviews")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create review findings directory %s: %w", dir, err)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-attempt-%d.md", runID, attempt))
+	tmp, err := os.CreateTemp(dir, ".styx-review-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary review findings in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temporary review findings %s: %w", tmpName, err)
+	}
+	if _, err := tmp.WriteString(text); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary review findings %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary review findings %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename temporary review findings to %s: %w", path, err)
+	}
+	return nil
 }

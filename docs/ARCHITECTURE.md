@@ -1185,7 +1185,13 @@ for `--resume`. Stage behaviors are closures on
 `Runner` injected by `auto.go` (e.g. `RunReview` = git diff → synthesized
 claude+codex review → `research.Parse` counts blocking/important findings and
 logs when parsing degrades to the raw-text fallback; failed reviews loop through
-fix attempts via `execute.Apply`). The execute and fix-loop stages route through
+fix attempts via `execute.Apply`). Each review attempt's raw findings are
+persisted atomically to `styx/reviews/<run-id>-attempt-<n>.md` so an exhausted
+fix-loop is diagnosable, and after every fix attempt any dirty worktree is
+committed as `fix(review): apply review fixes (attempt N)` (with the
+attribution trailer) — re-review diffs committed work only, so an
+uncommitting fix agent would otherwise make convergence impossible and later
+trip ship's clean-tree preflight. The execute and fix-loop stages route through
 the `implement` verb: `implementOptions` resolves the channel (codex for
 well-scoped work, claude for `complex` goals) and injects it into
 `execute.Options.Channel` — except claude, which is left nil so `Apply` uses its
