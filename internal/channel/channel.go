@@ -56,11 +56,12 @@ type Budget struct {
 type ErrorKindLabel string
 
 const (
-	ErrKindTimeout   ErrorKindLabel = "timeout"
-	ErrKindKilled    ErrorKindLabel = "killed"
-	ErrKindRateLimit ErrorKindLabel = "429"
-	ErrKindServer    ErrorKindLabel = "5xx"
-	ErrKindOther     ErrorKindLabel = "other"
+	ErrKindTimeout     ErrorKindLabel = "timeout"
+	ErrKindKilled      ErrorKindLabel = "killed"
+	ErrKindMemPressure ErrorKindLabel = "mem-pressure"
+	ErrKindRateLimit   ErrorKindLabel = "429"
+	ErrKindServer      ErrorKindLabel = "5xx"
+	ErrKindOther       ErrorKindLabel = "other"
 )
 
 // ClassifiedError lets channels emit a structured error kind.

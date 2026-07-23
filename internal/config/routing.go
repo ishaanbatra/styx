@@ -17,6 +17,7 @@ type Routing struct {
 	Models    ModelsConfig      `toml:"models"`
 	Brain     BrainConfig       `toml:"brain"`
 	Ollama    OllamaConfig      `toml:"ollama"`
+	Memory    MemoryConfig      `toml:"memory"`
 	Conductor Conductor         `toml:"conductor"`
 	Watch     WatchCap          `toml:"watch"`
 	Tiers     map[string]string `toml:"tiers"`
@@ -26,6 +27,12 @@ type Routing struct {
 type OllamaConfig struct {
 	KeepAlive     string `toml:"keep_alive"`
 	PreloadModels bool   `toml:"preload_models"`
+}
+
+// MemoryConfig controls whether channel Sends are gated on the host
+// memory-pressure probe. The conductor task queue is always guarded.
+type MemoryConfig struct {
+	Guard bool `toml:"guard"`
 }
 
 // WatchCap configures live dispatch observability (styx watch / heartbeat).
@@ -179,7 +186,9 @@ func LoadRoutingFile(path string) (Routing, error) {
 	if err != nil {
 		return Routing{}, fmt.Errorf("read routing config %s: %w", path, err)
 	}
-	var r Routing
+	// Seed true before decoding so an absent [memory] section keeps the guard
+	// enabled while an explicit guard=false remains distinguishable.
+	r := Routing{Memory: MemoryConfig{Guard: true}}
 	if err := toml.Unmarshal(b, &r); err != nil {
 		return Routing{}, fmt.Errorf("parse routing config %s: %w", path, err)
 	}

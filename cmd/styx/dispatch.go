@@ -241,6 +241,9 @@ func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channe
 			}
 			inner = &channel.WithTimeout{Inner: inner, D: time.Duration(mins) * time.Minute}
 		}
+		if r.Memory.Guard {
+			inner = &channel.WithMemoryGuard{Inner: inner}
+		}
 		wrapped[name] = &channel.WithProgress{Inner: inner, Tracker: prog, Label: name}
 	}
 	return wrapped

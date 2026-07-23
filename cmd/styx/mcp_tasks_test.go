@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/mcpserver"
+	"github.com/ishaanbatra/styx/internal/memguard"
 )
 
 // blockingRun returns a run func that reports it started and blocks until
@@ -68,6 +69,72 @@ func TestRegistryCapQueuesExcessTasks(t *testing.T) {
 	if tk.Result["text"] != "two" {
 		t.Fatalf("result must be captured, got %v", tk.Result)
 	}
+}
+
+func TestRegistryMemoryPressureGateRechecksOnSpawn(t *testing.T) {
+	level := memguard.Critical
+	r := newTaskRegistry(context.Background(), 2, nil, func() memguard.Level { return level })
+	run1, started1, release1 := blockingRun(nil)
+
+	id1, got := r.Spawn(taskSpec{ProjectID: "p1", Thread: "one", CLI: "codex", Risk: "read"}, run1)
+	if got != taskQueued {
+		t.Fatalf("task at critical pressure = %q, want queued", got)
+	}
+	select {
+	case <-started1:
+		t.Fatal("critical pressure must not execute a queued task")
+	default:
+	}
+
+	level = memguard.Normal
+	run2, started2, release2 := blockingRun(nil)
+	id2, got := r.Spawn(taskSpec{ProjectID: "p2", Thread: "two", CLI: "claude", Risk: "read"}, run2)
+	if got != taskRunning {
+		t.Fatalf("spawn after recovery = %q, want running", got)
+	}
+	waitFor(t, "original queued task promoted after recovery spawn", func() bool {
+		return state(r, id1) == taskRunning
+	})
+	<-started1
+	<-started2
+	close(release1)
+	close(release2)
+	waitFor(t, "recovered tasks done", func() bool {
+		return state(r, id1) == taskDone && state(r, id2) == taskDone
+	})
+}
+
+func TestRegistryMemoryPressureGateRechecksOnCompletion(t *testing.T) {
+	level := memguard.Normal
+	r := newTaskRegistry(context.Background(), 1, nil, func() memguard.Level { return level })
+	run1, started1, release1 := blockingRun(nil)
+	id1, got := r.Spawn(taskSpec{ProjectID: "p1", Thread: "one", CLI: "codex", Risk: "read"}, run1)
+	if got != taskRunning {
+		t.Fatalf("first task = %q, want running", got)
+	}
+	<-started1
+
+	level = memguard.Critical
+	run2, started2, release2 := blockingRun(nil)
+	id2, got := r.Spawn(taskSpec{ProjectID: "p2", Thread: "two", CLI: "claude", Risk: "read"}, run2)
+	if got != taskQueued {
+		t.Fatalf("task spawned at critical pressure = %q, want queued", got)
+	}
+	select {
+	case <-started2:
+		t.Fatal("critical pressure must not execute the queued task")
+	default:
+	}
+
+	level = memguard.Normal
+	close(release1)
+	waitFor(t, "first task completion", func() bool { return state(r, id1) == taskDone })
+	waitFor(t, "queued task promoted after recovery completion", func() bool {
+		return state(r, id2) == taskRunning
+	})
+	<-started2
+	close(release2)
+	waitFor(t, "second task completion", func() bool { return state(r, id2) == taskDone })
 }
 
 func TestRegistryThreadSerialization(t *testing.T) {

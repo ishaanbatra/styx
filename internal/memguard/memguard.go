@@ -1,8 +1,8 @@
 // Package memguard reports host memory pressure so dispatch can avoid
 // launching subprocesses the OS is about to jetsam-kill. It exposes a single
 // read: Current(). Callers that need to act on it (channel decorators, the
-// background task queue) take a func() Level rather than importing this
-// package directly, so tests can inject fakes without touching real sysctls.
+// background task queue) retain a func() Level seam so tests can inject fakes
+// without touching real sysctls.
 package memguard
 
 // Level is the host's current memory-pressure state.

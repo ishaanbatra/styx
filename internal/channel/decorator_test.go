@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/memguard"
 	"github.com/ishaanbatra/styx/internal/progress"
 )
 
@@ -202,6 +203,55 @@ func TestWithTimeoutSkipsInteractive(t *testing.T) {
 	w := &WithTimeout{Inner: &fakeOK{}, D: time.Nanosecond}
 	if _, err := w.Send(context.Background(), Request{Interactive: true}); err != nil {
 		t.Fatalf("interactive send timed out: %v", err)
+	}
+}
+
+func TestWithMemoryGuard(t *testing.T) {
+	tests := []struct {
+		name        string
+		level       memguard.Level
+		interactive bool
+		wantCalls   int
+		wantKind    ErrorKindLabel
+	}{
+		{name: "critical refuses", level: memguard.Critical, wantCalls: 0, wantKind: ErrKindMemPressure},
+		{name: "warn passes through", level: memguard.Warn, wantCalls: 1},
+		{name: "normal passes through", level: memguard.Normal, wantCalls: 1},
+		{name: "interactive critical passes through", level: memguard.Critical, interactive: true, wantCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inner := &fakeInner{name: "mock", respText: "ok"}
+			w := &WithMemoryGuard{
+				Inner: inner,
+				Level: func() memguard.Level { return tt.level },
+			}
+			resp, err := w.Send(context.Background(), Request{Interactive: tt.interactive})
+			if inner.callCount != tt.wantCalls {
+				t.Fatalf("inner call count = %d, want %d", inner.callCount, tt.wantCalls)
+			}
+			if tt.wantKind == "" {
+				if err != nil {
+					t.Fatalf("Send() error = %v, want nil", err)
+				}
+				if resp.Text != "ok" {
+					t.Errorf("response text = %q, want ok", resp.Text)
+				}
+				return
+			}
+			var classified *ClassifiedError
+			if !errors.As(err, &classified) {
+				t.Fatalf("Send() error = %T %v, want *ClassifiedError", err, err)
+			}
+			if classified.Kind != tt.wantKind {
+				t.Errorf("error kind = %q, want %q", classified.Kind, tt.wantKind)
+			}
+			for _, want := range []string{"host under memory pressure", "close apps or retry", "refusing to launch mock", "jetsam kill"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q missing %q", err, want)
+				}
+			}
+		})
 	}
 }
 

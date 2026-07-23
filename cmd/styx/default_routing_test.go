@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ishaanbatra/styx/internal/channel"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
@@ -54,8 +55,36 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 			t.Errorf("seeded routing missing %q", want)
 		}
 	}
+	if !r.Memory.Guard {
+		t.Error("seeded routing must enable the memory guard")
+	}
+	for _, want := range []string{`[memory]`, `guard = true`} {
+		if !strings.Contains(defaultRoutingTOML, want) {
+			t.Errorf("seeded routing missing %q", want)
+		}
+	}
 	if r.Conductor.Host != "claude" || !strings.Contains(defaultRoutingTOML, `host = "claude"`) {
 		t.Errorf("seeded conductor host = %q, want claude", r.Conductor.Host)
+	}
+}
+
+func TestDefaultChannelsMemoryGuard(t *testing.T) {
+	for _, guard := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "enabled"}[guard], func(t *testing.T) {
+			channels := defaultChannels(nil, config.Routing{
+				Memory: config.MemoryConfig{Guard: guard},
+			})
+			for name, ch := range channels {
+				progressWrapper, ok := ch.(*channel.WithProgress)
+				if !ok {
+					t.Fatalf("%s outer decorator = %T, want *channel.WithProgress", name, ch)
+				}
+				_, guarded := progressWrapper.Inner.(*channel.WithMemoryGuard)
+				if guarded != guard {
+					t.Errorf("%s memory guarded = %v, want %v", name, guarded, guard)
+				}
+			}
+		})
 	}
 }
 

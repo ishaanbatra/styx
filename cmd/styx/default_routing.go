@@ -22,6 +22,11 @@ ollama.cap_pct           = 0    # local, unlimited
 keep_alive = "5m"
 preload_models = false
 
+# ── Host memory pressure ──
+# Refuse new non-interactive launches at critical pressure to avoid jetsam kills.
+[memory]
+guard = true
+
 # ── research ──
 [[rule]]
 verb = "research"

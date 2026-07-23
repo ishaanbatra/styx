@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-23 # Phase B2 internal/memguard darwin pressure probe
+last_verified: 2026-07-23 # Phase B3/B4 memory-aware channels and conductor queue
 ---
 
 # Styx Architecture
@@ -36,7 +36,7 @@ argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir
               │                                       ▲
               │                          internal/signals.Extract (pure tagger)
               ▼
-        internal/channel (decorated: WithProgress wrapping WithTimeout/raw adapter)
+        internal/channel (decorated: WithProgress → WithMemoryGuard → WithTimeout/raw)
               ├── channel/claude   exec `claude -p` / interactive
               ├── channel/codex    exec `codex exec`
               ├── channel/agy      exec `agy -p --dangerously-skip-permissions [--model <name>]`
@@ -77,7 +77,7 @@ Shared pieces:
   shares the budget tracker with the router for both cap checks and
   3-failures-in-10-minutes circuit breaking. `rawChannel()` unwraps the
   progress decorator for orchestration verbs that narrate themselves, leaving
-  timeout protection in place. `resolveGlobalTarget(arg)` combines a verb's
+  memory-guard and timeout protection in place. `resolveGlobalTarget(arg)` combines a verb's
   positional target with global `--project` / `--dir` flags and routes every
   project-scoped verb through `internal/target.Resolve`; this replaces the old
   `resolveTarget` / `resolveProjectArg` split and removes the silent cwd
@@ -316,9 +316,10 @@ per non-empty entry; the process cwd stays `WorkingDir` — ExtraRoots is purely
 additive; for codex, `--add-dir` flags sit after the `exec` subcommand). Token
 counts in `Response` are `len/4` estimates.
 
-- Subprocess adapters (claude, codex, agy) classify exec failures into
-  `channel.ClassifiedError{Kind: timeout|killed|429|5xx|other}` so the
-  router/budget can label them. All three share
+- Channel Sends classify failures into
+  `channel.ClassifiedError{Kind: timeout|killed|mem-pressure|429|5xx|other}` so
+  the router/budget can label them. The subprocess adapters (claude, codex,
+  agy) share
   `channel.ClassifyExecError`: SIGKILL/SIGTERM detection lives in build-tagged
   `internal/channel/exit_unix.go` / `exit_other.go`
   (`channel.KilledBySignal`); a signal kill after the request context expires
@@ -345,10 +346,16 @@ counts in `Response` are `len/4` estimates.
   (`len(prompt+system)/4`) plus 1024 headroom exceed ollama's 4096-token
   default, `Send` also sets `options.num_ctx` to the estimate plus 2048 so
   large prompts aren't silently truncated.
-- `decorator.go` — `WithProgress` narrates each Send as a progress stage;
-  skipped for interactive sends (spinner would fight the child for the TTY).
+- `decorator.go` defines three decorators. `WithProgress` narrates each Send as
+  a progress stage and is skipped for interactive sends (a spinner would fight
+  the child for the TTY). `WithMemoryGuard` checks the injected
+  `func() memguard.Level` for every non-interactive Send: Critical returns a
+  `mem-pressure` `ClassifiedError` without calling the adapter, while Warn and
+  Normal pass through; interactive handoffs always pass through.
   `WithTimeout` gives non-interactive sends a deadline while leaving
-  interactive handoffs unbounded.
+  interactive handoffs unbounded. `defaultChannels` applies the memory guard
+  to every registered channel when `[memory] guard = true` (the default),
+  between the outer progress decorator and any channel timeout.
 - `gemini` is a registered alias for agy (v0.1 routing-rule compat).
 
 ## Memory guard (internal/memguard)
@@ -360,16 +367,18 @@ Standalone host memory-pressure probe: `type Level int` (`Normal`, `Warn`,
 1→Normal, 2→Warn, 4→Critical; any sysctl error or unrecognized value fails
 open to Normal, since a broken probe must never block dispatch. Non-darwin
 (`memguard_other.go`) always reports Normal; there is no equivalent probe for
-Linux/Windows yet. No config knobs and no free-GB thresholds by design — the
-kernel's own pressure level is the signal. Not yet consumed anywhere:
-`WithMemoryGuard` (channel decorator) and the background task queue gate are
-separate follow-on work that will take a `func() memguard.Level` injection
-seam rather than importing this package directly.
+Linux/Windows yet. No probe thresholds by design — the kernel's own pressure
+level is the signal. `channel.WithMemoryGuard` consumes the probe before
+non-interactive channel Sends, and the conductor background-task registry
+consumes it before promoting queued work. Both retain a `func() memguard.Level`
+injection seam for deterministic tests. The routing-level `[memory] guard`
+boolean defaults to true when the section is absent; false disables the
+channel decorator, while the conductor queue safety gate remains active.
 
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
 `routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules,
-Models, Brain, Ollama, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
+Models, Brain, Ollama, Memory, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
 No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
@@ -2034,6 +2043,14 @@ results to the caller.
   `EnsureConductorTaskCap`). `startEligibleLocked` counts running tasks and
   promotes queued tasks in creation order while `running < limit` and no
   ordering rule blocks them.
+- **Memory-pressure gate** — the registry stores an injected
+  `func() memguard.Level` (default `memguard.Current`). Before
+  `startEligibleLocked` promotes any queued task, Critical pressure stops the
+  pass and leaves every task in the existing `queued` state; it emits one
+  `logStatus` line for the whole continuous stall episode, not one per task or
+  recheck. A later `Spawn` or running-task completion calls
+  `startEligibleLocked` again, so a recovered Normal level drains eligible
+  work without a timer or new task state.
 - **Ordering rules** — both enforced by `conflictLocked`, checked in
   creation order against every currently-running task:
   1. **Per-thread serialization**: a task on the same `(ProjectID, Thread)`
