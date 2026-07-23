@@ -16,6 +16,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/audit"
 	"github.com/ishaanbatra/styx/internal/brain"
 	"github.com/ishaanbatra/styx/internal/budget"
+	"github.com/ishaanbatra/styx/internal/channel"
 	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -122,6 +123,55 @@ func newTestSession(t *testing.T, b brain.Brain, input string) (*replSession, *b
 	return s, out
 }
 
+func TestNewREPLSessionDoesNotPanicWithZeroRepos(t *testing.T) {
+	tests := []struct {
+		name  string
+		repos []string
+	}{
+		{name: "bare one-shot brain turn", repos: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("HOME", t.TempDir())
+
+			oldAlias, oldDir := globalProjectAlias, globalDirArg
+			globalProjectAlias, globalDirArg = "", ""
+			t.Cleanup(func() {
+				globalProjectAlias, globalDirArg = oldAlias, oldDir
+			})
+
+			ch := &recordingChannel{}
+			a := &app{
+				routing: config.Routing{},
+				channels: map[string]channel.Channel{
+					"claude": ch,
+					"mlx":    ch,
+					"ollama": ch,
+				},
+			}
+
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("newREPLSession panicked with zero repos: %v", r)
+				}
+			}()
+
+			s, cleanup, err := newREPLSession(a, tt.repos...)
+			if cleanup != nil {
+				defer cleanup()
+			}
+			if err != nil {
+				t.Fatalf("newREPLSession: %v", err)
+			}
+			if s == nil {
+				t.Fatal("newREPLSession returned a nil session")
+			}
+		})
+	}
+}
+
 func TestTurnReply(t *testing.T) {
 	b := &scriptedBrain{actions: []brain.Action{{Action: brain.ActionReply, Reply: "two threads are live", Confidence: 0.9}}}
 	s, out := newTestSession(t, b, "")
@@ -130,6 +180,44 @@ func TestTurnReply(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "two threads are live") {
 		t.Errorf("output = %q", out.String())
+	}
+}
+
+func TestDefaultModel(t *testing.T) {
+	s := &replSession{}
+	tests := []struct {
+		name     string
+		dispatch brain.Dispatch
+		want     string
+	}{
+		{
+			name:     "explicit model",
+			dispatch: brain.Dispatch{Thread: "ollama", Model: "custom"},
+			want:     "custom",
+		},
+		{
+			name:     "ollama default",
+			dispatch: brain.Dispatch{Thread: "ollama"},
+			want:     "qwen2.5-coder:7b",
+		},
+		{
+			name:     "mlx default",
+			dispatch: brain.Dispatch{Thread: "mlx"},
+			want:     channelmlx.DefaultModel,
+		},
+		{
+			name:     "cloud default",
+			dispatch: brain.Dispatch{Thread: "claude"},
+			want:     "sonnet",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := s.defaultModel(tt.dispatch); got != tt.want {
+				t.Errorf("defaultModel() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

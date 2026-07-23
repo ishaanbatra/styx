@@ -329,11 +329,11 @@ func routeChannel(a *app, verb string, args []string) *routedChannel {
 	dec, err := a.router.Route(context.Background(), router.Request{Verb: verb, Args: args})
 	if err != nil {
 		// fall back to ollama-as-default
-		return &routedChannel{ch: a.channels["ollama"], model: "qwen2.5-coder:14b", id: "ollama:qwen2.5-coder:14b"}
+		return &routedChannel{ch: a.channels["ollama"], model: "qwen2.5-coder:7b", id: "ollama:qwen2.5-coder:7b"}
 	}
 	ch, ok := a.channels[dec.Channel]
 	if !ok {
-		return &routedChannel{ch: a.channels["ollama"], model: "qwen2.5-coder:14b", id: "ollama:qwen2.5-coder:14b"}
+		return &routedChannel{ch: a.channels["ollama"], model: "qwen2.5-coder:7b", id: "ollama:qwen2.5-coder:7b"}
 	}
 	return &routedChannel{ch: ch, model: dec.Model, id: dec.Channel + ":" + dec.Model}
 }

@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-23 # MLX-primary local routing defaults
+last_verified: 2026-07-23 # zero-repo REPL guard; 14b hardcode retirement + fallback-element migration
 ---
 
 # Styx Architecture
@@ -405,7 +405,7 @@ channel decorator, while the conductor queue safety gate remains active.
 Models, Brain, Ollama, Memory, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
-No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
+No match defaults to `ollama:qwen2.5-coder:7b`. Rules may also carry an
 optional pass-through `effort` string; styx stores it without validating
 provider-specific values and the router copies it onto `Decision.Effort`.
 Bare channel tokens such as `codex` are valid and mean "let that CLI choose its
@@ -414,8 +414,11 @@ model-refresh staleness threshold and defaults to 24 hours. The seeded
 `default_routing.go` table de-pins Claude and Codex versions, with
 `research.critic` showing `effort = "high"` as the pass-through example. Every
 seeded Ollama primary and fallback target uses `qwen2.5-coder:7b`; the routing
-upgrade rewrites only exact old seeded 14b target lines, preserving visibly
-customized values, and reports the shared `routing.v0.1.toml.bak` backup. Agy is
+upgrade rewrites exact old seeded 14b target lines and, within single-line
+`fallback = [...]` arrays, elements exactly equal to the old 14b target (so a
+line already rewritten by another upgrade — e.g. the agy pin — still sheds its
+stale 14b fallback), preserving visibly customized values, and reports the
+shared `routing.v0.1.toml.bak` backup. Agy is
 deliberately different: its seeded rules pin `Gemini 3.1 Pro (High)` because
 the subscription CLI otherwise reuses the user's last interactive model choice.
 
