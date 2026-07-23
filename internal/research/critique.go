@@ -5,9 +5,14 @@ package research
 
 import (
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 )
+
+// ErrDegraded reports that Parse had to preserve unstructured input as one
+// IMPORTANT finding.
+var ErrDegraded = errors.New("critique parse degraded")
 
 // Critique is the structured output expected from the critic.
 type Critique struct {
@@ -41,7 +46,7 @@ func Parse(raw string) (Critique, error) {
 		return c, nil
 	}
 	// Garbage fallback.
-	return Critique{Important: []string{raw}}, nil
+	return Critique{Important: []string{raw}}, ErrDegraded
 }
 
 func tryStrictJSON(s string) (Critique, bool) {
@@ -77,20 +82,23 @@ func tryEmbeddedJSON(s string) (Critique, bool) {
 	return Critique{}, false
 }
 
-var sectionRE = regexp.MustCompile(`(?im)^(BLOCKING|IMPORTANT|NIT(?:S)?)\s*:?\s*$`)
+var sectionRE = regexp.MustCompile(`(?i)^(?:#{1,6}[ \t]*)?(?:\*\*(BLOCKING|IMPORTANT|NIT(?:S)?)[ \t]*:?\*\*|__(BLOCKING|IMPORTANT|NIT(?:S)?)[ \t]*:?__|(BLOCKING|IMPORTANT|NIT(?:S)?)[ \t]*:?)[ \t]*:?[ \t]*$`)
 
 func tryKeywordSections(s string) (Critique, bool) {
 	lines := strings.Split(s, "\n")
 	var cur string
+	sectionStarted := false
 	c := Critique{}
 	found := false
 	for _, line := range lines {
 		trim := strings.TrimSpace(line)
 		if m := sectionRE.FindStringSubmatch(trim); m != nil {
-			cur = strings.ToUpper(m[1])
+			cur = firstNonEmpty(m[1:]...)
+			cur = strings.ToUpper(cur)
 			if cur == "NITS" {
 				cur = "NIT"
 			}
+			sectionStarted = false
 			found = true
 			continue
 		}
@@ -102,6 +110,13 @@ func tryKeywordSections(s string) (Critique, bool) {
 		if item == "" {
 			continue
 		}
+		if !sectionStarted && isNoneFinding(item) {
+			// A None declaration makes the whole section empty; explanatory
+			// text after it is not a finding.
+			cur = ""
+			continue
+		}
+		sectionStarted = true
 		switch cur {
 		case "BLOCKING":
 			c.Blocking = append(c.Blocking, item)
@@ -112,6 +127,26 @@ func tryKeywordSections(s string) (Critique, bool) {
 		}
 	}
 	return c, found
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func isNoneFinding(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if strings.HasPrefix(s, "none") {
+		return true
+	}
+	return s == "n/a" ||
+		strings.HasPrefix(s, "n/a.") ||
+		strings.HasPrefix(s, "n/a ") ||
+		strings.HasPrefix(s, "n/a(")
 }
 
 func emptyIfNil(s []string) []string {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -271,8 +272,12 @@ func buildRunner(a *app, proj project.Project, runID, goal string, deep, noPR, n
 			return 0, 0, "", err
 		}
 		c, err := research.Parse(text)
-		if err != nil {
+		if errors.Is(err, research.ErrDegraded) {
 			logStatus("review parse degraded: %v (raw text treated as one IMPORTANT finding)", err)
+		} else if err != nil {
+			// Preserve the review stage's fail-safe behavior for any future
+			// parse errors: report them and continue with the returned critique.
+			logStatus("review parse error: %v", err)
 		}
 		return len(c.Blocking), len(c.Important), text, nil
 	}

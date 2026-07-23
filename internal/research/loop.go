@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -74,8 +75,12 @@ func Loop(ctx context.Context, query string, drafter, critic Channel, prog *prog
 			return nil, fmt.Errorf("round %d critique: %w", round, err)
 		}
 		c, err := Parse(critRaw)
-		if err != nil {
+		if errors.Is(err, ErrDegraded) {
 			stCrit.Info("critique parse degraded: %v (raw text treated as one IMPORTANT finding)", err)
+		} else if err != nil {
+			// Preserve the loop's existing fail-safe behavior for any future
+			// parse errors: report them and continue with the returned critique.
+			stCrit.Info("critique parse error: %v", err)
 		}
 		b.Critiques = append(b.Critiques, c)
 

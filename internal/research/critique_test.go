@@ -1,6 +1,8 @@
 package research
 
 import (
+	"errors"
+	"os"
 	"testing"
 )
 
@@ -36,8 +38,44 @@ Hope this helps.`
 	}
 }
 
-func TestParse_KeywordFallback(t *testing.T) {
-	raw := `BLOCKING:
+func TestParse_KeywordSections(t *testing.T) {
+	liveReview, err := os.ReadFile("testdata/live_markdown_review.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name          string
+		raw           string
+		wantBlocking  int
+		wantImportant int
+		wantNits      int
+		wantErr       error
+	}{
+		{
+			name:          "live markdown heading review",
+			raw:           string(liveReview),
+			wantBlocking:  0,
+			wantImportant: 0,
+			wantNits:      5,
+		},
+		{
+			name: "bold headings",
+			raw: `**BLOCKING**
+- b1
+
+__IMPORTANT__:
+- i1
+
+### **NITS:**
+- n1`,
+			wantBlocking:  1,
+			wantImportant: 1,
+			wantNits:      1,
+		},
+		{
+			name: "bare headings",
+			raw: `BLOCKING:
 - claim about pgvector dimensions is unverified
 - missing context on similarity metric
 
@@ -45,30 +83,51 @@ IMPORTANT:
 - doesn't address index rebuild cost
 
 NIT:
-- typo on line 3`
-	c, err := Parse(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(c.Blocking) != 2 {
-		t.Errorf("blocking len = %d, want 2: %#v", len(c.Blocking), c.Blocking)
-	}
-	if len(c.Important) != 1 {
-		t.Errorf("important len = %d, want 1: %#v", len(c.Important), c.Important)
-	}
-	if len(c.Nits) != 1 {
-		t.Errorf("nits len = %d, want 1: %#v", len(c.Nits), c.Nits)
-	}
-}
+- typo on line 3`,
+			wantBlocking:  2,
+			wantImportant: 1,
+			wantNits:      1,
+		},
+		{
+			name: "none sections",
+			raw: `BLOCKING:
+None
 
-func TestParse_GarbageInputTreatsAsSingleImportant(t *testing.T) {
-	raw := "this is some unstructured prose with no recognizable sections"
-	c, err := Parse(raw)
-	if err != nil {
-		t.Fatal(err)
+IMPORTANT:
+None. (Both reviewers agree.)
+
+NIT:
+n/a`,
+			wantBlocking:  0,
+			wantImportant: 0,
+			wantNits:      0,
+		},
+		{
+			name:          "garbage with keyword in prose",
+			raw:           "this is unstructured prose mentioning BLOCKING mid-sentence",
+			wantBlocking:  0,
+			wantImportant: 1,
+			wantNits:      0,
+			wantErr:       ErrDegraded,
+		},
 	}
-	if len(c.Important) != 1 {
-		t.Errorf("expected garbage -> single IMPORTANT, got: %#v", c)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Parse(tt.raw)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+			if got := len(c.Blocking); got != tt.wantBlocking {
+				t.Errorf("blocking len = %d, want %d: %#v", got, tt.wantBlocking, c.Blocking)
+			}
+			if got := len(c.Important); got != tt.wantImportant {
+				t.Errorf("important len = %d, want %d: %#v", got, tt.wantImportant, c.Important)
+			}
+			if got := len(c.Nits); got != tt.wantNits {
+				t.Errorf("nits len = %d, want %d: %#v", got, tt.wantNits, c.Nits)
+			}
+		})
 	}
 }
 

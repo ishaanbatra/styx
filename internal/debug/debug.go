@@ -5,6 +5,7 @@ package debug
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -190,7 +191,7 @@ func collectReview(ctx context.Context, ch Channel, channelName, lens, prompt st
 		return r
 	}
 	critique, err := research.Parse(raw)
-	if err != nil {
+	if err != nil && !errors.Is(err, research.ErrDegraded) {
 		r.Err = fmt.Sprintf("parse review: %v", err)
 		return r
 	}
