@@ -41,6 +41,7 @@ type CheckState struct {
 type Context struct {
 	Goal          string     `json:"goal"`
 	Branch        string     `json:"branch"`
+	BaseBranch    string     `json:"base_branch"`
 	Commits       []Commit   `json:"commits"`
 	TouchedPaths  []string   `json:"touched_paths"`
 	DiffStats     DiffStats  `json:"diff_stats"`
@@ -66,11 +67,25 @@ var LabelAllowlist = []string{
 // BuildContext snapshots the current branch diff relative to the repository's
 // default branch and combines it with persisted pipeline state.
 func BuildContext(ctx context.Context, projectPath string, state *pipeline.State) (Context, error) {
+	return buildContext(ctx, projectPath, state, defaultBranch(ctx, projectPath))
+}
+
+// BuildContextWithBase snapshots the current branch diff relative to baseBranch
+// and combines it with persisted pipeline state.
+func BuildContextWithBase(ctx context.Context, projectPath string, state *pipeline.State, baseBranch string) (Context, error) {
+	baseBranch = strings.TrimSpace(baseBranch)
+	if baseBranch == "" {
+		return Context{}, fmt.Errorf("build PR context: base branch is required")
+	}
+	return buildContext(ctx, projectPath, state, baseBranch)
+}
+
+func buildContext(ctx context.Context, projectPath string, state *pipeline.State, base string) (Context, error) {
 	packet, err := ContextFromState(state)
 	if err != nil {
 		return Context{}, err
 	}
-	base := defaultBranch(ctx, projectPath)
+	packet.BaseBranch = base
 	rangeSpec := base + "...HEAD"
 	logOut, err := gitOutput(ctx, projectPath, "log", "--format=%H%x09%s", rangeSpec)
 	if err != nil {

@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-22 # standalone ship pathway
+last_verified: 2026-07-23 # ship --base
 ---
 
 # Styx Architecture
@@ -1115,24 +1115,30 @@ built-in live-streaming claude path.
 
 The ship closure only drafts when PR publication will actually run (neither
 `--no-pr` nor `--no-push`). `internal/prdraft` builds a deterministic context
-packet from pipeline state plus the default-branch diff: commits, touched paths,
-numstat, issue/test references, risk flags, allowlisted labels, and explicit
-test/review check states. A completed stage with `SkippedReason` is represented
-and rendered as skipped, never as successful. Pipeline-owned checks, draft
-policy, issue-linking lines, and core labels are not part of either model output
-schema. Ambiguous issue references render as related links rather than automatic
-closing directives, and failure to collect git evidence forces a draft PR.
+packet from pipeline state plus a base-branch diff: base name, commits, touched
+paths, numstat, issue/test references, risk flags, allowlisted labels, and
+explicit test/review check states. `BuildContext` retains default-branch
+semantics; the additive `BuildContextWithBase` accepts an explicit base for the
+standalone stacked-branch path. A completed stage with `SkippedReason` is
+represented and rendered as skipped, never as successful. Pipeline-owned
+checks, draft policy, issue-linking lines, and core labels are not part of
+either model output schema. Ambiguous issue references render as related links
+rather than automatic closing directives, and failure to collect git evidence
+forces a draft PR.
 
-`styx ship [--no-pr] [--no-push] [goal...]` is the standalone publication
-path for work that is already committed on the current branch. It resolves the
-cwd/global target, reuses `prdraft.DefaultBranch`, and refuses before any side
-effect when the current branch is the default branch, the worktree is dirty,
-or the branch has no commits ahead of the default. With full publication it
-passes a minimal in-memory `pipeline.State{Goal, Branch}` through the same
-bounded PR drafter, so test and review checks truthfully render as not run;
-`--no-pr` and `--no-push` skip drafting entirely and stay model-free. The
-resulting title, body, draft flag, and labels flow through `execute.Ship`, with
-the PR URL or a push-skipped/PR-skipped note printed as the command result.
+`styx ship [--base <branch>] [--no-pr] [--no-push] [goal...]` is the standalone
+publication path for work that is already committed on the current branch. It
+resolves the cwd/global target and uses `prdraft.DefaultBranch` unless the
+CLI-only `--base` flag selects a stacked-branch base; MCP `pipeline_run ship`
+intentionally does not expose that option. Before any side effect, ship refuses
+an unresolvable explicit base, the selected base branch itself, a dirty
+worktree, or a branch with no commits ahead of the selected base. With full
+publication it passes a minimal in-memory `pipeline.State{Goal, Branch}`
+through the same bounded PR drafter, so test and review checks truthfully
+render as not run; `--no-pr` and `--no-push` skip drafting entirely and stay
+model-free. The resulting title, body, draft flag, and labels flow through
+`execute.Ship`, with the PR URL or a push-skipped/PR-skipped note printed as the
+command result.
 
 `cmd/styx/pr_draft.go` runs `pr.title` and `pr.body` independently through
 `internal/microtask`: primary, at most one lazily resolved fallback, then a
@@ -1348,12 +1354,13 @@ through that channel with `Write: true` and captures output; when nil it uses
 the built-in claude path (`--dangerously-skip-permissions -p`), which streams
 claude's stderr live. `Ship` handles commit/push/PR (via `gh`), honoring
 `--no-pr`/`--no-push`. For PR publication, callers may supply drafted title,
-body, draft state, and labels, but `Ship` owns the final `gh pr create`
-arguments and appends styx attribution to the body. Label edits are best-effort
+body, draft state, labels, and an optional `BaseBranch`; `Ship` owns the final
+`gh pr create` arguments, appends `--base <branch>` only when that option is
+set, and appends styx attribution to the body. Label edits are best-effort
 metadata after creation: failures are reported in `MetadataErrors` without
 erasing the created or recovered PR URL. If create reports an existing PR,
-`Ship` recovers its URL with `gh pr view` before applying labels. Both the
-auto pipeline's ship stage and standalone `cmdShip` call this same publication
+`Ship` recovers its URL with `gh pr view` before applying labels. Both the auto
+pipeline's ship stage and standalone `cmdShip` call this same publication
 boundary; `cmdShip` performs its branch/worktree/ahead preflight first.
 
 ## Attribution (internal/attribution)

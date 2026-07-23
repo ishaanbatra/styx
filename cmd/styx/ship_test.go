@@ -13,19 +13,34 @@ import (
 
 func TestParseShipArgs(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
-		want shipCLIArgs
+		name    string
+		args    []string
+		want    shipCLIArgs
+		wantErr string
 	}{
 		{name: "empty", want: shipCLIArgs{}},
 		{name: "goal words", args: []string{"publish", "parser", "fix"}, want: shipCLIArgs{Goal: "publish parser fix"}},
 		{name: "no pr", args: []string{"--no-pr", "publish", "parser"}, want: shipCLIArgs{NoPR: true, Goal: "publish parser"}},
 		{name: "no push", args: []string{"publish", "--no-push", "parser"}, want: shipCLIArgs{NoPush: true, Goal: "publish parser"}},
 		{name: "both flags", args: []string{"--no-pr", "--no-push", "publish"}, want: shipCLIArgs{NoPR: true, NoPush: true, Goal: "publish"}},
+		{name: "base", args: []string{"publish", "--base", "feature/parent", "parser"}, want: shipCLIArgs{BaseBranch: "feature/parent", Goal: "publish parser"}},
+		{name: "missing base value", args: []string{"publish", "--base"}, wantErr: "--base requires a branch"},
+		{name: "base followed by flag", args: []string{"--base", "--no-pr"}, wantErr: "--base requires a branch"},
+		{name: "empty base value", args: []string{"--base", ""}, wantErr: "--base requires a branch"},
+		{name: "equals form rejected", args: []string{"--base=feature/parent"}, wantErr: "use --base <branch>"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseShipArgs(tt.args)
+			got, err := parseShipArgs(tt.args)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("parseShipArgs(%v) error = %v, want substring %q", tt.args, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseShipArgs(%v): %v", tt.args, err)
+			}
 			if got != tt.want {
 				t.Fatalf("parseShipArgs(%v) = %+v, want %+v", tt.args, got, tt.want)
 			}
@@ -37,6 +52,7 @@ func TestCmdShipRefusesUnsafeRepositoryStates(t *testing.T) {
 	tests := []struct {
 		name    string
 		setup   func(*testing.T, string)
+		args    []string
 		wantErr string
 	}{
 		{
@@ -60,6 +76,32 @@ func TestCmdShipRefusesUnsafeRepositoryStates(t *testing.T) {
 			},
 			wantErr: "has no commits ahead",
 		},
+		{
+			name: "unresolvable explicit base",
+			setup: func(t *testing.T, repo string) {
+				shipTestFeatureCommit(t, repo)
+			},
+			args:    []string{"--base", "feature/missing"},
+			wantErr: `resolve base branch "feature/missing"`,
+		},
+		{
+			name: "explicit base is current branch",
+			setup: func(t *testing.T, repo string) {
+				shipTestFeatureCommit(t, repo)
+			},
+			args:    []string{"--base", "feature/ship"},
+			wantErr: "refusing to ship the base branch",
+		},
+		{
+			name: "no commits ahead of explicit base",
+			setup: func(t *testing.T, repo string) {
+				shipTestFeatureCommit(t, repo)
+				runShipTestGit(t, repo, "branch", "feature/parent")
+				runShipTestGit(t, repo, "checkout", "-q", "-b", "feature/empty")
+			},
+			args:    []string{"--base", "feature/parent"},
+			wantErr: "has no commits ahead of base branch",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -71,11 +113,34 @@ func TestCmdShipRefusesUnsafeRepositoryStates(t *testing.T) {
 			}
 			withShipTestTarget(t, repo)
 
-			err := cmdShip(context.Background(), &app{}, nil)
+			err := cmdShip(context.Background(), &app{}, tt.args)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("cmdShip() error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestCmdShipAcceptsResolvableNonDefaultBase(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	repo := initShipTestRepo(t, false)
+	runShipTestGit(t, repo, "checkout", "-q", "-b", "feature/parent")
+	if err := os.WriteFile(filepath.Join(repo, "parent.txt"), []byte("parent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runShipTestGit(t, repo, "add", ".")
+	runShipTestGit(t, repo, "commit", "-q", "-m", "add parent")
+	runShipTestGit(t, repo, "checkout", "-q", "-b", "feature/stack")
+	if err := os.WriteFile(filepath.Join(repo, "stack.txt"), []byte("stack\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runShipTestGit(t, repo, "add", ".")
+	runShipTestGit(t, repo, "commit", "-q", "-m", "add stack")
+	withShipTestTarget(t, repo)
+
+	if err := cmdShip(context.Background(), &app{}, []string{"--base", "feature/parent", "--no-push"}); err != nil {
+		t.Fatalf("cmdShip() with explicit base: %v", err)
 	}
 }
 

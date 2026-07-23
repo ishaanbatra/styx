@@ -65,7 +65,7 @@ VERBS
   context show              Print rendered .claude/context.md for current project
   auto <goal>               Full autonomous pipeline (research -> ship)
   auto --resume <run-id>    Resume an interrupted pipeline
-  ship [--no-pr] [--no-push] [goal...]
+  ship [--base <branch>] [--no-pr] [--no-push] [goal...]
                             Publish the current branch's committed work as a
                             validated PR (or stop after push/commit)
   execute <plan-file>       Non-interactive code execution from a plan markdown

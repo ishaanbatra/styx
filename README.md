@@ -156,7 +156,7 @@ restarting the session.
 | `auto --no-pr <goal>` | Stop at push (don't open PR) |
 | `auto --no-push <goal>` | Stop at commit (don't push) |
 | `auto --resume <run-id>` | Resume an interrupted pipeline |
-| `ship [goal...]` | Publish the current branch's committed work as a validated PR; refuses the default branch, dirty worktrees, and branches with no commits ahead |
+| `ship [--base <branch>] [goal...]` | Publish the current branch's committed work as a validated PR; `--base` targets a stacked branch instead of the default; refuses the selected base, dirty worktrees, and branches with no commits ahead |
 | `ship --no-pr [goal...]` | Push committed work without drafting or opening a PR |
 | `ship --no-push [goal...]` | Stop before drafting, pushing, or opening a PR |
 | `execute <plan-file>` | Apply a plan non-interactively via the `implement` route (Codex for well-scoped plans, Claude for `complex` ones) |

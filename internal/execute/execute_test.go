@@ -302,6 +302,38 @@ func TestPRBody(t *testing.T) {
 	}
 }
 
+func TestPRCreateArgsBaseBranch(t *testing.T) {
+	tests := []struct {
+		name string
+		base string
+		want string
+	}{
+		{name: "default base omitted"},
+		{name: "explicit base included", base: "feature/parent", want: "feature/parent"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := prCreateArgs(ShipOptions{BaseBranch: tt.base, PRBody: "Body"}, "Title")
+			baseIndex := -1
+			for i, arg := range args {
+				if arg == "--base" {
+					baseIndex = i
+					break
+				}
+			}
+			if tt.want == "" {
+				if baseIndex >= 0 {
+					t.Fatalf("prCreateArgs() unexpectedly included base: %v", args)
+				}
+				return
+			}
+			if baseIndex < 0 || baseIndex+1 >= len(args) || args[baseIndex+1] != tt.want {
+				t.Fatalf("prCreateArgs() = %v, want --base %s", args, tt.want)
+			}
+		})
+	}
+}
+
 func TestShipCreatesExplicitDraftAndAppliesLabels(t *testing.T) {
 	bin := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "gh.log")
