@@ -43,6 +43,8 @@ func TestActionValid(t *testing.T) {
 		{"reply missing text", Action{Action: ActionReply, Confidence: 0.8}, false},
 		{"dispatch ok", Action{Action: ActionDispatch, Confidence: 0.7,
 			Dispatches: []Dispatch{{Thread: "codex", Message: "do it"}}}, true},
+		{"mlx dispatch ok", Action{Action: ActionDispatch, Confidence: 0.7,
+			Dispatches: []Dispatch{{Thread: "mlx", Message: "draft it"}}}, true},
 		{"dispatch empty", Action{Action: ActionDispatch, Confidence: 0.7}, false},
 		{"dispatch bad thread", Action{Action: ActionDispatch, Confidence: 0.7,
 			Dispatches: []Dispatch{{Thread: "gpt9", Message: "x"}}}, false},
@@ -71,6 +73,9 @@ func TestActionSchemaIsValidJSON(t *testing.T) {
 	}
 	if v["type"] != "object" {
 		t.Errorf("schema root type = %v", v["type"])
+	}
+	if !bytes.Contains(ActionSchema, []byte(`"mlx"`)) {
+		t.Error("ActionSchema missing mlx thread")
 	}
 }
 

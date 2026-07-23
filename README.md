@@ -162,15 +162,17 @@ restarting the session.
 
 When `auto` reaches ship, styx derives a grounded PR context from pipeline
 state and the branch diff, then drafts the title and body as two bounded prose
-microtasks. Each uses local `ollama:qwen2.5-coder:7b`, may escalate once to
-`claude:haiku` only while that route is within budget and circuit-closed, and
-otherwise uses deterministic text. Test/review results, including skipped
-stages and their reasons, remain pipeline-owned facts; models cannot override
-them. Risky changes or repeated test/review attempts create a draft PR, and
-allowlisted labels are applied best-effort after creation. `--no-pr` and
-`--no-push` skip PR drafting entirely, so those modes make no drafting calls.
-Complex goals, deterministic risk flags, or unusually large diffs raise the
-drafting floor to Claude Sonnet with Codex fallback instead of using local prose.
+microtasks. Each starts on local
+`mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` and falls through to
+`ollama:qwen2.5-coder:7b` when MLX is unavailable; the configured chain retains
+`claude:haiku` after Ollama. Exhaustion uses deterministic text. Test/review
+results, including skipped stages and their reasons, remain pipeline-owned
+facts; models cannot override them. Risky changes or repeated test/review
+attempts create a draft PR, and allowlisted labels are applied best-effort
+after creation. `--no-pr` and `--no-push` skip PR drafting entirely, so those
+modes make no drafting calls. Complex goals, deterministic risk flags, or
+unusually large diffs raise the drafting floor to Claude Sonnet with Codex
+fallback instead of using local prose.
 
 ### Context + inspection
 
@@ -191,7 +193,7 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 
 | Verb | What it does |
 |---|---|
-| `grunt <prompt>` | Local Ollama pass-through |
+| `grunt <prompt>` | Local MLX one-shot with Ollama 7B fallback |
 | `think <prompt>` | Local Ollama reasoning mode (`deep:` prefix -> Claude) |
 | `explain <files...>` | Explain code files; large contexts route to pinned Gemini 3.1 Pro (High) on agy |
 | `summarize <files...>` | Summarize a set of files with pinned Gemini 3.1 Pro (High) on agy |
@@ -266,11 +268,15 @@ The `map-impact` rule uses the same pin and fallback chain; its missing-rule
 migration is likewise idempotent and preserves existing customized routing.
 The `cross-repo` rule follows the same pattern; existing routing files receive
 it idempotently without replacing a customized `cross-repo` target.
-The `pr.title` and `pr.body` rules use local `ollama:qwen2.5-coder:7b` with a
-single `claude:haiku` fallback for ordinary changes, plus a preceding
-`complex` rule using Claude Sonnet with Codex fallback. Startup and
-`styx upgrade` add either missing rule group without replacing an existing
-customized PR-drafting route.
+The `pr.title` and `pr.body` rules use local
+`mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` with
+`ollama:qwen2.5-coder:7b` then `claude:haiku` in the configured fallback chain
+for ordinary changes, plus a preceding `complex` rule using Claude Sonnet with
+Codex fallback. Both `grunt` rules use the same MLX primary with Ollama 7B
+fallback. A missing `mlx_lm.generate` fails through within the same call rather
+than producing a dead dispatch. Startup and `styx upgrade` add missing PR rule
+groups and promote only untouched prior seeded Ollama-primary PR/grunt shapes;
+customized routes are preserved.
 
 ## Deps
 

@@ -433,6 +433,9 @@ func ensureFirstRun() error {
 		if result.OllamaRewrites > 0 {
 			logStatus("auto-upgraded %d seeded Ollama target(s) from qwen2.5-coder:14b to qwen2.5-coder:7b (backup at routing.v0.1.toml.bak)", result.OllamaRewrites)
 		}
+		if result.MLXRewrites > 0 {
+			logStatus("auto-upgraded %d seeded PR/grunt rule(s) to MLX primary with Ollama fallback (backup at routing.v0.1.toml.bak)", result.MLXRewrites)
+		}
 		if result.ImplementInjected {
 			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")
 		}

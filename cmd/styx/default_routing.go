@@ -122,10 +122,8 @@ fallback = ["codex"]
 
 [[rule]]
 verb = "pr.title"
-# MLX burn-in alternative (leave disabled until host smoke-testing):
-# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
-use  = "ollama:qwen2.5-coder:7b"
-fallback = ["claude:haiku"]
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b", "claude:haiku"]
 
 [[rule]]
 verb = "pr.body"
@@ -135,24 +133,20 @@ fallback = ["codex"]
 
 [[rule]]
 verb = "pr.body"
-# MLX burn-in alternative (leave disabled until host smoke-testing):
-# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
-use  = "ollama:qwen2.5-coder:7b"
-fallback = ["claude:haiku"]
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b", "claude:haiku"]
 
 # ── grunt / think ──
 [[rule]]
 verb = "grunt"
 signals = ["trivial"]
-# MLX burn-in alternative (leave disabled until host smoke-testing):
-# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
-use  = "ollama:qwen2.5-coder:7b"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]
 
 [[rule]]
 verb = "grunt"
-# MLX burn-in alternative (leave disabled until host smoke-testing):
-# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
-use  = "ollama:qwen2.5-coder:7b"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]
 
 [[rule]]
 verb = "think"

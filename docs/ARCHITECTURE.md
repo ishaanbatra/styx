@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-23 # Phase D MLX subprocess channel
+last_verified: 2026-07-23 # MLX-primary local routing defaults
 ---
 
 # Styx Architecture
@@ -152,7 +152,10 @@ Shared pieces:
   `huh` subscription multi-select, and atomically writes a comment-preserving,
   hand-editable tailored routing file. Its pure `TailorRouting` filters or
   promotes targets around unavailable channels (including parallel review
-  synthesis); installer confirms are default-off and use bounded
+  synthesis); seeded MLX primaries stay optimistic because missing binaries
+  fall through at runtime, while their fallback lists are limited to selected
+  subscriptions (or replenished from those subscriptions if filtering would
+  leave none). Installer confirms are default-off and use bounded
   `exec.CommandContext` argument vectors with streamed I/O, never shell
   interpolation or `sudo`. Routing migrations remain owned exclusively by
   `config.UpgradeRoutingFile` and run afterward unchanged.
@@ -446,16 +449,22 @@ preserving any custom rule; startup and `styx upgrade` report this migration
 separately.
 
 The `pr.title` and `pr.body` verbs seed a `complex` rule using Claude Sonnet
-with Codex fallback before the ordinary `ollama:qwen2.5-coder:7b` rule with one
-`claude:haiku` fallback. Complex goal language, deterministic risk flags, or
-diffs over 50 files / 2,000 changed lines raise the drafting floor. `EnsurePRDraftRules`
-independently appends either missing rule group and preserves customized routes. Bounded microtask callers use
-`Router.NextAvailableFallback` at the moment escalation is needed; it filters
-to the decision's capability-floor candidates and rechecks both caps and the
-circuit breaker, so validation-driven fallback cannot bypass routing safety.
-The seeded PR and grunt defaults remain on Ollama during MLX burn-in; adjacent
-commented `mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` examples make the
-opt-in a visible routing-file edit without changing fresh-install behavior.
+with Codex fallback before the ordinary
+`mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` rule with
+`ollama:qwen2.5-coder:7b` and then `claude:haiku` in its fallback chain.
+Complex goal language, deterministic risk flags, or diffs over 50 files /
+2,000 changed lines raise the drafting floor. Both seeded `grunt` rules use
+the same MLX primary with an Ollama 7B fallback. This is runtime-safe when MLX
+is absent: `sendWithFallback` advances on any `Send` error for grunt, while
+the PR microtask ladder advances to its lazily resolved Ollama fallback.
+`EnsurePRDraftRules` independently appends either missing rule group and
+preserves customized routes. `RewriteSeededMLXPrimaries` promotes only the
+four exact prior Ollama-primary seeded shapes, removes their obsolete burn-in
+comments, and leaves customized targets, fallback chains, signals, and spacing
+untouched. Bounded microtask callers use `Router.NextAvailableFallback` at the
+moment escalation is needed; it filters to the decision's capability-floor
+candidates and rechecks both caps and the circuit breaker, so
+validation-driven fallback cannot bypass routing safety.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -636,9 +645,12 @@ the required `dispatches` array (routing collapsed to 51% in `llama3.2:3b` testi
 model-facing schema exposes risk only on dispatch items, taught via a few `read`/
 `ship` few-shot anchors (`edit` is the omitted default); the top-level
 `Action.Risk` exists but is code-derived (e.g. `auto` → ship), never model-set.
-`Action.Valid` performs local structural validation (including the risk enum)
-before the REPL trusts a model response; `ActionSchema` is sent to ollama as the
-structured-output format. `chat()` sends the construction-time
+`Action.Valid` performs local structural validation (including the risk enum
+and the `claude|codex|agy|ollama|mlx` dispatch whitelist) before the REPL
+trusts a model response; `ActionSchema` is sent to ollama as the
+structured-output format. Ollama and MLX brain dispatches run through the
+REPL's synchronous one-shot channel branches; MLX defaults to the adapter's
+Qwen 7B model rather than entering the persistent-agent manager. `chat()` sends the construction-time
 `[ollama].keep_alive` value on every brain call and
 sets `options.num_ctx` to `(len(system)+len(user))/4 + 2048` whenever that
 estimate plus 1024 headroom would exceed ollama's 4096-token default — the

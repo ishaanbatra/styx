@@ -27,6 +27,11 @@ use = "agy:default"
 fallback = ["ollama:qwen2.5-coder:14b"]
 
 [[rule]]
+verb = "grunt"
+use = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]
+
+[[rule]]
 verb = "review"
 parallel = ["claude:sonnet", "codex"]
 synthesize_with = "claude:sonnet"
@@ -55,6 +60,7 @@ func TestTailorRouting(t *testing.T) {
 			want: []config.Rule{
 				{Verb: "implement", Use: "claude:sonnet", Fallback: []string{"ollama:qwen2.5-coder:14b", "agy:default"}},
 				{Verb: "research", Use: "agy:default", Fallback: []string{"ollama:qwen2.5-coder:14b"}},
+				{Verb: "grunt", Use: "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit", Fallback: []string{"ollama:qwen2.5-coder:7b"}},
 				{Verb: "review", Parallel: []string{"claude:sonnet"}, SynthesizeWith: "claude:sonnet"},
 			},
 		},
@@ -64,6 +70,7 @@ func TestTailorRouting(t *testing.T) {
 			want: []config.Rule{
 				{Verb: "implement", Use: "codex", Fallback: []string{"claude:sonnet", "ollama:qwen2.5-coder:14b"}},
 				{Verb: "research", Use: "ollama:qwen2.5-coder:14b", Fallback: []string{"claude:sonnet", "codex"}},
+				{Verb: "grunt", Use: "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit", Fallback: []string{"ollama:qwen2.5-coder:7b"}},
 				{Verb: "review", Parallel: []string{"claude:sonnet", "codex"}, SynthesizeWith: "claude:sonnet"},
 			},
 		},
@@ -73,6 +80,7 @@ func TestTailorRouting(t *testing.T) {
 			want: []config.Rule{
 				{Verb: "implement", Use: "codex"},
 				{Verb: "research", Use: "codex"},
+				{Verb: "grunt", Use: "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit", Fallback: []string{"codex"}},
 				{Verb: "review", Parallel: []string{"codex"}, SynthesizeWith: "codex"},
 			},
 		},
@@ -82,6 +90,7 @@ func TestTailorRouting(t *testing.T) {
 			want: []config.Rule{
 				{Verb: "implement", Use: "ollama:qwen2.5-coder:14b"},
 				{Verb: "research", Use: "ollama:qwen2.5-coder:14b"},
+				{Verb: "grunt", Use: "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit", Fallback: []string{"ollama:qwen2.5-coder:7b"}},
 				{Verb: "review", Parallel: []string{"ollama:qwen2.5-coder:14b"}, SynthesizeWith: "ollama:qwen2.5-coder:14b"},
 			},
 		},

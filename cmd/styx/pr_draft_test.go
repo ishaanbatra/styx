@@ -12,6 +12,7 @@ import (
 
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
+	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/pipeline"
 	"github.com/ishaanbatra/styx/internal/prdraft"
@@ -225,6 +226,37 @@ func TestPRMicrotaskFallbackHonorsLiveBudgetAndBreaker(t *testing.T) {
 				t.Fatalf("budget-aware fallback result=%+v local/cloud=%d/%d", result, local.calls, cloud.calls)
 			}
 		})
+	}
+}
+
+func TestPRMicrotaskMissingMLXFallsBackWithinCall(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	ollama := &prDraftTestChannel{respond: func(channel.Request) channel.Response {
+		return channel.Response{Text: "valid"}
+	}}
+	r := router.FromConfig(config.Routing{Rules: []config.Rule{{
+		Verb: "pr.title", Use: "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
+		Fallback: []string{"ollama:qwen2.5-coder:7b", "claude:haiku"},
+	}}}, nil)
+	a := &app{
+		router: r,
+		channels: map[string]channel.Channel{
+			"mlx":    channelmlx.New(),
+			"ollama": ollama,
+		},
+	}
+	result := runPRMicrotask(context.Background(), a, t.TempDir(), "pr.title", nil, "prompt",
+		func(text string) (string, error) {
+			if text == "valid" {
+				return text, nil
+			}
+			return "", os.ErrInvalid
+		}, nil, "static")
+	if result.StaticFallback || !result.UsedFallback || result.Value != "valid" || ollama.calls != 1 {
+		t.Fatalf("missing-MLX fallback result=%+v ollama calls=%d", result, ollama.calls)
+	}
+	if len(result.Attempts) != 2 || result.Attempts[0].Channel != "mlx" || result.Attempts[1].Channel != "ollama" {
+		t.Fatalf("attempt ladder = %+v", result.Attempts)
 	}
 }
 

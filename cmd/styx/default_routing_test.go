@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
 	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/channel/ollama"
@@ -49,13 +50,9 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	if ollamaTargets == 0 {
 		t.Error("seeded routing has no Ollama targets")
 	}
-	for _, rule := range r.Rules {
-		if strings.HasPrefix(rule.Use, "mlx:") {
-			t.Errorf("seeded routing default changed to MLX for %s; examples must remain commented out", rule.Verb)
-		}
-	}
-	if got := strings.Count(defaultRoutingTOML, "# use  = \"mlx:"+channelmlx.DefaultModel+"\""); got < 4 {
-		t.Errorf("seeded routing has %d commented MLX examples, want at least 4", got)
+	if strings.Contains(defaultRoutingTOML, "MLX burn-in alternative") ||
+		strings.Contains(defaultRoutingTOML, "# use  = \"mlx:") {
+		t.Error("seeded routing still contains disabled MLX burn-in comments")
 	}
 	// Agy is intentionally exempt: its subscription CLI remembers the user's
 	// last interactive model, so a pin prevents a sweep from silently using it.
@@ -212,10 +209,12 @@ func TestDefaultRoutingPRDraftRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Channel != "ollama" || got.Model != "qwen2.5-coder:7b" {
+			if got.Channel != "mlx" || got.Model != channelmlx.DefaultModel {
 				t.Errorf("decision = %+v", got)
 			}
-			if len(got.Fallback) != 1 || got.Fallback[0].Channel != "claude" || got.Fallback[0].Model != "haiku" {
+			if len(got.Fallback) != 2 ||
+				got.Fallback[0].Channel != "ollama" || got.Fallback[0].Model != "qwen2.5-coder:7b" ||
+				got.Fallback[1].Channel != "claude" || got.Fallback[1].Model != "haiku" {
 				t.Errorf("fallback = %+v", got.Fallback)
 			}
 		})
@@ -228,5 +227,77 @@ func TestDefaultRoutingPRDraftRules(t *testing.T) {
 				t.Errorf("complex decision = %+v", got)
 			}
 		})
+	}
+}
+
+func TestDefaultRoutingGruntRules(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(defaultRoutingTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := config.LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := router.FromConfig(routing, nil)
+	for _, tt := range []struct {
+		name    string
+		signals []string
+	}{
+		{name: "trivial", signals: []string{"trivial"}},
+		{name: "ordinary"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := r.Route(context.Background(), router.Request{Verb: "grunt", Signals: tt.signals})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Channel != "mlx" || got.Model != channelmlx.DefaultModel {
+				t.Errorf("decision = %+v", got)
+			}
+			if len(got.Fallback) != 1 || got.Fallback[0].Channel != "ollama" || got.Fallback[0].Model != "qwen2.5-coder:7b" {
+				t.Errorf("fallback = %+v", got.Fallback)
+			}
+		})
+	}
+}
+
+func TestGruntMissingMLXFallsBackWithinCall(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(defaultRoutingTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := config.LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker, err := budget.New(filepath.Join(dir, "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tracker.Close() })
+	ollama := &recordingChannel{}
+	a := &app{
+		router:  router.FromConfig(routing, tracker),
+		tracker: tracker,
+		channels: map[string]channel.Channel{
+			"mlx":    channelmlx.New(),
+			"ollama": ollama,
+		},
+	}
+	resp, picked, err := sendWithFallback(a, context.Background(), "test-project",
+		router.Request{Verb: "grunt", Signals: []string{"trivial"}},
+		channel.Request{Prompt: "say ok"}, true)
+	if err != nil {
+		t.Fatalf("missing MLX must fall through to Ollama: %v", err)
+	}
+	if picked.Channel != "ollama" || picked.Model != "qwen2.5-coder:7b" || resp.Text != "ok" {
+		t.Fatalf("fallback response=%+v picked=%+v", resp, picked)
+	}
+	if ollama.last.Model != "qwen2.5-coder:7b" {
+		t.Errorf("Ollama request model = %q", ollama.last.Model)
 	}
 }

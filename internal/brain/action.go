@@ -30,8 +30,8 @@ const (
 
 // Dispatch is one outbound message to an agent thread.
 type Dispatch struct {
-	Thread     string    `json:"thread"`                // claude | codex | agy | ollama
-	Model      string    `json:"model,omitempty"`       // tier (fable|opus|sonnet|haiku) or ollama model
+	Thread     string    `json:"thread"`                // claude | codex | agy | ollama | mlx
+	Model      string    `json:"model,omitempty"`       // tier (fable|opus|sonnet|haiku) or local model
 	Message    string    `json:"message"`               // what to send the agent
 	Project    string    `json:"project,omitempty"`     // primary repo name; cwd + commit target ("" = focus)
 	ExtraRoots []string  `json:"extra_roots,omitempty"` // additional repo names, attached via --add-dir
@@ -51,7 +51,7 @@ type Action struct {
 	Confidence float64    `json:"confidence"`
 }
 
-var validThreads = map[string]bool{"claude": true, "codex": true, "agy": true, "ollama": true}
+var validThreads = map[string]bool{"claude": true, "codex": true, "agy": true, "ollama": true, "mlx": true}
 var validPipelines = map[string]bool{"research": true, "auto": true, "review": true, "intel": true, "debug": true}
 
 func validRisk(r RiskLevel) bool {
@@ -142,7 +142,7 @@ var ActionSchema = json.RawMessage(`{
       "items": {
         "type": "object",
         "properties": {
-          "thread": {"type": "string", "enum": ["claude", "codex", "agy", "ollama"]},
+          "thread": {"type": "string", "enum": ["claude", "codex", "agy", "ollama", "mlx"]},
           "model": {"type": "string"},
           "message": {"type": "string"},
           "project": {"type": "string"},
