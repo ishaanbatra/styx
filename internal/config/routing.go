@@ -16,9 +16,16 @@ type Routing struct {
 	Rules     []Rule            `toml:"rule"`
 	Models    ModelsConfig      `toml:"models"`
 	Brain     BrainConfig       `toml:"brain"`
+	Ollama    OllamaConfig      `toml:"ollama"`
 	Conductor Conductor         `toml:"conductor"`
 	Watch     WatchCap          `toml:"watch"`
 	Tiers     map[string]string `toml:"tiers"`
+}
+
+// OllamaConfig controls local model residency and startup warming.
+type OllamaConfig struct {
+	KeepAlive     string `toml:"keep_alive"`
+	PreloadModels bool   `toml:"preload_models"`
 }
 
 // WatchCap configures live dispatch observability (styx watch / heartbeat).
@@ -85,6 +92,12 @@ type ModelsConfig struct {
 func applyModelsDefaults(r *Routing) {
 	if r.Models.RefreshIntervalHours == 0 {
 		r.Models.RefreshIntervalHours = 24
+	}
+}
+
+func applyOllamaDefaults(r *Routing) {
+	if r.Ollama.KeepAlive == "" {
+		r.Ollama.KeepAlive = "5m"
 	}
 }
 
@@ -172,6 +185,7 @@ func LoadRoutingFile(path string) (Routing, error) {
 	}
 	applyModelsDefaults(&r)
 	applyBrainDefaults(&r)
+	applyOllamaDefaults(&r)
 	applyConductorDefaults(&r)
 	return r, nil
 }

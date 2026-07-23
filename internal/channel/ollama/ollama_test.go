@@ -24,7 +24,7 @@ func TestSend_ParsesChatResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewWithBaseURL(srv.URL)
+	c := NewWithBaseURL(srv.URL, "5m")
 	resp, err := c.Send(context.Background(), channel.Request{Model: "qwen2.5-coder:14b", Prompt: "hi"})
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestSend_EmitsCorrectPayload(t *testing.T) {
 		w.Write([]byte(`{"message":{"content":"ok"}}`))
 	}))
 	defer srv.Close()
-	c := NewWithBaseURL(srv.URL)
+	c := NewWithBaseURL(srv.URL, "17m")
 	_, err := c.Send(context.Background(), channel.Request{Model: "qwen2.5-coder:14b", System: "be terse", Prompt: "ping"})
 	if err != nil {
 		t.Fatal(err)
@@ -56,8 +56,8 @@ func TestSend_EmitsCorrectPayload(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("messages len = %d, want 2 (system + user)", len(msgs))
 	}
-	if gotBody["keep_alive"] != "30m" {
-		t.Errorf("keep_alive = %v, want 30m (avoid 5-min unload / cold reload)", gotBody["keep_alive"])
+	if gotBody["keep_alive"] != "17m" {
+		t.Errorf("keep_alive = %v, want configured 17m", gotBody["keep_alive"])
 	}
 }
 
@@ -68,7 +68,7 @@ func TestSend_SetsNumCtxForLargePrompts(t *testing.T) {
 		w.Write([]byte(`{"message":{"content":"ok"}}`))
 	}))
 	defer srv.Close()
-	c := NewWithBaseURL(srv.URL)
+	c := NewWithBaseURL(srv.URL, "5m")
 	// ~24k chars ≈ 6k estimated tokens > the 4096 ollama default.
 	big := strings.Repeat("x ", 12000)
 	_, err := c.Send(context.Background(), channel.Request{Model: "qwen2.5-coder:14b", Prompt: big})
@@ -85,7 +85,7 @@ func TestSend_NetworkErrorIsClassified(t *testing.T) {
 	old := goos
 	goos = "linux" // skip the darwin auto-launch + 20s poll
 	defer func() { goos = old }()
-	c := NewWithBaseURL("http://127.0.0.1:1") // unreachable
+	c := NewWithBaseURL("http://127.0.0.1:1", "5m") // unreachable
 	_, err := c.Send(context.Background(), channel.Request{Model: "x", Prompt: "y"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -102,7 +102,7 @@ func TestEnsureUp_NonDarwinFailsFastWithoutLaunch(t *testing.T) {
 			old := goos
 			goos = g
 			defer func() { goos = old }()
-			c := NewWithBaseURL("http://127.0.0.1:1") // unreachable
+			c := NewWithBaseURL("http://127.0.0.1:1", "5m") // unreachable
 			start := time.Now()
 			_, err := c.Send(context.Background(), channel.Request{Model: "x", Prompt: "y"})
 			if err == nil || !strings.Contains(err.Error(), "start it manually") {
@@ -120,7 +120,7 @@ func TestSend_HonorsContext(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer srv.Close()
-	c := NewWithBaseURL(srv.URL)
+	c := NewWithBaseURL(srv.URL, "5m")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := c.Send(ctx, channel.Request{Model: "x", Prompt: "y"})

@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-16 # PR microtask drafting
+last_verified: 2026-07-23 # Phase A Ollama keep-alive policy
 ---
 
 # Styx Architecture
@@ -137,6 +137,10 @@ Shared pieces:
   with `"\n- "`. It is a pure enhancement: any failure (store open, recall) is
   narrated via `logStatus` and yields `""` rather than blocking the launch.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
+  Its `[ollama]` block defaults chat/brain residency to `keep_alive = "5m"`
+  and leaves startup model preloading off, prioritizing memory headroom for
+  cloud CLI subprocesses; users with spare RAM can opt into longer residency
+  or `preload_models = true`.
 - `internal/onboard` — first-run routing setup called only from
   `ensureFirstRun`'s absent-`routing.toml` branch. It requires stdin, stdout,
   and stderr TTYs with `CI` and `STYX_NO_WIZARD` both unset; every other path
@@ -333,8 +337,8 @@ counts in `Response` are `len/4` estimates.
   package `goos` variable. Off-macOS, a down ollama fails fast with a "start it
   manually" `ClassifiedError` instead of waiting 20s; an already-cancelled
   context wins over that message on every platform. Every chat request carries
-  `keep_alive: "30m"` (ollama's default 5-minute idle unload otherwise forces
-  a 3-10s cold reload on the next call); when the estimated prompt tokens
+  the configured `[ollama].keep_alive` value (default `"5m"`), passed into the
+  adapter when app wiring constructs it; when the estimated prompt tokens
   (`len(prompt+system)/4`) plus 1024 headroom exceed ollama's 4096-token
   default, `Send` also sets `options.num_ctx` to the estimate plus 2048 so
   large prompts aren't silently truncated.
@@ -347,7 +351,7 @@ counts in `Response` are `len/4` estimates.
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
 `routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules,
-Models, Brain, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
+Models, Brain, Ollama, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
 No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
@@ -413,7 +417,11 @@ the router walks the fallback chain and marks the Decision `Degraded`.
 Per-channel caps also carry optional `timeout_minutes` for non-interactive
 subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
 wiring. `Brain` configures the planned local ollama routing brain and memory
-embedding model; `Conductor` configures the frontier-brain launcher and MCP
+embedding model. `Ollama` configures chat/brain model residency with
+`keep_alive` (default `"5m"` even when upgraded files have no `[ollama]`
+section) and startup warming with `preload_models` (default `false`); app
+wiring passes the residency string into leaf packages rather than making them
+depend on config. `Conductor` configures the frontier-brain launcher and MCP
 toolbelt (`host`: claude | codex, default claude, selecting the interactive
 conductor CLI; `ship_gate`: handshake | tty | off, default handshake, controlling
 ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto`;
@@ -578,8 +586,8 @@ model-facing schema exposes risk only on dispatch items, taught via a few `read`
 `Action.Risk` exists but is code-derived (e.g. `auto` → ship), never model-set.
 `Action.Valid` performs local structural validation (including the risk enum)
 before the REPL trusts a model response; `ActionSchema` is sent to ollama as the
-structured-output format. `chat()` sends `keep_alive: "30m"` on every brain
-call (avoids the 3-10s cold reload after ollama's 5-minute idle unload) and
+structured-output format. `chat()` sends the construction-time
+`[ollama].keep_alive` value on every brain call and
 sets `options.num_ctx` to `(len(system)+len(user))/4 + 2048` whenever that
 estimate plus 1024 headroom would exceed ollama's 4096-token default — the
 ~40-exemplar preamble routinely sits near/over that default (measured ~3.3k
@@ -939,7 +947,10 @@ cross-repo recall without an explicit scope hint. `Embedder` abstracts text to
 float32 vectors; the production `OllamaEmbedder` posts to `/api/embed` with a
 30s HTTP client timeout and caller-provided context, carrying
 `keep_alive: "30m"` on every request so the embed model isn't evicted between
-calls. Every `Embed` call site embeds a single text per user action (recall
+calls. This is intentionally independent of `[ollama].keep_alive`: the
+`nomic-embed-text` model is about 274 MB and keeping it resident protects
+recall latency without the multi-GB pressure of chat models. Every `Embed`
+call site embeds a single text per user action (recall
 query, `memory_save`, distillation, brief indexing, routing-preference
 correction, session-end summary) — no call site batches, so `EmbedBatch` stays
 unimplemented pending bulk-embedding intel indexing.
@@ -971,8 +982,8 @@ local ollama `/api/chat` endpoint and uses structured output to propose
 candidate memories from a scorecard, unconsumed retrospectives, and rating
 notes. Its chat shape (`Model`, `Stream`, `Think`, `Format`, `KeepAlive`,
 `Options`, `Messages`) closely mirrors `internal/brain`'s shape to leverage
-the same ollama tuning (30-minute keep-alive, dynamic `num_ctx` sizing based
-on system + user prompt length, temperature 0 for deterministic classification)
+the same ollama tuning (configured `[ollama].keep_alive`, dynamic `num_ctx`
+sizing based on system + user prompt length, temperature 0 for deterministic classification)
 and the same local brain model (default `qwen2.5-coder:7b`). Unlike the brain
 which is REPL-coupled and ships with the conductor, the digest client is
 fully self-contained and invoked on demand by `styx learn` without requiring
@@ -1540,11 +1551,11 @@ in-flight/finished-but-uncollected background tasks resurface as `o1`, `o2`,
 … entries in this session's `collect`/status line instead of vanishing
 silently. Finally `cmdMCP` builds the full tool set as
 `withBackgroundStatus(append(mcpTools(a), conductorTools(d)...), d.reg)`.
-Before `srv.Serve`, `cmdMCP` fires
-`go preloadOllamaModels(a)`: a fire-and-forget, 20s-timeout best-effort call
-to `/api/generate` with `keep_alive: "30m"` for `a.routing.Brain.Model` and
-`a.routing.Brain.EmbedModel`, so the first real dispatch/recall doesn't pay a
-cold model load while it overlaps with the host handshake. Failures are
+Before `srv.Serve`, `cmdMCP` starts `go preloadOllamaModels(a)` only when
+`[ollama].preload_models = true` (default `false`). The fire-and-forget,
+20s-timeout best-effort call warms `a.routing.Brain.Model` and
+`a.routing.Brain.EmbedModel` through `/api/generate` using the configured
+`[ollama].keep_alive`, overlapping with the host handshake. Failures are
 narrated via `logStatus` (stderr) and never fatal — ollama may simply be down.
 
 **Progress notifications (`_meta.progressToken`).** `Server` carries a
@@ -2126,8 +2137,9 @@ watcher goroutine (see the `repl.go` and "Conductor MCP tools" sections).
 
 **Ollama watcher** (`Watcher`): a best-effort background goroutine that
 periodically checks cross-agent activity and writes health observations back
-to the board via `SetWatcherNote`. `Watcher{BaseURL, Model, Board, Interval,
-Stall}` configures the endpoint, chat model, target board, poll cadence (0
+to the board via `SetWatcherNote`. `Watcher{BaseURL, Model, KeepAlive, Board,
+Interval, Stall}` configures the endpoint, chat model, construction-time
+`[ollama].keep_alive`, target board, poll cadence (0
 defaults to 15s), and mechanical idle threshold (0 defaults to
 `DefaultStall`). Both conductor and REPL wire `Stall` from the already-existing
 `[watch].stall_threshold_seconds` setting. `Run(ctx)` polls until context

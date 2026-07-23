@@ -15,6 +15,13 @@ agy.messages_per_5h      = 100
 agy.messages_per_week    = 500
 ollama.cap_pct           = 0    # local, unlimited
 
+# ── Ollama model residency ──
+# Short chat residency leaves memory available for cloud CLI subprocesses.
+# Enable preloading only when faster first responses matter more than idle RAM.
+[ollama]
+keep_alive = "5m"
+preload_models = false
+
 # ── research ──
 [[rule]]
 verb = "research"

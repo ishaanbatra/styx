@@ -224,7 +224,7 @@ func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channe
 		"codex":  codex.New(),
 		"agy":    a,
 		"gemini": a, // alias for backward-compatible routing rules
-		"ollama": ollama.New(),
+		"ollama": ollama.New(r.Ollama.KeepAlive),
 	}
 	timeouts := map[string]int{
 		"claude": r.Budget.Claude.TimeoutMinutes,

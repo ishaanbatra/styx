@@ -46,6 +46,14 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	if r.Models.RefreshIntervalHours == 0 {
 		t.Error("seeded routing missing [models] (defaults not applied?)")
 	}
+	if r.Ollama.KeepAlive != "5m" || r.Ollama.PreloadModels {
+		t.Errorf("seeded ollama policy = %+v, want keep_alive 5m with preload disabled", r.Ollama)
+	}
+	for _, want := range []string{`[ollama]`, `keep_alive = "5m"`, `preload_models = false`} {
+		if !strings.Contains(defaultRoutingTOML, want) {
+			t.Errorf("seeded routing missing %q", want)
+		}
+	}
 	if r.Conductor.Host != "claude" || !strings.Contains(defaultRoutingTOML, `host = "claude"`) {
 		t.Errorf("seeded conductor host = %q, want claude", r.Conductor.Host)
 	}

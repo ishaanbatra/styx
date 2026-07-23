@@ -57,12 +57,12 @@ func TestDecideEmitsKeepAlive(t *testing.T) {
 	var gotBody map[string]any
 	srv := fakeOllamaCapture(t, `{"action":"reply","reply":"hi","confidence":0.9}`, &gotBody)
 	defer srv.Close()
-	b := &Ollama{BaseURL: srv.URL, Model: "qwen3:4b"}
+	b := &Ollama{BaseURL: srv.URL, Model: "qwen3:4b", KeepAlive: "17m"}
 	if _, err := b.Decide(context.Background(), Turn{Utterance: "hello"}); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-	if gotBody["keep_alive"] != "30m" {
-		t.Errorf("keep_alive = %v, want 30m (avoid 5-min unload / cold reload)", gotBody["keep_alive"])
+	if gotBody["keep_alive"] != "17m" {
+		t.Errorf("keep_alive = %v, want configured 17m", gotBody["keep_alive"])
 	}
 }
 

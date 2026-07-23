@@ -732,6 +732,7 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 	b := &brain.Ollama{
 		BaseURL:             "http://localhost:11434",
 		Model:               a.routing.Brain.Model,
+		KeepAlive:           a.routing.Ollama.KeepAlive,
 		ConfidenceThreshold: a.routing.Brain.ConfidenceThreshold,
 		Escalator: &brain.ClaudeEscalator{
 			Channel: rawChannel(a.channels["claude"]),
@@ -793,11 +794,12 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 	// best-effort — a down ollama leaves the note stale, never blocks the REPL.
 	if a.routing.Watch.OllamaEnabled {
 		w := &activity.Watcher{
-			BaseURL:  "http://localhost:11434",
-			Model:    s.watchModel(),
-			Board:    s.board,
-			Interval: s.watchInterval(),
-			Stall:    s.watchStall(),
+			BaseURL:   "http://localhost:11434",
+			Model:     s.watchModel(),
+			KeepAlive: a.routing.Ollama.KeepAlive,
+			Board:     s.board,
+			Interval:  s.watchInterval(),
+			Stall:     s.watchStall(),
 		}
 		go w.Run(s.ctx)
 	}

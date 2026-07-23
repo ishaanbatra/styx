@@ -112,11 +112,12 @@ func newConductorDeps(a *app, rootCtx context.Context) *conductorDeps {
 	// REPL's, gated on Task 5's ollama_enabled upgrade flag.
 	if a.routing.Watch.OllamaEnabled {
 		w := &activity.Watcher{
-			BaseURL:  "http://localhost:11434",
-			Model:    a.routing.Brain.Model,
-			Board:    board,
-			Interval: a.routing.Watch.Interval(),
-			Stall:    a.routing.Watch.StallThreshold(),
+			BaseURL:   "http://localhost:11434",
+			Model:     a.routing.Brain.Model,
+			KeepAlive: a.routing.Ollama.KeepAlive,
+			Board:     board,
+			Interval:  a.routing.Watch.Interval(),
+			Stall:     a.routing.Watch.StallThreshold(),
 		}
 		go w.Run(rootCtx)
 	}

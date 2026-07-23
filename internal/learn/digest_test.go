@@ -36,7 +36,7 @@ func TestDigesterPropose(t *testing.T) {
 	srv, captured := scriptedOllama(t, `{"candidates":[
 		{"kind":"routing-preference","text":"codex for specced work","confidence":0.8,"evidence":"scorecard:codex/complex"}
 	]}`)
-	d := &Digester{BaseURL: srv.URL, Model: "qwen2.5-coder:7b"}
+	d := &Digester{BaseURL: srv.URL, Model: "qwen2.5-coder:7b", KeepAlive: "17m"}
 	got, err := d.Propose(context.Background(),
 		"scorecard text", []RetroNote{{ID: 7, Text: "codex nailed it"}}, []string{"good (codex): clean"})
 	if err != nil {
@@ -48,7 +48,7 @@ func TestDigesterPropose(t *testing.T) {
 	// The request is a schema-constrained, non-thinking, keep-alive chat and
 	// the prompt carries all three feeds.
 	req := *captured
-	if req["think"] != false || req["keep_alive"] != "30m" || req["format"] == nil {
+	if req["think"] != false || req["keep_alive"] != "17m" || req["format"] == nil {
 		t.Fatalf("chat request must mirror the brain's shape (think=false, keep_alive, format), got %v", req)
 	}
 	msgs, _ := req["messages"].([]any)

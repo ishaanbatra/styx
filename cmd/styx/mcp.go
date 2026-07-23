@@ -646,7 +646,9 @@ func cmdMCP(a *app, args []string) error {
 	tools := withBackgroundStatus(append(mcpTools(a), conductorTools(d)...), d.reg)
 	srv := mcpserver.New("styx", mcpServerVersion, tools)
 	logStatus("mcp server ready on stdio (route, budget_status, record_usage, channel_health, get_intel, refresh_intel, recall, dispatch, dispatch_parallel, thread_status, memory_save, pipeline_run, rate_dispatch, collect)")
-	go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake
+	if a.routing.Ollama.PreloadModels {
+		go preloadOllamaModels(a) // best-effort: overlaps model load with the host handshake
+	}
 	// The server owns the real stdout; point os.Stdout at stderr so a stray
 	// fmt.Printf in a reused REPL/CLI code path (e.g. a pipeline's
 	// "✓ Brief saved" line) can never interleave with the JSON-RPC stream.
@@ -661,24 +663,37 @@ func cmdMCP(a *app, args []string) error {
 	return err
 }
 
-// preloadOllamaModels warms the brain + embedding models with keep_alive so
-// the first real dispatch/recall doesn't pay a 3-10s cold load. Best-effort:
-// failures are narrated, never fatal (ollama may simply be down).
+// preloadOllamaModels is a no-op unless model preloading is enabled. When
+// enabled, it warms the brain + embedding models with the configured
+// keep_alive so the first real dispatch/recall doesn't pay a 3-10s cold load.
+// Best-effort: failures are narrated, never fatal (ollama may simply be down).
 func preloadOllamaModels(a *app) {
+	preloadOllamaModelsAt(a, "http://localhost:11434", http.DefaultClient)
+}
+
+func preloadOllamaModelsAt(a *app, baseURL string, client *http.Client) {
+	if !a.routing.Ollama.PreloadModels {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	for _, m := range []string{a.routing.Brain.Model, a.routing.Brain.EmbedModel} {
 		if m == "" {
 			continue
 		}
-		body, _ := json.Marshal(map[string]any{"model": m, "keep_alive": "30m"})
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			"http://localhost:11434/api/generate", bytes.NewReader(body))
+		body, err := json.Marshal(map[string]any{"model": m, "keep_alive": a.routing.Ollama.KeepAlive})
 		if err != nil {
+			logStatus("ollama preload %s skipped: %v", m, err)
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			strings.TrimRight(baseURL, "/")+"/api/generate", bytes.NewReader(body))
+		if err != nil {
+			logStatus("ollama preload %s skipped: %v", m, err)
 			continue
 		}
 		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			logStatus("ollama preload %s skipped: %v", m, err)
 			continue

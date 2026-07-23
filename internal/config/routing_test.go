@@ -26,6 +26,7 @@ func TestLoadRoutingFile(t *testing.T) {
 		},
 		Models:    defaultModelsForTest(),
 		Brain:     defaultBrainForTest(),
+		Ollama:    defaultOllamaForTest(),
 		Conductor: defaultConductorForTest(),
 		Tiers:     defaultTiersForTest(),
 	}
@@ -58,6 +59,7 @@ func TestLoadRoutingFile_MessageLimits(t *testing.T) {
 		},
 		Models:    defaultModelsForTest(),
 		Brain:     defaultBrainForTest(),
+		Ollama:    defaultOllamaForTest(),
 		Conductor: defaultConductorForTest(),
 		Tiers:     defaultTiersForTest(),
 	}
@@ -195,6 +197,10 @@ func defaultBrainForTest() BrainConfig {
 	}
 }
 
+func defaultOllamaForTest() OllamaConfig {
+	return OllamaConfig{KeepAlive: "5m"}
+}
+
 func defaultConductorForTest() Conductor {
 	return Conductor{
 		Host:               "claude",
@@ -290,5 +296,42 @@ func TestWatchDefaults(t *testing.T) {
 	w2 := WatchCap{StallThresholdSeconds: 30, IntervalSeconds: 5}
 	if w2.StallThreshold() != 30*time.Second || w2.Interval() != 5*time.Second {
 		t.Errorf("explicit values not honored: %+v", w2)
+	}
+}
+
+func TestOllamaConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    OllamaConfig
+	}{
+		{
+			name:    "absent section uses memory-conscious defaults",
+			content: "[budget]\nclaude.cap_pct = 80\n",
+			want:    OllamaConfig{KeepAlive: "5m", PreloadModels: false},
+		},
+		{
+			name: "explicit values are honored",
+			content: `[ollama]
+keep_alive = "17m"
+preload_models = true
+`,
+			want: OllamaConfig{KeepAlive: "17m", PreloadModels: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "routing.toml")
+			if err := os.WriteFile(path, []byte(tt.content), 0o644); err != nil {
+				t.Fatalf("write routing config: %v", err)
+			}
+			got, err := LoadRoutingFile(path)
+			if err != nil {
+				t.Fatalf("LoadRoutingFile: %v", err)
+			}
+			if diff := cmp.Diff(tt.want, got.Ollama); diff != "" {
+				t.Errorf("ollama config mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
