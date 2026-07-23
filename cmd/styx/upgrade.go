@@ -23,6 +23,9 @@ func cmdUpgrade() error {
 	if result.GeminiRewrites > 0 {
 		fmt.Printf("Migrated %d rule reference(s) from gemini-cli to agy.\n", result.GeminiRewrites)
 	}
+	if result.OllamaRewrites > 0 {
+		fmt.Printf("Migrated %d seeded Ollama target(s) from qwen2.5-coder:14b to qwen2.5-coder:7b.\n", result.OllamaRewrites)
+	}
 	if result.ImplementInjected {
 		fmt.Println("Added the implement verb (codex implements from a plan, claude fallback).")
 	}

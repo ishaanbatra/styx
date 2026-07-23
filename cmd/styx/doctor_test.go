@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/brain"
+	"github.com/ishaanbatra/styx/internal/config"
 )
 
 func TestMissingFlags(t *testing.T) {
@@ -91,8 +92,8 @@ func TestMissingFlags_Subcommand(t *testing.T) {
 }
 
 func TestOllamaModelsMissing(t *testing.T) {
-	tags := `{"models":[{"name":"llama3.2:3b"},{"name":"qwen2.5-coder:14b"}]}`
-	got := ollamaModelsMissing(tags, []string{"llama3.2:3b", "nomic-embed-text"})
+	tags := `{"models":[{"name":"llama3.2:3b"},{"name":"qwen2.5-coder:7b"}]}`
+	got := ollamaModelsMissing(tags, []string{"qwen2.5-coder:7b", "nomic-embed-text"})
 	want := []string{"nomic-embed-text"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("missing = %v, want %v", got, want)
@@ -101,6 +102,25 @@ func TestOllamaModelsMissing(t *testing.T) {
 	tags = `{"models":[{"name":"nomic-embed-text:latest"}]}`
 	if got := ollamaModelsMissing(tags, []string{"nomic-embed-text"}); got != nil {
 		t.Errorf("missing = %v, want nil (latest tag should match)", got)
+	}
+}
+
+func TestRequiredOllamaModelsUsesNewDefault(t *testing.T) {
+	r := config.Routing{
+		Brain: config.BrainConfig{
+			Model:      "qwen2.5-coder:7b",
+			EmbedModel: "nomic-embed-text",
+		},
+	}
+	got := requiredOllamaModels(r)
+	want := []string{"qwen2.5-coder:7b", "nomic-embed-text"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("required models = %v, want %v", got, want)
+	}
+	for _, model := range got {
+		if model == "qwen2.5-coder:14b" {
+			t.Fatal("doctor must not require the retired 14b default")
+		}
 	}
 }
 

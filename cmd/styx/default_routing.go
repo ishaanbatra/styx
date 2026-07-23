@@ -31,14 +31,14 @@ guard = true
 [[rule]]
 verb = "research"
 use  = "agy:Gemini 3.1 Pro (High)"
-fallback = ["ollama:qwen2.5-coder:14b"]
+fallback = ["ollama:qwen2.5-coder:7b"]
 
 [[rule]]
 verb = "research.critic"
 use  = "codex"
 # effort: low|medium|high|xhigh|max (claude); codex maps to model_reasoning_effort
 effort = "high"
-fallback = ["ollama:qwen2.5-coder:14b"]
+fallback = ["ollama:qwen2.5-coder:7b"]
 
 # ── plan ──
 [[rule]]
@@ -50,7 +50,7 @@ fallback = ["claude:sonnet", "codex"]
 [[rule]]
 verb = "plan"
 use  = "claude:sonnet"
-fallback = ["codex", "ollama:qwen2.5-coder:14b"]
+fallback = ["codex", "ollama:qwen2.5-coder:7b"]
 
 # ── implement (autonomous code application from a plan) ──
 # A detailed plan already exists by this point, so the work is well-scoped:
@@ -144,7 +144,7 @@ use  = "ollama:qwen2.5-coder:7b"
 
 [[rule]]
 verb = "grunt"
-use  = "ollama:qwen2.5-coder:14b"
+use  = "ollama:qwen2.5-coder:7b"
 
 [[rule]]
 verb = "think"
@@ -153,7 +153,7 @@ use  = "claude:sonnet"
 
 [[rule]]
 verb = "think"
-use  = "ollama:qwen2.5-coder:14b"
+use  = "ollama:qwen2.5-coder:7b"
 
 # ── explain / summarize / critique ──
 [[rule]]
@@ -164,17 +164,17 @@ fallback = ["claude:sonnet"]
 
 [[rule]]
 verb = "explain"
-use  = "ollama:qwen2.5-coder:14b"
+use  = "ollama:qwen2.5-coder:7b"
 
 [[rule]]
 verb = "summarize"
 use  = "agy:Gemini 3.1 Pro (High)"
-fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]
+fallback = ["claude:sonnet", "ollama:qwen2.5-coder:7b"]
 
 [[rule]]
 verb = "critique"
 use  = "codex"
-fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]
+fallback = ["claude:sonnet", "ollama:qwen2.5-coder:7b"]
 
 # ── model discovery ──
 [models]

@@ -29,6 +29,24 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	if strings.Contains(defaultRoutingTOML, "claude:opus-4") || strings.Contains(defaultRoutingTOML, "claude:sonnet-4") {
 		t.Error("seeded routing still pins a claude version")
 	}
+	if strings.Contains(defaultRoutingTOML, "ollama:qwen2.5-coder:14b") {
+		t.Error("seeded routing still references the 14b Ollama model")
+	}
+	ollamaTargets := 0
+	for _, rule := range r.Rules {
+		for _, target := range append([]string{rule.Use}, rule.Fallback...) {
+			if !strings.HasPrefix(target, "ollama:") {
+				continue
+			}
+			ollamaTargets++
+			if target != "ollama:qwen2.5-coder:7b" {
+				t.Errorf("seeded %s route has Ollama target %q, want 7b", rule.Verb, target)
+			}
+		}
+	}
+	if ollamaTargets == 0 {
+		t.Error("seeded routing has no Ollama targets")
+	}
 	// Agy is intentionally exempt: its subscription CLI remembers the user's
 	// last interactive model, so a pin prevents a sweep from silently using it.
 	agyRules := 0

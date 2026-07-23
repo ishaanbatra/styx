@@ -342,6 +342,37 @@ func EnsureAgyModelPin(content string) (string, bool) {
 
 var routingTargetLineRE = regexp.MustCompile(`^\s*(?:use|fallback|parallel|synthesize_with)\s*=`)
 
+const (
+	oldSeededOllamaModel = "ollama:qwen2.5-coder:14b"
+	newSeededOllamaModel = "ollama:qwen2.5-coder:7b"
+)
+
+var oldSeededOllamaTargetLines = map[string]struct{}{
+	`fallback = ["ollama:qwen2.5-coder:14b"]`:                  {},
+	`fallback = ["codex", "ollama:qwen2.5-coder:14b"]`:         {},
+	`use  = "ollama:qwen2.5-coder:14b"`:                        {},
+	`fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]`: {},
+}
+
+// RewriteSeededOllamaModel replaces the 14b model only in target lines that
+// exactly match the old seeded routing table. Any visible customization,
+// including spacing or fallback-chain changes, is preserved.
+func RewriteSeededOllamaModel(content string) (string, int) {
+	lines := strings.Split(content, "\n")
+	rewrites := 0
+	for i, line := range lines {
+		if _, ok := oldSeededOllamaTargetLines[line]; !ok {
+			continue
+		}
+		lines[i] = strings.Replace(line, oldSeededOllamaModel, newSeededOllamaModel, 1)
+		rewrites++
+	}
+	if rewrites == 0 {
+		return content, 0
+	}
+	return strings.Join(lines, "\n"), rewrites
+}
+
 // EnsureFableTier upgrades the exact seeded suspension-era mapping
 // `fable  = "opus"` to `fable  = "fable"`. Only the seeded spelling is
 // rewritten — any user-customized mapping is preserved. Returns the new
@@ -545,6 +576,7 @@ func RewriteRoutingGeminiToAgy(content string) (string, int) {
 // added.
 type UpgradeResult struct {
 	GeminiRewrites    int
+	OllamaRewrites    int
 	ImplementInjected bool
 	FableRestored     bool
 	TaskCapInjected   bool
@@ -560,13 +592,15 @@ type UpgradeResult struct {
 
 // Changed reports whether the routing file was rewritten by any migration.
 func (r UpgradeResult) Changed() bool {
-	return r.GeminiRewrites > 0 || r.ImplementInjected || r.FableRestored ||
+	return r.GeminiRewrites > 0 || r.OllamaRewrites > 0 ||
+		r.ImplementInjected || r.FableRestored ||
 		r.TaskCapInjected || r.HostInjected || r.WatchInjected ||
 		r.DebugInjected || r.DeadCodeInjected || r.MapImpactInjected ||
 		r.CrossRepoInjected || r.PRDraftInjected || r.AgyPinned
 }
 
 // UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
+// replaces exact seeded qwen2.5-coder:14b target lines with 7b,
 // injects the `implement` verb rules if missing (v0.3), restores the seeded fable
 // tier mapping (v0.4), seeds the [conductor] max_background_tasks cap (B1) and
 // interactive host, seeds the [watch] section (C5), injects ultraFerdDebug and
@@ -574,11 +608,11 @@ func (r UpgradeResult) Changed() bool {
 // keys, dedupes fallback arrays,
 // backs up the original to routing.v0.1.toml.bak, and atomically writes the new
 // content.
-// Returns the gemini-rule substitution count, whether implement rules were
-// injected, whether the fable tier was restored, whether the conductor task
-// cap and host were injected, whether the [watch] section was injected, and
-// whether any debug/read-pathway/PR drafting rules were injected, and whether
-// unpinned agy targets were pinned.
+// Returns the gemini and seeded-Ollama substitution counts, whether implement
+// rules were injected, whether the fable tier was restored, whether the
+// conductor task cap and host were injected, whether the [watch] section was
+// injected, whether any debug/read-pathway/PR drafting rules were injected,
+// and whether unpinned agy targets were pinned.
 // Missing-file is not an error.
 func UpgradeRoutingFile(routingPath string) (UpgradeResult, error) {
 	b, err := os.ReadFile(routingPath)
@@ -589,6 +623,7 @@ func UpgradeRoutingFile(routingPath string) (UpgradeResult, error) {
 		return UpgradeResult{}, fmt.Errorf("read routing: %w", err)
 	}
 	newContent, n := RewriteRoutingGeminiToAgy(string(b))
+	newContent, ollamaRewrites := RewriteSeededOllamaModel(newContent)
 	newContent, injected := EnsureImplementRules(newContent)
 	newContent, fable := EnsureFableTier(newContent)
 	newContent, taskCap := EnsureConductorTaskCap(newContent)
@@ -616,7 +651,8 @@ func UpgradeRoutingFile(routingPath string) (UpgradeResult, error) {
 		return UpgradeResult{}, fmt.Errorf("atomic rename: %w", err)
 	}
 	return UpgradeResult{
-		GeminiRewrites: n, ImplementInjected: injected, FableRestored: fable,
+		GeminiRewrites: n, OllamaRewrites: ollamaRewrites,
+		ImplementInjected: injected, FableRestored: fable,
 		TaskCapInjected: taskCap, HostInjected: host, WatchInjected: watch,
 		DebugInjected: debug, DeadCodeInjected: deadCode,
 		MapImpactInjected: mapImpact, CrossRepoInjected: crossRepo,

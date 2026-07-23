@@ -418,13 +418,17 @@ func ensureFirstRun() error {
 		logStatus("wrote default routing.toml to %s", routingPath)
 	}
 	// Auto-upgrade: v0.2 rewrites gemini:* -> agy, later migrations inject the
-	// implement/debug/dead-code/map-impact/cross-repo/PR-drafting rules and pin
-	// agy models. Changes back up routing.toml.
+	// implement/debug/dead-code/map-impact/cross-repo/PR-drafting rules, pin agy
+	// models, and replace exact seeded 14b Ollama targets with 7b. Changes back
+	// up routing.toml.
 	if result, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
 	} else {
 		if result.GeminiRewrites > 0 {
 			logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", result.GeminiRewrites)
+		}
+		if result.OllamaRewrites > 0 {
+			logStatus("auto-upgraded %d seeded Ollama target(s) from qwen2.5-coder:14b to qwen2.5-coder:7b (backup at routing.v0.1.toml.bak)", result.OllamaRewrites)
 		}
 		if result.ImplementInjected {
 			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")

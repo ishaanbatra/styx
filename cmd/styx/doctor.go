@@ -85,7 +85,7 @@ func cmdDoctor(args []string) error {
 		}
 	}
 
-	required := []string{r.Brain.Model, r.Brain.EmbedModel}
+	required := requiredOllamaModels(r)
 	tags, err := fetchOllamaTags("http://localhost:11434")
 	if err != nil {
 		fmt.Printf("x ollama unreachable: %v (REPL will degrade to ask-the-user routing)\n", err)
@@ -115,6 +115,12 @@ func cmdDoctor(args []string) error {
 		healthy = false
 	}
 	return reportDoctor(healthy)
+}
+
+// requiredOllamaModels returns the local models doctor reconciles. In the
+// seeded config, every Ollama routing target uses the same 7b model as Brain.
+func requiredOllamaModels(r config.Routing) []string {
+	return []string{r.Brain.Model, r.Brain.EmbedModel}
 }
 
 func runModelRefresh(routingPath, cachePath string, now time.Time, openStore correctionStoreOpener) error {

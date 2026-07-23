@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-23 # Phase B3/B4 memory-aware channels and conductor queue
+last_verified: 2026-07-23 # Phase C 7b Ollama routing defaults and migration
 ---
 
 # Styx Architecture
@@ -388,10 +388,12 @@ Bare channel tokens such as `codex` are valid and mean "let that CLI choose its
 current default model." `[models].refresh_interval_hours` controls the
 model-refresh staleness threshold and defaults to 24 hours. The seeded
 `default_routing.go` table de-pins Claude and Codex versions, with
-`research.critic` showing `effort = "high"` as the pass-through example. Agy
-is deliberately different: its seeded rules pin `Gemini 3.1 Pro (High)`
-because the subscription CLI otherwise reuses the user's last interactive
-model choice.
+`research.critic` showing `effort = "high"` as the pass-through example. Every
+seeded Ollama primary and fallback target uses `qwen2.5-coder:7b`; the routing
+upgrade rewrites only exact old seeded 14b target lines, preserving visibly
+customized values, and reports the shared `routing.v0.1.toml.bak` backup. Agy is
+deliberately different: its seeded rules pin `Gemini 3.1 Pro (High)` because
+the subscription CLI otherwise reuses the user's last interactive model choice.
 
 The `implement` verb routes autonomous plan application: codex is primary
 (well-scoped execution), claude is the fallback, and the `complex` signal
