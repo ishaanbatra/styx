@@ -27,7 +27,19 @@ type pullRequestDraft struct {
 }
 
 func draftPullRequest(ctx context.Context, a *app, proj project.Project, state *pipeline.State) pullRequestDraft {
-	packet, err := prdraft.BuildContext(ctx, proj.Path, state)
+	return draftPullRequestWithBase(ctx, a, proj, state, "")
+}
+
+func draftPullRequestWithBase(ctx context.Context, a *app, proj project.Project, state *pipeline.State, baseBranch string) pullRequestDraft {
+	var (
+		packet prdraft.Context
+		err    error
+	)
+	if baseBranch == "" {
+		packet, err = prdraft.BuildContext(ctx, proj.Path, state)
+	} else {
+		packet, err = prdraft.BuildContextWithBase(ctx, proj.Path, state, baseBranch)
+	}
 	if err != nil {
 		logStatus("PR context unavailable; using deterministic draft: %v", err)
 		packet, err = prdraft.ContextFromState(state)

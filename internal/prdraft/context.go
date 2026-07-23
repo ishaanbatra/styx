@@ -41,6 +41,7 @@ type CheckState struct {
 type Context struct {
 	Goal          string     `json:"goal"`
 	Branch        string     `json:"branch"`
+	BaseBranch    string     `json:"base_branch"`
 	Commits       []Commit   `json:"commits"`
 	TouchedPaths  []string   `json:"touched_paths"`
 	DiffStats     DiffStats  `json:"diff_stats"`
@@ -66,11 +67,25 @@ var LabelAllowlist = []string{
 // BuildContext snapshots the current branch diff relative to the repository's
 // default branch and combines it with persisted pipeline state.
 func BuildContext(ctx context.Context, projectPath string, state *pipeline.State) (Context, error) {
+	return buildContext(ctx, projectPath, state, defaultBranch(ctx, projectPath))
+}
+
+// BuildContextWithBase snapshots the current branch diff relative to baseBranch
+// and combines it with persisted pipeline state.
+func BuildContextWithBase(ctx context.Context, projectPath string, state *pipeline.State, baseBranch string) (Context, error) {
+	baseBranch = strings.TrimSpace(baseBranch)
+	if baseBranch == "" {
+		return Context{}, fmt.Errorf("build PR context: base branch is required")
+	}
+	return buildContext(ctx, projectPath, state, baseBranch)
+}
+
+func buildContext(ctx context.Context, projectPath string, state *pipeline.State, base string) (Context, error) {
 	packet, err := ContextFromState(state)
 	if err != nil {
 		return Context{}, err
 	}
-	base := defaultBranch(ctx, projectPath)
+	packet.BaseBranch = base
 	rangeSpec := base + "...HEAD"
 	logOut, err := gitOutput(ctx, projectPath, "log", "--format=%H%x09%s", rangeSpec)
 	if err != nil {
@@ -131,6 +146,11 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 		return "", fmt.Errorf("git %s: %v (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+// DefaultBranch exposes the same default-branch detection used by BuildContext.
+func DefaultBranch(ctx context.Context, repo string) string {
+	return defaultBranch(ctx, repo)
 }
 
 func defaultBranch(ctx context.Context, repo string) string {
