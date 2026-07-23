@@ -213,8 +213,8 @@ func (overCapBudget) UsedPct(ctx context.Context, channel string) (float64, erro
 func TestHandleChannelHealth_AllAndSingle(t *testing.T) {
 	_, tr := testRouterAndTracker(t)
 	ctx := context.Background()
-	for i := 0; i < 3; i++ {
-		if err := tr.Record(ctx, budget.Event{Channel: "claude", Verb: "plan", Success: false, ErrorKind: "5xx"}); err != nil {
+	for _, kind := range []string{"5xx", "5xx", "killed"} {
+		if err := tr.Record(ctx, budget.Event{Channel: "claude", Verb: "plan", Success: false, ErrorKind: kind}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -231,7 +231,8 @@ func TestHandleChannelHealth_AllAndSingle(t *testing.T) {
 			claude = &all[i]
 		}
 	}
-	if claude == nil || !claude.CircuitOpen || claude.FailuresRecent != 3 || claude.ErrorKinds["server"] != 3 {
+	if claude == nil || !claude.CircuitOpen || claude.FailuresRecent != 3 ||
+		claude.ErrorKinds["server"] != 2 || claude.ErrorKinds["killed"] != 1 {
 		t.Fatalf("claude health wrong: %+v", claude)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -97,28 +98,41 @@ func TestCodexArgs_ExtraRoots(t *testing.T) {
 	}
 }
 
-func TestClassifyExecError_DeadContextIsTimeout(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+func TestClassifyExecError(t *testing.T) {
+	liveCtx := context.Background()
+	expiredCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err := exec.Command("false").Run() // produce a real *exec.ExitError
-	got := classifyExecError(ctx, err)
-	var ce *channel.ClassifiedError
-	if !errors.As(got, &ce) {
-		t.Fatalf("expected ClassifiedError, got %v", got)
+	plainExit := exec.Command("false").Run()
+	var signalKill error
+	if runtime.GOOS != "windows" {
+		signalKill = exec.Command("sh", "-c", "kill -9 $$").Run()
 	}
-	if ce.Kind != channel.ErrKindTimeout {
-		t.Errorf("dead context must classify as timeout, got kind %q", ce.Kind)
-	}
-}
 
-func TestClassifyExecError_LiveContextNonzeroExitIsOther(t *testing.T) {
-	err := exec.Command("false").Run()
-	got := classifyExecError(context.Background(), err)
-	var ce *channel.ClassifiedError
-	if !errors.As(got, &ce) {
-		t.Fatalf("expected ClassifiedError, got %v", got)
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		err      error
+		want     channel.ErrorKindLabel
+		unixOnly bool
+	}{
+		{name: "live context nonzero exit", ctx: liveCtx, err: plainExit, want: channel.ErrKindOther},
+		{name: "expired context nonzero exit", ctx: expiredCtx, err: plainExit, want: channel.ErrKindTimeout},
+		{name: "SIGKILL live context", ctx: liveCtx, err: signalKill, want: channel.ErrKindKilled, unixOnly: true},
+		{name: "SIGKILL expired context", ctx: expiredCtx, err: signalKill, want: channel.ErrKindTimeout, unixOnly: true},
 	}
-	if ce.Kind != channel.ErrKindOther {
-		t.Errorf("plain exit must classify as other, got kind %q", ce.Kind)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.unixOnly && runtime.GOOS == "windows" {
+				t.Skip("POSIX signals are unavailable on Windows")
+			}
+			got := classifyExecError(tt.ctx, tt.err)
+			var ce *channel.ClassifiedError
+			if !errors.As(got, &ce) {
+				t.Fatalf("expected ClassifiedError, got %v", got)
+			}
+			if ce.Kind != tt.want {
+				t.Errorf("kind = %q, want %q", ce.Kind, tt.want)
+			}
+		})
 	}
 }

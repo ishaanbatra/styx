@@ -29,7 +29,7 @@ func TestRecordAndReadOutcomes(t *testing.T) {
 	}
 	if err := tr.RecordOutcome(ctx, Outcome{
 		Project: "p1", Thread: "codex", TaskID: "t1", CLI: "codex",
-		Risk: "edit", ErrorKind: "timeout", Background: true,
+		Risk: "edit", ErrorKind: "killed", Background: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestRecordAndReadOutcomes(t *testing.T) {
 		t.Fatalf("want 2 outcomes, got %d", len(got))
 	}
 	// Newest first.
-	if got[0].TaskID != "t1" || !got[0].Background || got[0].ErrorKind != "timeout" {
+	if got[0].TaskID != "t1" || !got[0].Background || got[0].ErrorKind != "killed" {
 		t.Fatalf("newest row mismatch: %+v", got[0])
 	}
 	if got[1].DurationS != 42.5 || got[1].Signals != "complex" || got[1].Rating != "" {

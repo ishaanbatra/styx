@@ -87,7 +87,9 @@ func TestRecentErrors_TriggersCircuit(t *testing.T) {
 	tr := newTestTracker(t)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		_ = tr.Record(ctx, Event{Channel: "gemini", Verb: "research", Success: false, ErrorKind: "5xx"})
+		if err := tr.Record(ctx, Event{Channel: "gemini", Verb: "research", Success: false, ErrorKind: "killed"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	tripped, err := tr.ShouldCircuitBreak(ctx, "gemini", 5, time.Minute)
 	if err != nil {
@@ -358,8 +360,8 @@ func TestConcurrentWritersNoLock(t *testing.T) {
 func TestChannelHealth_BucketsAndCircuit(t *testing.T) {
 	tr := newTestTracker(t)
 	ctx := context.Background()
-	// 3 failures with distinct kinds + 1 success.
-	for _, kind := range []string{"timeout", "429", "5xx"} {
+	// 4 failures with distinct kinds + 1 success.
+	for _, kind := range []string{"timeout", "killed", "429", "5xx"} {
 		if err := tr.Record(ctx, Event{Channel: "claude", Verb: "plan", Success: false, ErrorKind: kind}); err != nil {
 			t.Fatal(err)
 		}
@@ -371,8 +373,8 @@ func TestChannelHealth_BucketsAndCircuit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.FailuresRecent != 3 {
-		t.Fatalf("failures_recent = %d, want 3 (success excluded)", h.FailuresRecent)
+	if h.FailuresRecent != 4 {
+		t.Fatalf("failures_recent = %d, want 4 (success excluded)", h.FailuresRecent)
 	}
 	if !h.CircuitOpen {
 		t.Fatalf("circuit_open = false, want true (3 >= threshold 3)")
@@ -387,10 +389,9 @@ func TestChannelHealth_BucketsAndCircuit(t *testing.T) {
 	if sum != h.FailuresRecent {
 		t.Fatalf("error_kinds sum = %d, want %d", sum, h.FailuresRecent)
 	}
-	// Raw stored labels "timeout"/"429"/"5xx" surface as the spec's friendly,
-	// zero-filled buckets timeout/rate_limit/server/other.
-	if h.ErrorKinds["timeout"] != 1 || h.ErrorKinds["rate_limit"] != 1 || h.ErrorKinds["server"] != 1 || h.ErrorKinds["other"] != 0 {
-		t.Fatalf("error_kinds = %v, want timeout:1 rate_limit:1 server:1 other:0", h.ErrorKinds)
+	// Raw stored labels surface as friendly, zero-filled buckets.
+	if h.ErrorKinds["timeout"] != 1 || h.ErrorKinds["killed"] != 1 || h.ErrorKinds["rate_limit"] != 1 || h.ErrorKinds["server"] != 1 || h.ErrorKinds["other"] != 0 {
+		t.Fatalf("error_kinds = %v, want timeout:1 killed:1 rate_limit:1 server:1 other:0", h.ErrorKinds)
 	}
 }
 
@@ -405,7 +406,7 @@ func TestChannelHealth_HealthyChannel(t *testing.T) {
 	for _, n := range h.ErrorKinds {
 		sum += n
 	}
-	// Buckets are zero-filled (4 keys) but all zero for a fresh channel.
+	// Buckets are zero-filled (5 keys) but all zero for a fresh channel.
 	if h.CircuitOpen || h.FailuresRecent != 0 || sum != 0 || h.CooldownRemainingSeconds != 0 {
 		t.Fatalf("fresh channel not healthy: %+v", h)
 	}

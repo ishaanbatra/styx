@@ -5,6 +5,6 @@ package channel
 import "os/exec"
 
 // KilledBySignal always reports false where POSIX termination signals don't
-// exist (Windows); adapters classify timeouts there via the caller's dead
-// context instead — see each adapter's classifyExecError.
+// exist (Windows); ClassifyExecError classifies timeouts there via the caller's
+// dead context instead.
 func KilledBySignal(_ *exec.ExitError) bool { return false }

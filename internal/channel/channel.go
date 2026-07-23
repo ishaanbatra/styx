@@ -4,6 +4,10 @@ package channel
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -53,6 +57,7 @@ type ErrorKindLabel string
 
 const (
 	ErrKindTimeout   ErrorKindLabel = "timeout"
+	ErrKindKilled    ErrorKindLabel = "killed"
 	ErrKindRateLimit ErrorKindLabel = "429"
 	ErrKindServer    ErrorKindLabel = "5xx"
 	ErrKindOther     ErrorKindLabel = "other"
@@ -66,3 +71,32 @@ type ClassifiedError struct {
 
 func (c *ClassifiedError) Error() string { return c.Err.Error() }
 func (c *ClassifiedError) Unwrap() error { return c.Err }
+
+// ClassifyExecError classifies a subprocess failure from cliName. A process
+// killed after its context expires is a timeout; a signal kill while the
+// context is still live came from outside styx and is reported as killed.
+func ClassifyExecError(ctx context.Context, err error, cliName string) error {
+	if errors.Is(err, exec.ErrNotFound) {
+		message := fmt.Sprintf("%s CLI not found on PATH", cliName)
+		if cliName == "agy" {
+			message += " (install: curl -fsSL https://antigravity.google/cli/install.sh | bash)"
+		}
+		return &ClassifiedError{Kind: ErrKindOther, Err: fmt.Errorf("%s: %w", message, err)}
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if ctx.Err() != nil {
+			// No kill signals on Windows: a dead context is the timeout
+			// signature there (exec.CommandContext killed the child).
+			return &ClassifiedError{Kind: ErrKindTimeout, Err: fmt.Errorf("%w (context: %v)", err, ctx.Err())}
+		}
+		if KilledBySignal(ee) {
+			return &ClassifiedError{Kind: ErrKindKilled, Err: err}
+		}
+		return &ClassifiedError{Kind: ErrKindOther, Err: fmt.Errorf("%s exited %d: %s", cliName, ee.ExitCode(), strings.TrimSpace(string(ee.Stderr)))}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return &ClassifiedError{Kind: ErrKindTimeout, Err: err}
+	}
+	return &ClassifiedError{Kind: ErrKindOther, Err: err}
+}

@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-23 # Phase A Ollama keep-alive policy
+last_verified: 2026-07-23 # Phase B2 internal/memguard darwin pressure probe
 ---
 
 # Styx Architecture
@@ -317,12 +317,15 @@ additive; for codex, `--add-dir` flags sit after the `exec` subcommand). Token
 counts in `Response` are `len/4` estimates.
 
 - Subprocess adapters (claude, codex, agy) classify exec failures into
-  `channel.ClassifiedError{Kind: timeout|429|5xx|other}` so the router/budget
-  can label them. Classification is platform-split: SIGKILL/SIGTERM detection
-  lives in build-tagged `internal/channel/exit_unix.go` / `exit_other.go`
-  (`channel.KilledBySignal`), and each adapter's `classifyExecError` is
-  context-aware so on Windows (no POSIX signals) a dead context classifies the
-  killed subprocess as a timeout. agy is headless-only and always passes
+  `channel.ClassifiedError{Kind: timeout|killed|429|5xx|other}` so the
+  router/budget can label them. All three share
+  `channel.ClassifyExecError`: SIGKILL/SIGTERM detection lives in build-tagged
+  `internal/channel/exit_unix.go` / `exit_other.go`
+  (`channel.KilledBySignal`); a signal kill after the request context expires
+  is a timeout, while the same signal against a live context is an external
+  kill (for example jetsam, a user, or a supervisor) and is labeled `killed`.
+  On Windows, where POSIX signals are unavailable, a dead context remains the
+  timeout signature. agy is headless-only and always passes
   `--dangerously-skip-permissions`.
 - `Write` requests grant autonomous file access: claude prepends
   `--dangerously-skip-permissions`; codex runs `exec --sandbox workspace-write`.
@@ -347,6 +350,21 @@ counts in `Response` are `len/4` estimates.
   `WithTimeout` gives non-interactive sends a deadline while leaving
   interactive handoffs unbounded.
 - `gemini` is a registered alias for agy (v0.1 routing-rule compat).
+
+## Memory guard (internal/memguard)
+
+Standalone host memory-pressure probe: `type Level int` (`Normal`, `Warn`,
+`Critical`) and `func Current() Level`. Darwin (build-tagged
+`memguard_darwin.go`) reads `kern.memorystatus_vm_pressure_level` via
+`golang.org/x/sys/unix.SysctlUint32` — pure Go, no cgo, no exec — mapping
+1→Normal, 2→Warn, 4→Critical; any sysctl error or unrecognized value fails
+open to Normal, since a broken probe must never block dispatch. Non-darwin
+(`memguard_other.go`) always reports Normal; there is no equivalent probe for
+Linux/Windows yet. No config knobs and no free-GB thresholds by design — the
+kernel's own pressure level is the signal. Not yet consumed anywhere:
+`WithMemoryGuard` (channel decorator) and the background task queue gate are
+separate follow-on work that will take a `func() memguard.Level` injection
+seam rather than importing this package directly.
 
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
@@ -780,7 +798,7 @@ Two pure read methods expose that same posture without adding state.
 `ChannelHealth(channel, threshold, window)` returns a `ChannelHealth` snapshot:
 `CircuitOpen`, `FailuresRecent`, per-kind `ErrorKinds` buckets (raw
 `error_kind`s folded into the friendly, zero-filled labels
-timeout/rate_limit/server/other via `healthKind`), and
+timeout/killed/rate_limit/server/other via `healthKind`), and
 `CooldownRemainingSeconds` — the failure count and the kind buckets share one
 window cutoff. `RetryAfter(channel)` estimates seconds until a channel regains
 capacity: an active cooldown's remaining seconds first, else (via `windowRetry`)
@@ -1612,9 +1630,9 @@ respect:
   `escalate_to`, by contrast, ARE `channel:model` strings (or bare channel
   tokens) naming actual routing targets.
 - **`channel_health.error_kinds` uses friendly, zero-filled keys** —
-  `timeout`/`rate_limit`/`server`/`other` — mapped from the raw stored
+  `timeout`/`killed`/`rate_limit`/`server`/`other` — mapped from the raw stored
   `429`/`5xx`/etc. labels via `budget.healthKind`; a consumer can always index
-  all four keys without a presence check.
+  all five keys without a presence check.
 
 **Four new tools.**
 - `channel_health` — per-channel (or all four) circuit-breaker state,
