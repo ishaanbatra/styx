@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -63,8 +65,8 @@ func TestHandleBudgetStatus_AllChannels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(out) != 4 {
-		t.Fatalf("want 4 channels, got %d", len(out))
+	if len(out) != 5 {
+		t.Fatalf("want 5 channels, got %d", len(out))
 	}
 }
 
@@ -211,8 +213,8 @@ func (overCapBudget) UsedPct(ctx context.Context, channel string) (float64, erro
 func TestHandleChannelHealth_AllAndSingle(t *testing.T) {
 	_, tr := testRouterAndTracker(t)
 	ctx := context.Background()
-	for i := 0; i < 3; i++ {
-		if err := tr.Record(ctx, budget.Event{Channel: "claude", Verb: "plan", Success: false, ErrorKind: "5xx"}); err != nil {
+	for _, kind := range []string{"5xx", "5xx", "killed"} {
+		if err := tr.Record(ctx, budget.Event{Channel: "claude", Verb: "plan", Success: false, ErrorKind: kind}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -229,7 +231,8 @@ func TestHandleChannelHealth_AllAndSingle(t *testing.T) {
 			claude = &all[i]
 		}
 	}
-	if claude == nil || !claude.CircuitOpen || claude.FailuresRecent != 3 || claude.ErrorKinds["server"] != 3 {
+	if claude == nil || !claude.CircuitOpen || claude.FailuresRecent != 3 ||
+		claude.ErrorKinds["server"] != 2 || claude.ErrorKinds["killed"] != 1 {
 		t.Fatalf("claude health wrong: %+v", claude)
 	}
 
@@ -444,5 +447,70 @@ func TestHandleRecall_QueryRequired(t *testing.T) {
 	_, err := handleRecall(context.Background(), config.Project{Name: "p"}, fakeEmb{vec: []float32{1}}, ps, gs, recallArgs{Project: "p", Query: ""})
 	if err == nil {
 		t.Fatal("empty query accepted")
+	}
+}
+
+type preloadRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f preloadRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestPreloadOllamaModelsPolicy(t *testing.T) {
+	tests := []struct {
+		name       string
+		preload    bool
+		keepAlive  string
+		wantModels []string
+	}{
+		{
+			name:      "disabled makes no requests",
+			preload:   false,
+			keepAlive: "5m",
+		},
+		{
+			name:       "enabled warms both models with configured residency",
+			preload:    true,
+			keepAlive:  "17m",
+			wantModels: []string{"brain-model", "embed-model"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests []map[string]any
+			client := &http.Client{Transport: preloadRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path != "/api/generate" {
+					t.Errorf("path = %q, want /api/generate", r.URL.Path)
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode preload request: %v", err)
+				}
+				requests = append(requests, body)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader("")),
+					Header:     make(http.Header),
+				}, nil
+			})}
+
+			a := &app{routing: config.Routing{
+				Brain:  config.BrainConfig{Model: "brain-model", EmbedModel: "embed-model"},
+				Ollama: config.OllamaConfig{KeepAlive: tt.keepAlive, PreloadModels: tt.preload},
+			}}
+			preloadOllamaModelsAt(a, "http://ollama.test", client)
+
+			if len(requests) != len(tt.wantModels) {
+				t.Fatalf("request count = %d, want %d", len(requests), len(tt.wantModels))
+			}
+			for i, wantModel := range tt.wantModels {
+				if requests[i]["model"] != wantModel {
+					t.Errorf("request %d model = %v, want %q", i, requests[i]["model"], wantModel)
+				}
+				if requests[i]["keep_alive"] != tt.keepAlive {
+					t.Errorf("request %d keep_alive = %v, want configured %q", i, requests[i]["keep_alive"], tt.keepAlive)
+				}
+			}
+		})
 	}
 }

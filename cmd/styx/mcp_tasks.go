@@ -21,6 +21,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/activity"
 	"github.com/ishaanbatra/styx/internal/agent"
 	"github.com/ishaanbatra/styx/internal/mcpserver"
+	"github.com/ishaanbatra/styx/internal/memguard"
 	"github.com/ishaanbatra/styx/internal/pipeline"
 )
 
@@ -73,6 +74,9 @@ type taskRegistry struct {
 	order   []string        // creation order, stable listing
 	dir     string          // state-file mirror dir; "" disables persistence (unit tests)
 	board   *activity.Board // liveness source for the piggyback bg line; nil ok
+	level   func() memguard.Level
+
+	memoryStalled bool // true after this Critical-pressure episode was narrated
 }
 
 // newTaskRegistry builds a registry. Goroutines derive from rootCtx — the
@@ -80,11 +84,21 @@ type taskRegistry struct {
 // call returning and die when the server dies. board (nil ok) is the shared
 // conductor liveness board the piggyback status line reads each task's last
 // action from.
-func newTaskRegistry(rootCtx context.Context, limit int, board *activity.Board) *taskRegistry {
+func newTaskRegistry(rootCtx context.Context, limit int, board *activity.Board, levels ...func() memguard.Level) *taskRegistry {
 	if limit <= 0 {
 		limit = 4
 	}
-	return &taskRegistry{limit: limit, rootCtx: rootCtx, tasks: map[string]*bgTask{}, board: board}
+	level := memguard.Current
+	if len(levels) > 0 && levels[0] != nil {
+		level = levels[0]
+	}
+	return &taskRegistry{
+		limit:   limit,
+		rootCtx: rootCtx,
+		tasks:   map[string]*bgTask{},
+		board:   board,
+		level:   level,
+	}
 }
 
 // Spawn registers a task and starts it immediately when the cap and ordering
@@ -114,6 +128,26 @@ func (r *taskRegistry) Spawn(spec taskSpec, run func(context.Context, string) (m
 // startEligibleLocked promotes queued tasks in creation order while capacity
 // and the ordering rules allow. Callers hold r.mu.
 func (r *taskRegistry) startEligibleLocked() {
+	hasQueued := false
+	for _, id := range r.order {
+		if r.tasks[id].State == taskQueued {
+			hasQueued = true
+			break
+		}
+	}
+	level := r.level
+	if level == nil {
+		level = memguard.Current
+	}
+	if hasQueued && level() == memguard.Critical {
+		if !r.memoryStalled {
+			logStatus("background task queue stalled: host under critical memory pressure; close apps or retry")
+			r.memoryStalled = true
+		}
+		return
+	}
+	r.memoryStalled = false
+
 	running := 0
 	for _, id := range r.order {
 		if r.tasks[id].State == taskRunning {

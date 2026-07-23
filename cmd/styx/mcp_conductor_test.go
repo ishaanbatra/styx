@@ -13,6 +13,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/attribution"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
+	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
@@ -37,6 +38,25 @@ func callTool(t *testing.T, d *conductorDeps, name string, args any) (map[string
 	}
 	t.Fatalf("tool %q not registered", name)
 	return nil, nil
+}
+
+func TestDispatchSchemaIncludesMLX(t *testing.T) {
+	for _, tool := range conductorTools(&conductorDeps{}) {
+		if tool.Name != "dispatch" {
+			continue
+		}
+		schema := tool.InputSchema.(map[string]any)
+		properties := schema["properties"].(map[string]any)
+		cli := properties["cli"].(map[string]any)
+		values := cli["enum"].([]string)
+		for _, value := range values {
+			if value == "mlx" {
+				return
+			}
+		}
+		t.Fatalf("dispatch cli enum = %v, want mlx", values)
+	}
+	t.Fatal("dispatch tool not registered")
 }
 
 func TestAttributedMessage(t *testing.T) {
@@ -439,6 +459,41 @@ func TestDispatchOllamaDefaultsModel(t *testing.T) {
 	}
 	if res["model"] != "qwen2.5-coder:7b" {
 		t.Fatalf("dispatch result must echo the resolved model, got %v", res["model"])
+	}
+}
+
+func TestDispatchMLXOneShotDefaultsModel(t *testing.T) {
+	tr, err := budget.New(filepath.Join(t.TempDir(), "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	cap := &captureChannel{}
+	d := &conductorDeps{
+		gate: shipgate.New(shipgate.ModeOff),
+		a: &app{
+			channels: map[string]channel.Channel{"mlx": cap},
+			tracker:  tr,
+		},
+	}
+	res, err := callTool(t, d, "dispatch", map[string]any{
+		"cli": "mlx", "message": "say pong", "risk": "read",
+	})
+	if err != nil {
+		t.Fatalf("mlx dispatch without model must succeed: %v", err)
+	}
+	if cap.last.Model != channelmlx.DefaultModel {
+		t.Fatalf("model = %q, want %q", cap.last.Model, channelmlx.DefaultModel)
+	}
+	if res["cli"] != "mlx" || res["text"] != "pong" || res["model"] != channelmlx.DefaultModel {
+		t.Fatalf("mlx dispatch result = %v", res)
+	}
+	st, err := tr.State(context.Background(), "mlx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.SessionCount != 1 {
+		t.Fatalf("mlx SessionCount = %d, want 1", st.SessionCount)
 	}
 }
 

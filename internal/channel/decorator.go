@@ -2,8 +2,10 @@ package channel
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/ishaanbatra/styx/internal/memguard"
 	"github.com/ishaanbatra/styx/internal/progress"
 )
 
@@ -67,5 +69,40 @@ func (w *WithTimeout) Send(ctx context.Context, req Request) (Response, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, w.D)
 	defer cancel()
+	return w.Inner.Send(ctx, req)
+}
+
+// WithMemoryGuard decorates a Channel so non-interactive Sends refuse to
+// launch while the host is under critical memory pressure. Interactive sends
+// already own the terminal and remain under direct user control, so they pass
+// through unchanged.
+type WithMemoryGuard struct {
+	Inner Channel
+	Level func() memguard.Level
+}
+
+func (w *WithMemoryGuard) Name() string { return w.Inner.Name() }
+
+func (w *WithMemoryGuard) BudgetState(ctx context.Context) (Budget, error) {
+	return w.Inner.BudgetState(ctx)
+}
+
+func (w *WithMemoryGuard) Send(ctx context.Context, req Request) (Response, error) {
+	if req.Interactive {
+		return w.Inner.Send(ctx, req)
+	}
+	level := w.Level
+	if level == nil {
+		level = memguard.Current
+	}
+	if level() == memguard.Critical {
+		return Response{}, &ClassifiedError{
+			Kind: ErrKindMemPressure,
+			Err: fmt.Errorf(
+				"host under memory pressure; close apps or retry — refusing to launch %s to avoid a jetsam kill",
+				w.Inner.Name(),
+			),
+		}
+	}
 	return w.Inner.Send(ctx, req)
 }

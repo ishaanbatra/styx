@@ -4,8 +4,6 @@ package claude
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -105,23 +103,5 @@ func (c *Channel) binary() string {
 func estimateTokens(s string) int { return len(s) / 4 }
 
 func classifyExecError(ctx context.Context, err error) error {
-	if errors.Is(err, exec.ErrNotFound) {
-		return &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: fmt.Errorf("claude CLI not found on PATH: %w", err)}
-	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) {
-		if channel.KilledBySignal(ee) {
-			return &channel.ClassifiedError{Kind: channel.ErrKindTimeout, Err: err}
-		}
-		if ctx.Err() != nil {
-			// No kill signals on Windows: a dead context is the timeout
-			// signature there (exec.CommandContext killed the child).
-			return &channel.ClassifiedError{Kind: channel.ErrKindTimeout, Err: fmt.Errorf("%w (context: %v)", err, ctx.Err())}
-		}
-		return &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: fmt.Errorf("claude exited %d: %s", ee.ExitCode(), strings.TrimSpace(string(ee.Stderr)))}
-	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return &channel.ClassifiedError{Kind: channel.ErrKindTimeout, Err: err}
-	}
-	return &channel.ClassifiedError{Kind: channel.ErrKindOther, Err: err}
+	return channel.ClassifyExecError(ctx, err, "claude")
 }

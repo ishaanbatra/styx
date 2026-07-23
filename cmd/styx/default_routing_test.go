@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ishaanbatra/styx/internal/budget"
+	"github.com/ishaanbatra/styx/internal/channel"
+	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
+	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/router"
 	"github.com/ishaanbatra/styx/internal/signals"
@@ -28,6 +32,28 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	if strings.Contains(defaultRoutingTOML, "claude:opus-4") || strings.Contains(defaultRoutingTOML, "claude:sonnet-4") {
 		t.Error("seeded routing still pins a claude version")
 	}
+	if strings.Contains(defaultRoutingTOML, "ollama:qwen2.5-coder:14b") {
+		t.Error("seeded routing still references the 14b Ollama model")
+	}
+	ollamaTargets := 0
+	for _, rule := range r.Rules {
+		for _, target := range append([]string{rule.Use}, rule.Fallback...) {
+			if !strings.HasPrefix(target, "ollama:") {
+				continue
+			}
+			ollamaTargets++
+			if target != "ollama:qwen2.5-coder:7b" {
+				t.Errorf("seeded %s route has Ollama target %q, want 7b", rule.Verb, target)
+			}
+		}
+	}
+	if ollamaTargets == 0 {
+		t.Error("seeded routing has no Ollama targets")
+	}
+	if strings.Contains(defaultRoutingTOML, "MLX burn-in alternative") ||
+		strings.Contains(defaultRoutingTOML, "# use  = \"mlx:") {
+		t.Error("seeded routing still contains disabled MLX burn-in comments")
+	}
 	// Agy is intentionally exempt: its subscription CLI remembers the user's
 	// last interactive model, so a pin prevents a sweep from silently using it.
 	agyRules := 0
@@ -46,8 +72,62 @@ func TestDefaultRouting_NoVersionPins(t *testing.T) {
 	if r.Models.RefreshIntervalHours == 0 {
 		t.Error("seeded routing missing [models] (defaults not applied?)")
 	}
+	if r.Ollama.KeepAlive != "5m" || r.Ollama.PreloadModels {
+		t.Errorf("seeded ollama policy = %+v, want keep_alive 5m with preload disabled", r.Ollama)
+	}
+	for _, want := range []string{`[ollama]`, `keep_alive = "5m"`, `preload_models = false`} {
+		if !strings.Contains(defaultRoutingTOML, want) {
+			t.Errorf("seeded routing missing %q", want)
+		}
+	}
+	if !r.Memory.Guard {
+		t.Error("seeded routing must enable the memory guard")
+	}
+	for _, want := range []string{`[memory]`, `guard = true`} {
+		if !strings.Contains(defaultRoutingTOML, want) {
+			t.Errorf("seeded routing missing %q", want)
+		}
+	}
 	if r.Conductor.Host != "claude" || !strings.Contains(defaultRoutingTOML, `host = "claude"`) {
 		t.Errorf("seeded conductor host = %q, want claude", r.Conductor.Host)
+	}
+}
+
+func TestDefaultChannelsMemoryGuard(t *testing.T) {
+	for _, guard := range []bool{false, true} {
+		t.Run(map[bool]string{false: "disabled", true: "enabled"}[guard], func(t *testing.T) {
+			channels := defaultChannels(nil, config.Routing{
+				Memory: config.MemoryConfig{Guard: guard},
+			})
+			for name, ch := range channels {
+				progressWrapper, ok := ch.(*channel.WithProgress)
+				if !ok {
+					t.Fatalf("%s outer decorator = %T, want *channel.WithProgress", name, ch)
+				}
+				_, guarded := progressWrapper.Inner.(*channel.WithMemoryGuard)
+				if guarded != guard {
+					t.Errorf("%s memory guarded = %v, want %v", name, guarded, guard)
+				}
+			}
+		})
+	}
+}
+
+func TestDefaultChannelsRegistersTimedMLX(t *testing.T) {
+	channels := defaultChannels(nil, config.Routing{})
+	outer, ok := channels["mlx"].(*channel.WithProgress)
+	if !ok {
+		t.Fatalf("mlx outer decorator = %T, want *channel.WithProgress", channels["mlx"])
+	}
+	timeout, ok := outer.Inner.(*channel.WithTimeout)
+	if !ok {
+		t.Fatalf("mlx inner decorator = %T, want *channel.WithTimeout", outer.Inner)
+	}
+	if timeout.D != ollama.DefaultTimeout {
+		t.Errorf("mlx timeout = %v, want %v", timeout.D, ollama.DefaultTimeout)
+	}
+	if timeout.Inner.Name() != "mlx" {
+		t.Errorf("timed inner channel name = %q, want mlx", timeout.Inner.Name())
 	}
 }
 
@@ -129,10 +209,12 @@ func TestDefaultRoutingPRDraftRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Channel != "ollama" || got.Model != "qwen2.5-coder:7b" {
+			if got.Channel != "mlx" || got.Model != channelmlx.DefaultModel {
 				t.Errorf("decision = %+v", got)
 			}
-			if len(got.Fallback) != 1 || got.Fallback[0].Channel != "claude" || got.Fallback[0].Model != "haiku" {
+			if len(got.Fallback) != 2 ||
+				got.Fallback[0].Channel != "ollama" || got.Fallback[0].Model != "qwen2.5-coder:7b" ||
+				got.Fallback[1].Channel != "claude" || got.Fallback[1].Model != "haiku" {
 				t.Errorf("fallback = %+v", got.Fallback)
 			}
 		})
@@ -145,5 +227,77 @@ func TestDefaultRoutingPRDraftRules(t *testing.T) {
 				t.Errorf("complex decision = %+v", got)
 			}
 		})
+	}
+}
+
+func TestDefaultRoutingGruntRules(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(defaultRoutingTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := config.LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := router.FromConfig(routing, nil)
+	for _, tt := range []struct {
+		name    string
+		signals []string
+	}{
+		{name: "trivial", signals: []string{"trivial"}},
+		{name: "ordinary"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := r.Route(context.Background(), router.Request{Verb: "grunt", Signals: tt.signals})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Channel != "mlx" || got.Model != channelmlx.DefaultModel {
+				t.Errorf("decision = %+v", got)
+			}
+			if len(got.Fallback) != 1 || got.Fallback[0].Channel != "ollama" || got.Fallback[0].Model != "qwen2.5-coder:7b" {
+				t.Errorf("fallback = %+v", got.Fallback)
+			}
+		})
+	}
+}
+
+func TestGruntMissingMLXFallsBackWithinCall(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "routing.toml")
+	if err := os.WriteFile(path, []byte(defaultRoutingTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	routing, err := config.LoadRoutingFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker, err := budget.New(filepath.Join(dir, "usage.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tracker.Close() })
+	ollama := &recordingChannel{}
+	a := &app{
+		router:  router.FromConfig(routing, tracker),
+		tracker: tracker,
+		channels: map[string]channel.Channel{
+			"mlx":    channelmlx.New(),
+			"ollama": ollama,
+		},
+	}
+	resp, picked, err := sendWithFallback(a, context.Background(), "test-project",
+		router.Request{Verb: "grunt", Signals: []string{"trivial"}},
+		channel.Request{Prompt: "say ok"}, true)
+	if err != nil {
+		t.Fatalf("missing MLX must fall through to Ollama: %v", err)
+	}
+	if picked.Channel != "ollama" || picked.Model != "qwen2.5-coder:7b" || resp.Text != "ok" {
+		t.Fatalf("fallback response=%+v picked=%+v", resp, picked)
+	}
+	if ollama.last.Model != "qwen2.5-coder:7b" {
+		t.Errorf("Ollama request model = %q", ollama.last.Model)
 	}
 }

@@ -89,7 +89,11 @@ const dedupeSimilarity = 0.9
 // embedder into runLearnDigest.
 func runLearn(ctx context.Context, a *app, store *memory.Store, dryRun bool) error {
 	emb := memory.NewOllamaEmbedder("http://localhost:11434", a.routing.Brain.EmbedModel)
-	dig := &learn.Digester{BaseURL: "http://localhost:11434", Model: a.routing.Brain.Model}
+	dig := &learn.Digester{
+		BaseURL:   "http://localhost:11434",
+		Model:     a.routing.Brain.Model,
+		KeepAlive: a.routing.Ollama.KeepAlive,
+	}
 	out, err := runLearnDigest(ctx, a, store, emb, dig, dryRun)
 	if err != nil {
 		return err

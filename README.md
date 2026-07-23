@@ -3,7 +3,7 @@
 [![latest release](https://img.shields.io/github/v/release/ishaanbatra/styx)](https://github.com/ishaanbatra/styx/releases/latest)
 
 Personal multi-model dev orchestration CLI. Routes work between Claude, Codex,
-Antigravity (agy / Gemini), and Ollama via a hand-curated rules table.
+Antigravity (agy / Gemini), Ollama, and MLX via a hand-curated rules table.
 
 ## Prerequisites
 
@@ -11,10 +11,12 @@ Antigravity (agy / Gemini), and Ollama via a hand-curated rules table.
 - **`claude` CLI** ([Claude Code](https://claude.com/claude-code)) with an
   active subscription — the only hard requirement at runtime; the default
   `styx` verb launches it as the conductor.
-- **Optional channels** — `codex` (OpenAI), `agy` (Antigravity), and `ollama`
-  add routing targets; missing ones degrade gracefully down the routing
-  table's fallback chains. `gh` enables PR creation in `auto` and `ship`; `graphify`
-  enables knowledge graphs. Run `styx doctor` to see what's wired up.
+- **Optional channels** — `codex` (OpenAI), `agy` (Antigravity), `ollama`,
+  and `mlx_lm.generate` (MLX) add routing targets; missing ones degrade
+  gracefully down the routing table's fallback chains. MLX models download
+  on first use and its channel exits after each generation, leaving no model
+  resident while idle. `gh` enables PR creation in `auto`; `graphify` enables
+  knowledge graphs. Run `styx doctor` to see what's wired up.
 
 styx rides your existing CLI subscriptions — there are no API keys to
 configure. Platform support is tiered: macOS is the primary target (secrets
@@ -163,15 +165,17 @@ restarting the session.
 
 When `auto` reaches ship, styx derives a grounded PR context from pipeline
 state and the branch diff, then drafts the title and body as two bounded prose
-microtasks. Each uses local `ollama:qwen2.5-coder:7b`, may escalate once to
-`claude:haiku` only while that route is within budget and circuit-closed, and
-otherwise uses deterministic text. Test/review results, including skipped
-stages and their reasons, remain pipeline-owned facts; models cannot override
-them. Risky changes or repeated test/review attempts create a draft PR, and
-allowlisted labels are applied best-effort after creation. `--no-pr` and
-`--no-push` skip PR drafting entirely, so those modes make no drafting calls.
-Complex goals, deterministic risk flags, or unusually large diffs raise the
-drafting floor to Claude Sonnet with Codex fallback instead of using local prose.
+microtasks. Each starts on local
+`mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` and falls through to
+`ollama:qwen2.5-coder:7b` when MLX is unavailable; the configured chain retains
+`claude:haiku` after Ollama. Exhaustion uses deterministic text. Test/review
+results, including skipped stages and their reasons, remain pipeline-owned
+facts; models cannot override them. Risky changes or repeated test/review
+attempts create a draft PR, and allowlisted labels are applied best-effort
+after creation. `--no-pr` and `--no-push` skip PR drafting entirely, so those
+modes make no drafting calls. Complex goals, deterministic risk flags, or
+unusually large diffs raise the drafting floor to Claude Sonnet with Codex
+fallback instead of using local prose.
 
 ### Context + inspection
 
@@ -192,7 +196,7 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 
 | Verb | What it does |
 |---|---|
-| `grunt <prompt>` | Local Ollama pass-through |
+| `grunt <prompt>` | Local MLX one-shot with Ollama 7B fallback |
 | `think <prompt>` | Local Ollama reasoning mode (`deep:` prefix -> Claude) |
 | `explain <files...>` | Explain code files; large contexts route to pinned Gemini 3.1 Pro (High) on agy |
 | `summarize <files...>` | Summarize a set of files with pinned Gemini 3.1 Pro (High) on agy |
@@ -200,11 +204,11 @@ Knowledge graphs write artifacts into each repo's working tree (`graphify-out/`)
 | `check` | Dashboard: git status, latest briefs/plans |
 | `budget` | Per-channel usage summary |
 | `learn [--scorecard\|--dry-run\|--list\|--forget <id>]` | Digest dispatch outcomes + session retrospectives into learned routing/user preferences — plain-text memories with provenance, injected into conductor guidance; `--list` inspects, `--forget` reverses |
-| `doctor [--fix]` | Preflight CLIs, capability-card drift, callable Claude tiers, and required Ollama models |
+| `doctor [--fix]` | Preflight CLIs (including optional MLX presence), capability-card drift, callable Claude tiers, and required Ollama models; MLX model pre-download is deferred |
 | `route --explain <verb> "..."` | Why did styx pick that channel? |
 | `project ls/add/rm/rename/scan` | Manage project registry |
 | `project scan [root] [--depth N]` | Walk down from `root` (default `~`), find git repos, bulk-register them (prunes node_modules/vendor; depth default 4) |
-| `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0) exposing fourteen tools to OpenClaw, Claude Code, and any MCP host (see [`docs/openclaw-integration.md`](docs/openclaw-integration.md)): `route` — pick a channel for a task (budget-aware, capability-floor-aware, with fallback chain); `budget_status` — per-channel usage/limits/cooldowns; `record_usage` — log usage a consumer ran outside styx; `channel_health` — circuit-breaker state, recent failures, error-kind buckets, cooldown; `get_intel` — read the per-project codebase intel index (or one section), with staleness; `refresh_intel` — rebuild that index; `recall` — semantic top-k recall over project + global long-term memory; plus the conductor dispatch surface: `dispatch` — send work to a persistent agent thread (claude/codex/agy) or a one-shot local ollama task, awaited by default (or, with `background: true`, as a task you `collect` later); `dispatch_parallel` — fan out an array of dispatches at once, awaited together, per-task results in input order; `thread_status` — list this project's persistent agent threads with turn counts and context usage, plus live/unclaimed background tasks; `collect` — fetch results by `task_id` or sweep everything finished, or set `wait: true` (optionally `timeout_s`) to block with live heartbeats until one task or all currently-outstanding tasks finish; `memory_save` — persist a durable fact, decision, todo, or routing preference to styx memory; `pipeline_run` — run a styx pipeline (research/review/intel/auto/debug/ship), with a confirm-token handshake for `auto` and `ship`; `rate_dispatch` — rate a recent dispatch outcome good/bad to feed styx's learning loop |
+| `mcp` | Run styx as an MCP stdio server (JSON-RPC 2.0) exposing fourteen tools to OpenClaw, Claude Code, and any MCP host (see [`docs/openclaw-integration.md`](docs/openclaw-integration.md)): `route` — pick a channel for a task (budget-aware, capability-floor-aware, with fallback chain); `budget_status` — per-channel usage/limits/cooldowns; `record_usage` — log usage a consumer ran outside styx; `channel_health` — circuit-breaker state, recent failures, error-kind buckets, cooldown; `get_intel` — read the per-project codebase intel index (or one section), with staleness; `refresh_intel` — rebuild that index; `recall` — semantic top-k recall over project + global long-term memory; plus the conductor dispatch surface: `dispatch` — send work to a persistent agent thread (claude/codex/agy) or a synchronous one-shot local Ollama/MLX task, awaited by default (or, for persistent agents only, with `background: true` as a task you `collect` later); `dispatch_parallel` — fan out an array of persistent-agent dispatches at once, awaited together, per-task results in input order; `thread_status` — list this project's persistent agent threads with turn counts and context usage, plus live/unclaimed background tasks; `collect` — fetch results by `task_id` or sweep everything finished, or set `wait: true` (optionally `timeout_s`) to block with live heartbeats until one task or all currently-outstanding tasks finish; `memory_save` — persist a durable fact, decision, todo, or routing preference to styx memory; `pipeline_run` — run a styx pipeline (research/review/intel/auto/debug), with a confirm-token handshake only for `auto`'s ship step; `rate_dispatch` — rate a recent dispatch outcome good/bad to feed styx's learning loop |
 | `hook <event>` | Internal plumbing — the route-gate hook the launcher installs into conductor sessions (Claude Code invokes it, not you); denies inline WebSearch/WebFetch/Task/external-curl + MCP web tools and redirects to dispatch/pipeline_run, per `[conductor] route_gate` |
 | `migrate-secrets` | Move env-var secrets to the platform secret store (macOS Keychain / Windows Credential Manager) |
 | `update` | Replace styx with the latest GitHub release after SHA-256 verification; Scoop/WinGet installs stay package-manager-owned |
@@ -267,11 +271,15 @@ The `map-impact` rule uses the same pin and fallback chain; its missing-rule
 migration is likewise idempotent and preserves existing customized routing.
 The `cross-repo` rule follows the same pattern; existing routing files receive
 it idempotently without replacing a customized `cross-repo` target.
-The `pr.title` and `pr.body` rules use local `ollama:qwen2.5-coder:7b` with a
-single `claude:haiku` fallback for ordinary changes, plus a preceding
-`complex` rule using Claude Sonnet with Codex fallback. Startup and
-`styx upgrade` add either missing rule group without replacing an existing
-customized PR-drafting route.
+The `pr.title` and `pr.body` rules use local
+`mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` with
+`ollama:qwen2.5-coder:7b` then `claude:haiku` in the configured fallback chain
+for ordinary changes, plus a preceding `complex` rule using Claude Sonnet with
+Codex fallback. Both `grunt` rules use the same MLX primary with Ollama 7B
+fallback. A missing `mlx_lm.generate` fails through within the same call rather
+than producing a dead dispatch. Startup and `styx upgrade` add missing PR rule
+groups and promote only untouched prior seeded Ollama-primary PR/grunt shapes;
+customized routes are preserved.
 
 ## Deps
 
@@ -279,4 +287,5 @@ customized PR-drafting route.
 - `codex` CLI (OpenAI, signed in via ChatGPT Plus) — required for Codex channels or conductor sessions
 - `agy` CLI (Antigravity, replaces gemini-cli): `curl -fsSL https://antigravity.google/cli/install.sh | bash`
 - `ollama` (local)
+- `mlx_lm.generate` from `mlx-lm` (optional local load-generate-exit channel)
 - `gh` (for PR creation in `auto`)

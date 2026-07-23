@@ -5,7 +5,7 @@ owns:
   - "testdata/**"
   - "eval/**"
   - "e2e/**"
-last_verified: 2026-07-23 # ship --base
+last_verified: 2026-07-23 # MLX-primary local routing defaults
 ---
 
 # Styx Architecture
@@ -17,9 +17,10 @@ code change that alters behavior described here.
 
 ## System overview
 
-Styx is a Go CLI that routes dev work between four AI channels — claude
-(Anthropic CLI), codex (OpenAI CLI), agy (Google Antigravity CLI), and ollama
-(local HTTP) — using a hand-curated rules table with budget-aware fallback.
+Styx is a Go CLI that routes dev work between five AI channels — claude
+(Anthropic CLI), codex (OpenAI CLI), agy (Google Antigravity CLI), ollama
+(local HTTP), and MLX (local `mlx_lm.generate` subprocess) — using a
+hand-curated rules table with budget-aware fallback.
 
 ```
 argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir --host)
@@ -36,11 +37,12 @@ argv ──► cmd/styx/main.go (global flags: --quiet --verbose --project --dir
               │                                       ▲
               │                          internal/signals.Extract (pure tagger)
               ▼
-        internal/channel (decorated: WithProgress wrapping WithTimeout/raw adapter)
+        internal/channel (decorated: WithProgress → WithMemoryGuard → WithTimeout/raw)
               ├── channel/claude   exec `claude -p` / interactive
               ├── channel/codex    exec `codex exec`
               ├── channel/agy      exec `agy -p --dangerously-skip-permissions [--model <name>]`
-              └── channel/ollama   HTTP localhost:11434 (auto-launches the app)
+              ├── channel/mlx      exec `mlx_lm.generate` (load → generate → exit)
+              └── channel/ollama   HTTP localhost:11434 (resident daemon; auto-launches the app)
 ```
 
 Every send is recorded in the budget DB; routing degrades down each rule's
@@ -77,7 +79,7 @@ Shared pieces:
   shares the budget tracker with the router for both cap checks and
   3-failures-in-10-minutes circuit breaking. `rawChannel()` unwraps the
   progress decorator for orchestration verbs that narrate themselves, leaving
-  timeout protection in place. `resolveGlobalTarget(arg)` combines a verb's
+  memory-guard and timeout protection in place. `resolveGlobalTarget(arg)` combines a verb's
   positional target with global `--project` / `--dir` flags and routes every
   project-scoped verb through `internal/target.Resolve`; this replaces the old
   `resolveTarget` / `resolveProjectArg` split and removes the silent cwd
@@ -138,6 +140,10 @@ Shared pieces:
   with `"\n- "`. It is a pure enhancement: any failure (store open, recall) is
   narrated via `logStatus` and yields `""` rather than blocking the launch.
 - `default_routing.go` — the seeded `routing.toml` content (`defaultRoutingTOML`).
+  Its `[ollama]` block defaults chat/brain residency to `keep_alive = "5m"`
+  and leaves startup model preloading off, prioritizing memory headroom for
+  cloud CLI subprocesses; users with spare RAM can opt into longer residency
+  or `preload_models = true`.
 - `internal/onboard` — first-run routing setup called only from
   `ensureFirstRun`'s absent-`routing.toml` branch. It requires stdin, stdout,
   and stderr TTYs with `CI` and `STYX_NO_WIZARD` both unset; every other path
@@ -147,7 +153,10 @@ Shared pieces:
   `huh` subscription multi-select, and atomically writes a comment-preserving,
   hand-editable tailored routing file. Its pure `TailorRouting` filters or
   promotes targets around unavailable channels (including parallel review
-  synthesis); installer confirms are default-off and use bounded
+  synthesis); seeded MLX primaries stay optimistic because missing binaries
+  fall through at runtime, while their fallback lists are limited to selected
+  subscriptions (or replenished from those subscriptions if filtering would
+  leave none). Installer confirms are default-off and use bounded
   `exec.CommandContext` argument vectors with streamed I/O, never shell
   interpolation or `sudo`. Routing migrations remain owned exclusively by
   `config.UpgradeRoutingFile` and run afterward unchanged.
@@ -157,9 +166,11 @@ Shared pieces:
 - `doctor.go` — `cmdDoctor` runs model refresh/de-pin migration, preflights
   local CLIs against the brain capability cards, reports whether each CLI runs
   with native resume or styx-maintained continuity, checks distinct configured
-  Claude tier aliases with a cheap one-shot call, and verifies that Ollama has
-  both the brain model (`qwen2.5-coder:7b` by default) and embedding model
-  pulled. `--fix` pulls missing Ollama models.
+  Claude tier aliases with a cheap one-shot call, detects the optional
+  `mlx_lm.generate` binary on PATH without making absence unhealthy, and
+  verifies that Ollama has both the brain model (`qwen2.5-coder:7b` by default)
+  and embedding model pulled. `--fix` pulls missing Ollama models; MLX cache
+  inspection and model pre-download are explicitly deferred.
 - `learn.go` — `cmdLearn(a *app, args []string) error`, the `styx learn`
   verb surface (second-tier switch, right after `intel`). Flags:
   `--scorecard` (renders `internal/learn.Build(rows, 30).Render()` over
@@ -229,7 +240,7 @@ Shared pieces:
   `handleChannelHealth()`, `handleGetIntel()`, `handleRefreshIntel()`,
   `handleRecall()`, and `budgetSnapshotFor()` (package main). Handler logic is
   kept simple: route decision + snapshot for one task, budget snapshot for one
-  or all four channels, record usage rows (Messages>1 appends N rows with
+  or all five channels, record usage rows (Messages>1 appends N rows with
   token totals on the first), channel health/failure/cooldown per channel,
   intel read/rebuild per project, and decayed top-k memory recall. Project-
   scoped tools (`get_intel`, `refresh_intel`, `recall`) resolve their
@@ -313,13 +324,17 @@ per non-empty entry; the process cwd stays `WorkingDir` — ExtraRoots is purely
 additive; for codex, `--add-dir` flags sit after the `exec` subcommand). Token
 counts in `Response` are `len/4` estimates.
 
-- Subprocess adapters (claude, codex, agy) classify exec failures into
-  `channel.ClassifiedError{Kind: timeout|429|5xx|other}` so the router/budget
-  can label them. Classification is platform-split: SIGKILL/SIGTERM detection
-  lives in build-tagged `internal/channel/exit_unix.go` / `exit_other.go`
-  (`channel.KilledBySignal`), and each adapter's `classifyExecError` is
-  context-aware so on Windows (no POSIX signals) a dead context classifies the
-  killed subprocess as a timeout. agy is headless-only and always passes
+- Channel Sends classify failures into
+  `channel.ClassifiedError{Kind: timeout|killed|mem-pressure|429|5xx|other}` so
+  the router/budget can label them. The subprocess adapters (claude, codex,
+  agy, mlx) share
+  `channel.ClassifyExecError`: SIGKILL/SIGTERM detection lives in build-tagged
+  `internal/channel/exit_unix.go` / `exit_other.go`
+  (`channel.KilledBySignal`); a signal kill after the request context expires
+  is a timeout, while the same signal against a live context is an external
+  kill (for example jetsam, a user, or a supervisor) and is labeled `killed`.
+  On Windows, where POSIX signals are unavailable, a dead context remains the
+  timeout signature. agy is headless-only and always passes
   `--dangerously-skip-permissions`.
 - `Write` requests grant autonomous file access: claude prepends
   `--dangerously-skip-permissions`; codex runs `exec --sandbox workspace-write`.
@@ -334,21 +349,60 @@ counts in `Response` are `len/4` estimates.
   package `goos` variable. Off-macOS, a down ollama fails fast with a "start it
   manually" `ClassifiedError` instead of waiting 20s; an already-cancelled
   context wins over that message on every platform. Every chat request carries
-  `keep_alive: "30m"` (ollama's default 5-minute idle unload otherwise forces
-  a 3-10s cold reload on the next call); when the estimated prompt tokens
+  the configured `[ollama].keep_alive` value (default `"5m"`), passed into the
+  adapter when app wiring constructs it; when the estimated prompt tokens
   (`len(prompt+system)/4`) plus 1024 headroom exceed ollama's 4096-token
   default, `Send` also sets `options.num_ctx` to the estimate plus 2048 so
   large prompts aren't silently truncated.
-- `decorator.go` — `WithProgress` narrates each Send as a progress stage;
-  skipped for interactive sends (spinner would fight the child for the TTY).
+- `mlx` runs `mlx_lm.generate` via `exec.CommandContext` for every Send. It
+  passes the routing model through (defaulting to
+  `mlx-community/Qwen2.5-Coder-7B-Instruct-4bit`), sends every user prompt on
+  stdin with `--prompt -` so large prompts never hit argv limits, and uses
+  `--system-prompt`, `--max-tokens 1024`, and `--verbose false`. Stderr is
+  streamed while also being captured for classified failures, so first-use
+  Hugging Face download progress is visible during the active progress stage.
+  Its stdout parser defensively removes `==========` framing and trailing
+  prompt/generation/peak-memory statistics. Interactive and write-capable
+  requests are unsupported `other` classified errors; budget state is the
+  zero-value unlimited posture used by local channels.
+- The local-channel lifecycles are intentionally different: Ollama keeps a
+  resident daemon and retains models according to `[ollama].keep_alive`; MLX
+  loads the model in a subprocess, generates once, and exits, releasing its
+  process and Metal allocations instead of holding idle residency.
+- `decorator.go` defines three decorators. `WithProgress` narrates each Send as
+  a progress stage and is skipped for interactive sends (a spinner would fight
+  the child for the TTY). `WithMemoryGuard` checks the injected
+  `func() memguard.Level` for every non-interactive Send: Critical returns a
+  `mem-pressure` `ClassifiedError` without calling the adapter, while Warn and
+  Normal pass through; interactive handoffs always pass through.
   `WithTimeout` gives non-interactive sends a deadline while leaving
-  interactive handoffs unbounded.
+  interactive handoffs unbounded. `defaultChannels` applies the memory guard
+  to every registered channel when `[memory] guard = true` (the default),
+  between the outer progress decorator and any channel timeout. MLX uses a
+  15-minute `WithTimeout`, matching Ollama's local-generation timeout default.
 - `gemini` is a registered alias for agy (v0.1 routing-rule compat).
+
+## Memory guard (internal/memguard)
+
+Standalone host memory-pressure probe: `type Level int` (`Normal`, `Warn`,
+`Critical`) and `func Current() Level`. Darwin (build-tagged
+`memguard_darwin.go`) reads `kern.memorystatus_vm_pressure_level` via
+`golang.org/x/sys/unix.SysctlUint32` — pure Go, no cgo, no exec — mapping
+1→Normal, 2→Warn, 4→Critical; any sysctl error or unrecognized value fails
+open to Normal, since a broken probe must never block dispatch. Non-darwin
+(`memguard_other.go`) always reports Normal; there is no equivalent probe for
+Linux/Windows yet. No probe thresholds by design — the kernel's own pressure
+level is the signal. `channel.WithMemoryGuard` consumes the probe before
+non-interactive channel Sends, and the conductor background-task registry
+consumes it before promoting queued work. Both retain a `func() memguard.Level`
+injection seam for deterministic tests. The routing-level `[memory] guard`
+boolean defaults to true when the section is absent; false disables the
+channel decorator, while the conductor queue safety gate remains active.
 
 ## Routing (internal/router, internal/signals, internal/config/routing.go)
 
 `routing.toml` (`~/.config/styx/`) parses into `config.Routing{Budget, Rules,
-Models, Brain, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
+Models, Brain, Ollama, Memory, Conductor, Watch, Tiers}`. Rules match on `verb` + required `signals`; **first match
 wins**. A rule is either `use = "channel:model"` with an ordered `fallback`
 chain, or a parallel rule (`parallel` + `synthesize_with`, used by `review`).
 No match defaults to `ollama:qwen2.5-coder:14b`. Rules may also carry an
@@ -358,10 +412,12 @@ Bare channel tokens such as `codex` are valid and mean "let that CLI choose its
 current default model." `[models].refresh_interval_hours` controls the
 model-refresh staleness threshold and defaults to 24 hours. The seeded
 `default_routing.go` table de-pins Claude and Codex versions, with
-`research.critic` showing `effort = "high"` as the pass-through example. Agy
-is deliberately different: its seeded rules pin `Gemini 3.1 Pro (High)`
-because the subscription CLI otherwise reuses the user's last interactive
-model choice.
+`research.critic` showing `effort = "high"` as the pass-through example. Every
+seeded Ollama primary and fallback target uses `qwen2.5-coder:7b`; the routing
+upgrade rewrites only exact old seeded 14b target lines, preserving visibly
+customized values, and reports the shared `routing.v0.1.toml.bak` backup. Agy is
+deliberately different: its seeded rules pin `Gemini 3.1 Pro (High)` because
+the subscription CLI otherwise reuses the user's last interactive model choice.
 
 The `implement` verb routes autonomous plan application: codex is primary
 (well-scoped execution), claude is the fallback, and the `complex` signal
@@ -394,13 +450,22 @@ preserving any custom rule; startup and `styx upgrade` report this migration
 separately.
 
 The `pr.title` and `pr.body` verbs seed a `complex` rule using Claude Sonnet
-with Codex fallback before the ordinary `ollama:qwen2.5-coder:7b` rule with one
-`claude:haiku` fallback. Complex goal language, deterministic risk flags, or
-diffs over 50 files / 2,000 changed lines raise the drafting floor. `EnsurePRDraftRules`
-independently appends either missing rule group and preserves customized routes. Bounded microtask callers use
-`Router.NextAvailableFallback` at the moment escalation is needed; it filters
-to the decision's capability-floor candidates and rechecks both caps and the
-circuit breaker, so validation-driven fallback cannot bypass routing safety.
+with Codex fallback before the ordinary
+`mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit` rule with
+`ollama:qwen2.5-coder:7b` and then `claude:haiku` in its fallback chain.
+Complex goal language, deterministic risk flags, or diffs over 50 files /
+2,000 changed lines raise the drafting floor. Both seeded `grunt` rules use
+the same MLX primary with an Ollama 7B fallback. This is runtime-safe when MLX
+is absent: `sendWithFallback` advances on any `Send` error for grunt, while
+the PR microtask ladder advances to its lazily resolved Ollama fallback.
+`EnsurePRDraftRules` independently appends either missing rule group and
+preserves customized routes. `RewriteSeededMLXPrimaries` promotes only the
+four exact prior Ollama-primary seeded shapes, removes their obsolete burn-in
+comments, and leaves customized targets, fallback chains, signals, and spacing
+untouched. Bounded microtask callers use `Router.NextAvailableFallback` at the
+moment escalation is needed; it filters to the decision's capability-floor
+candidates and rechecks both caps and the circuit breaker, so
+validation-driven fallback cannot bypass routing safety.
 
 `signals.Extract` is a pure tagger: `lang:<x>` from the project record,
 `trivial` (≤50 chars), `complex` (architecture/refactor/migrate/redesign/
@@ -414,7 +479,11 @@ the router walks the fallback chain and marks the Decision `Degraded`.
 Per-channel caps also carry optional `timeout_minutes` for non-interactive
 subprocess sends; unset claude/codex/agy timeouts default to 10 minutes in app
 wiring. `Brain` configures the planned local ollama routing brain and memory
-embedding model; `Conductor` configures the frontier-brain launcher and MCP
+embedding model. `Ollama` configures chat/brain model residency with
+`keep_alive` (default `"5m"` even when upgraded files have no `[ollama]`
+section) and startup warming with `preload_models` (default `false`); app
+wiring passes the residency string into leaf packages rather than making them
+depend on config. `Conductor` configures the frontier-brain launcher and MCP
 toolbelt (`host`: claude | codex, default claude, selecting the interactive
 conductor CLI; `ship_gate`: handshake | tty | off, default handshake, controlling
 ship-risk confirmation for `dispatch(risk=ship)` and `pipeline_run auto|ship`;
@@ -579,10 +648,13 @@ the required `dispatches` array (routing collapsed to 51% in `llama3.2:3b` testi
 model-facing schema exposes risk only on dispatch items, taught via a few `read`/
 `ship` few-shot anchors (`edit` is the omitted default); the top-level
 `Action.Risk` exists but is code-derived (e.g. `auto` → ship), never model-set.
-`Action.Valid` performs local structural validation (including the risk enum)
-before the REPL trusts a model response; `ActionSchema` is sent to ollama as the
-structured-output format. `chat()` sends `keep_alive: "30m"` on every brain
-call (avoids the 3-10s cold reload after ollama's 5-minute idle unload) and
+`Action.Valid` performs local structural validation (including the risk enum
+and the `claude|codex|agy|ollama|mlx` dispatch whitelist) before the REPL
+trusts a model response; `ActionSchema` is sent to ollama as the
+structured-output format. Ollama and MLX brain dispatches run through the
+REPL's synchronous one-shot channel branches; MLX defaults to the adapter's
+Qwen 7B model rather than entering the persistent-agent manager. `chat()` sends the construction-time
+`[ollama].keep_alive` value on every brain call and
 sets `options.num_ctx` to `(len(system)+len(user))/4 + 2048` whenever that
 estimate plus 1024 headroom would exceed ollama's 4096-token default — the
 ~40-exemplar preamble routinely sits near/over that default (measured ~3.3k
@@ -775,7 +847,7 @@ Two pure read methods expose that same posture without adding state.
 `ChannelHealth(channel, threshold, window)` returns a `ChannelHealth` snapshot:
 `CircuitOpen`, `FailuresRecent`, per-kind `ErrorKinds` buckets (raw
 `error_kind`s folded into the friendly, zero-filled labels
-timeout/rate_limit/server/other via `healthKind`), and
+timeout/killed/rate_limit/server/other via `healthKind`), and
 `CooldownRemainingSeconds` — the failure count and the kind buckets share one
 window cutoff. `RetryAfter(channel)` estimates seconds until a channel regains
 capacity: an active cooldown's remaining seconds first, else (via `windowRetry`)
@@ -942,7 +1014,10 @@ cross-repo recall without an explicit scope hint. `Embedder` abstracts text to
 float32 vectors; the production `OllamaEmbedder` posts to `/api/embed` with a
 30s HTTP client timeout and caller-provided context, carrying
 `keep_alive: "30m"` on every request so the embed model isn't evicted between
-calls. Every `Embed` call site embeds a single text per user action (recall
+calls. This is intentionally independent of `[ollama].keep_alive`: the
+`nomic-embed-text` model is about 274 MB and keeping it resident protects
+recall latency without the multi-GB pressure of chat models. Every `Embed`
+call site embeds a single text per user action (recall
 query, `memory_save`, distillation, brief indexing, routing-preference
 correction, session-end summary) — no call site batches, so `EmbedBatch` stays
 unimplemented pending bulk-embedding intel indexing.
@@ -974,8 +1049,8 @@ local ollama `/api/chat` endpoint and uses structured output to propose
 candidate memories from a scorecard, unconsumed retrospectives, and rating
 notes. Its chat shape (`Model`, `Stream`, `Think`, `Format`, `KeepAlive`,
 `Options`, `Messages`) closely mirrors `internal/brain`'s shape to leverage
-the same ollama tuning (30-minute keep-alive, dynamic `num_ctx` sizing based
-on system + user prompt length, temperature 0 for deterministic classification)
+the same ollama tuning (configured `[ollama].keep_alive`, dynamic `num_ctx`
+sizing based on system + user prompt length, temperature 0 for deterministic classification)
 and the same local brain model (default `qwen2.5-coder:7b`). Unlike the brain
 which is REPL-coupled and ships with the conductor, the digest client is
 fully self-contained and invoked on demand by `styx learn` without requiring
@@ -1377,7 +1452,7 @@ PR bodies). Four consumers: `execute.buildPrompt` (auto-pipeline
 implementers), `execute.Ship` via `prBody` (PR bodies, default and
 caller-supplied), and the conductor's `dispatch`/`dispatch_parallel`
 via `attributedMessage` (edit/ship-risk messages; read-risk dispatches
-and ollama one-shots pass through untouched), plus `conductorGuidance`,
+and local one-shots pass through untouched), plus `conductorGuidance`,
 which embeds `CommitInstruction` in the conductor guidance so
 commits made directly by the conductor carry the styx trailer.
 
@@ -1522,10 +1597,10 @@ server it just configured (`styx mcp`, started as a subprocess by Claude
 Code itself per the written config — see "MCP server" and "Conductor MCP
 tools" below): `route`/`budget_status`/`channel_health`/`get_intel`/
 `refresh_intel`/`recall` for the routing brain and memory, `dispatch`/
-`thread_status` for delegating to persistent claude/codex/agy/ollama
-threads, and `memory_save`/`pipeline_run` for writing memories and running
-the research/review/intel/auto/debug/ship pipelines (`auto` and `ship` are
-gated by `internal/shipgate`). No code path in the launcher itself talks to a
+`thread_status` for delegating to persistent claude/codex/agy threads or local
+ollama/MLX one-shots, and `memory_save`/`pipeline_run` for writing memories and running
+the research/review/intel/auto/debug pipelines (`auto` alone is gated by
+`internal/shipgate`). No code path in the launcher itself talks to a
 provider API or the MCP protocol — it only shells out to the `claude` CLI
 and writes a config file for it to read.
 
@@ -1563,11 +1638,11 @@ in-flight/finished-but-uncollected background tasks resurface as `o1`, `o2`,
 … entries in this session's `collect`/status line instead of vanishing
 silently. Finally `cmdMCP` builds the full tool set as
 `withBackgroundStatus(append(mcpTools(a), conductorTools(d)...), d.reg)`.
-Before `srv.Serve`, `cmdMCP` fires
-`go preloadOllamaModels(a)`: a fire-and-forget, 20s-timeout best-effort call
-to `/api/generate` with `keep_alive: "30m"` for `a.routing.Brain.Model` and
-`a.routing.Brain.EmbedModel`, so the first real dispatch/recall doesn't pay a
-cold model load while it overlaps with the host handshake. Failures are
+Before `srv.Serve`, `cmdMCP` starts `go preloadOllamaModels(a)` only when
+`[ollama].preload_models = true` (default `false`). The fire-and-forget,
+20s-timeout best-effort call warms `a.routing.Brain.Model` and
+`a.routing.Brain.EmbedModel` through `/api/generate` using the configured
+`[ollama].keep_alive`, overlapping with the host handshake. Failures are
 narrated via `logStatus` (stderr) and never fatal — ollama may simply be down.
 
 **Progress notifications (`_meta.progressToken`).** `Server` carries a
@@ -1624,12 +1699,12 @@ respect:
   `escalate_to`, by contrast, ARE `channel:model` strings (or bare channel
   tokens) naming actual routing targets.
 - **`channel_health.error_kinds` uses friendly, zero-filled keys** —
-  `timeout`/`rate_limit`/`server`/`other` — mapped from the raw stored
+  `timeout`/`killed`/`rate_limit`/`server`/`other` — mapped from the raw stored
   `429`/`5xx`/etc. labels via `budget.healthKind`; a consumer can always index
-  all four keys without a presence check.
+  all five keys without a presence check.
 
 **Four new tools.**
-- `channel_health` — per-channel (or all four) circuit-breaker state,
+- `channel_health` — per-channel (or all five) circuit-breaker state,
   recent failure count, the zero-filled error-kind buckets above, and
   remaining cooldown seconds, read straight off the existing usage log (no
   new state). Backed by `budget.Tracker.ChannelHealth`.
@@ -1722,7 +1797,8 @@ REPL loop.
   "pass --dir" or "cd into a repo", so the error lists the registry instead
   of suggesting shell remedies.
 - `dispatch(project?, thread?, cli, message, model?, risk, extra_roots?,
-  confirm_token?, background?)` — `cli` is one of `claude|codex|agy|ollama`;
+  confirm_token?, background?)` — `cli` is one of
+  `claude|codex|agy|ollama|mlx`;
   `risk` is `read|edit|ship`. Validation (unknown cli, empty message, invalid
   risk) runs first and returns a plain error. For `risk: ship`, the
   **`internal/shipgate` check runs before project resolution** — a ship-risk
@@ -1740,7 +1816,10 @@ REPL loop.
   string) and `duration_s` (wall-clock seconds since a `start := time.Now()`
   taken right after arg validation, rounded via
   `math.Round(time.Since(start).Seconds()*10)/10` to one decimal) alongside
-  `{cli, text}`.
+  `{cli, text}`. `cli: mlx` follows the same synchronous one-shot accounting
+  path through `a.channels["mlx"]`; an empty model resolves to the MLX
+  adapter default. Neither local one-shot is accepted by `dispatch_parallel`
+  or as a background dispatch.
 
   Otherwise the call routes through `managerFor` and builds one shared
   `spec := agent.DispatchSpec{Thread, CLI, Model, Message, ExtraRoots,
@@ -1777,7 +1856,7 @@ REPL loop.
   itself is never lost, only the in-call observation of it. A nil `d.reg`
   (registry unavailable) is rejected loudly rather than silently falling
   back to a direct `Dispatch` call.
-  **Every dispatch completion — the ollama one-shot branch, the awaited
+  **Every dispatch completion — a local one-shot branch, the awaited
   fork, and the background fork alike — appends one `budget.Outcome` row**
   via `(*Tracker).RecordOutcome` (see "Budget tracker" `outcomes` table):
   CLI, resolved model, risk, wall-clock duration, real token counts, and
@@ -2033,6 +2112,14 @@ results to the caller.
   `EnsureConductorTaskCap`). `startEligibleLocked` counts running tasks and
   promotes queued tasks in creation order while `running < limit` and no
   ordering rule blocks them.
+- **Memory-pressure gate** — the registry stores an injected
+  `func() memguard.Level` (default `memguard.Current`). Before
+  `startEligibleLocked` promotes any queued task, Critical pressure stops the
+  pass and leaves every task in the existing `queued` state; it emits one
+  `logStatus` line for the whole continuous stall episode, not one per task or
+  recheck. A later `Spawn` or running-task completion calls
+  `startEligibleLocked` again, so a recovered Normal level drains eligible
+  work without a timer or new task state.
 - **Ordering rules** — both enforced by `conflictLocked`, checked in
   creation order against every currently-running task:
   1. **Per-thread serialization**: a task on the same `(ProjectID, Thread)`
@@ -2154,8 +2241,9 @@ watcher goroutine (see the `repl.go` and "Conductor MCP tools" sections).
 
 **Ollama watcher** (`Watcher`): a best-effort background goroutine that
 periodically checks cross-agent activity and writes health observations back
-to the board via `SetWatcherNote`. `Watcher{BaseURL, Model, Board, Interval,
-Stall}` configures the endpoint, chat model, target board, poll cadence (0
+to the board via `SetWatcherNote`. `Watcher{BaseURL, Model, KeepAlive, Board,
+Interval, Stall}` configures the endpoint, chat model, construction-time
+`[ollama].keep_alive`, target board, poll cadence (0
 defaults to 15s), and mechanical idle threshold (0 defaults to
 `DefaultStall`). Both conductor and REPL wire `Stall` from the already-existing
 `[watch].stall_threshold_seconds` setting. `Run(ctx)` polls until context

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,7 +10,41 @@ import (
 	"time"
 
 	"github.com/ishaanbatra/styx/internal/brain"
+	"github.com/ishaanbatra/styx/internal/config"
 )
+
+func TestMLXDoctorStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		err  error
+		want string
+	}{
+		{
+			name: "present",
+			path: "/opt/homebrew/bin/mlx_lm.generate",
+			want: "ok mlx_lm.generate found at /opt/homebrew/bin/mlx_lm.generate",
+		},
+		{
+			name: "absent is healthy note",
+			err:  errors.New("not found"),
+			want: "optional MLX channel unavailable (healthy;",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mlxDoctorStatus(func(name string) (string, error) {
+				if name != "mlx_lm.generate" {
+					t.Fatalf("lookPath(%q), want mlx_lm.generate", name)
+				}
+				return tt.path, tt.err
+			})
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("status = %q, want substring %q", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestMissingFlags(t *testing.T) {
 	card := brain.Card{
@@ -91,8 +126,8 @@ func TestMissingFlags_Subcommand(t *testing.T) {
 }
 
 func TestOllamaModelsMissing(t *testing.T) {
-	tags := `{"models":[{"name":"llama3.2:3b"},{"name":"qwen2.5-coder:14b"}]}`
-	got := ollamaModelsMissing(tags, []string{"llama3.2:3b", "nomic-embed-text"})
+	tags := `{"models":[{"name":"llama3.2:3b"},{"name":"qwen2.5-coder:7b"}]}`
+	got := ollamaModelsMissing(tags, []string{"qwen2.5-coder:7b", "nomic-embed-text"})
 	want := []string{"nomic-embed-text"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("missing = %v, want %v", got, want)
@@ -101,6 +136,25 @@ func TestOllamaModelsMissing(t *testing.T) {
 	tags = `{"models":[{"name":"nomic-embed-text:latest"}]}`
 	if got := ollamaModelsMissing(tags, []string{"nomic-embed-text"}); got != nil {
 		t.Errorf("missing = %v, want nil (latest tag should match)", got)
+	}
+}
+
+func TestRequiredOllamaModelsUsesNewDefault(t *testing.T) {
+	r := config.Routing{
+		Brain: config.BrainConfig{
+			Model:      "qwen2.5-coder:7b",
+			EmbedModel: "nomic-embed-text",
+		},
+	}
+	got := requiredOllamaModels(r)
+	want := []string{"qwen2.5-coder:7b", "nomic-embed-text"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("required models = %v, want %v", got, want)
+	}
+	for _, model := range got {
+		if model == "qwen2.5-coder:14b" {
+			t.Fatal("doctor must not require the retired 14b default")
+		}
 	}
 }
 

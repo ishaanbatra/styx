@@ -44,6 +44,8 @@ type embedResponse struct {
 
 // Embed implements Embedder.
 func (e *OllamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	// The 274 MB embedding model deliberately stays warm for recall latency;
+	// unlike chat/brain models, it does not follow the configurable residency policy.
 	body, err := json.Marshal(embedRequest{Model: e.model, Input: text, KeepAlive: "30m"})
 	if err != nil {
 		return nil, fmt.Errorf("marshal embed request: %w", err)

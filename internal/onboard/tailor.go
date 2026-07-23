@@ -19,6 +19,7 @@ const (
 	Codex  Subscription = "codex"
 	Agy    Subscription = "agy"
 	Ollama Subscription = "ollama"
+	MLX    Subscription = "mlx"
 )
 
 // Subscriptions is the set of channels selected during onboarding.
@@ -36,6 +37,7 @@ var replacementOrder = map[Subscription][]Subscription{
 	Codex:  {Codex, Claude, Ollama, Agy},
 	Agy:    {Agy, Ollama, Claude, Codex},
 	Ollama: {Ollama, Claude, Codex, Agy},
+	MLX:    {Ollama, Claude, Codex, Agy},
 }
 
 // TailorRouting returns defaultContent with routing targets adjusted to use
@@ -77,6 +79,17 @@ func tailorRule(rule *config.Rule, subscriptions Subscriptions) {
 	}
 
 	primaryChannel := targetChannel(rule.Use)
+	if primaryChannel == MLX {
+		// MLX is intentionally not a wizard subscription: the seeded local
+		// rules optimistically try it and fall through on a missing binary.
+		// Keep that primary while tailoring its fallback chain to channels the
+		// user actually selected, so onboarding cannot create a dead dispatch.
+		rule.Fallback = filterTargets(rule.Fallback, subscriptions)
+		if len(rule.Fallback) == 0 {
+			rule.Fallback = replacementTargets(MLX, nil, subscriptions)
+		}
+		return
+	}
 	if subscriptions[primaryChannel] {
 		rule.Fallback = filterTargets(rule.Fallback, subscriptions)
 		return

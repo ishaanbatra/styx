@@ -27,7 +27,7 @@ func cmdBudget(args []string) error {
 	seedMessageLimits(tr, r)
 
 	ctx := context.Background()
-	for _, ch := range []string{"claude", "codex", "agy", "ollama"} {
+	for _, ch := range []string{"claude", "codex", "agy", "ollama", "mlx"} {
 		st, err := tr.State(ctx, ch)
 		if err != nil {
 			fmt.Printf("%-8s  error: %v\n", ch, err)

@@ -10,8 +10,21 @@
 #   FAKEAGENT_PROTO        "codex": emit codex exec --json events instead
 #   FAKEAGENT_SLEEP        sleep N seconds before emitting (background tests)
 #   FAKEAGENT_MUTATE_PATH  write a marker file before emitting (tree-guard tests)
+#   FAKEAGENT_STDIN_LOG    consume stdin into this file (stdin piping tests)
+#   FAKEAGENT_EXIT         exit with this code after logging args/stdin
+#   FAKEAGENT_SIGNAL       "1": kill the fake with SIGKILL
 if [ -n "$FAKEAGENT_ARGS_LOG" ]; then
   echo "$@" >> "$FAKEAGENT_ARGS_LOG"
+fi
+if [ -n "$FAKEAGENT_STDIN_LOG" ]; then
+  cat > "$FAKEAGENT_STDIN_LOG"
+fi
+if [ "$FAKEAGENT_SIGNAL" = "1" ]; then
+  kill -9 $$
+fi
+if [ -n "$FAKEAGENT_EXIT" ]; then
+  echo "fakeagent forced exit $FAKEAGENT_EXIT" >&2
+  exit "$FAKEAGENT_EXIT"
 fi
 if [ "$FAKEAGENT_FAIL_RESUME" = "1" ]; then
   for a in "$@"; do

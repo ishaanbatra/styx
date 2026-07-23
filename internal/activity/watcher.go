@@ -26,11 +26,12 @@ Return only JSON lines, nothing else.`
 // writes the result to the board. Strictly best-effort: every failure path
 // leaves the mechanical layer (renderer + stall flag) untouched.
 type Watcher struct {
-	BaseURL  string // e.g. http://localhost:11434
-	Model    string
-	Board    *Board
-	Interval time.Duration // 0 => 15s
-	Stall    time.Duration // 0 => DefaultStall
+	BaseURL   string // e.g. http://localhost:11434
+	Model     string
+	KeepAlive string // ollama model residency policy from routing config
+	Board     *Board
+	Interval  time.Duration // 0 => 15s
+	Stall     time.Duration // 0 => DefaultStall
 
 	client *http.Client
 }
@@ -132,7 +133,7 @@ func (w *Watcher) pollOnce(ctx context.Context) error {
 		Model:     w.Model,
 		Stream:    false,
 		Think:     false,
-		KeepAlive: "30m",
+		KeepAlive: w.KeepAlive,
 		Options:   map[string]any{"temperature": 0},
 		Messages: []chatMessage{
 			{Role: "system", Content: watcherSystem},

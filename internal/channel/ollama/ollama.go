@@ -19,25 +19,32 @@ import (
 	"github.com/ishaanbatra/styx/internal/channel"
 )
 
-const defaultBaseURL = "http://localhost:11434"
+const (
+	defaultBaseURL = "http://localhost:11434"
+
+	// DefaultTimeout bounds one local model generation.
+	DefaultTimeout = 15 * time.Minute
+)
 
 // goos is a package-level alias so tests can exercise non-darwin behavior.
 var goos = runtime.GOOS
 
 // Channel is the Ollama implementation.
 type Channel struct {
-	baseURL string
-	client  *http.Client
+	baseURL   string
+	keepAlive string
+	client    *http.Client
 }
 
 // New returns a Channel pointing at the default localhost endpoint.
-func New() *Channel { return NewWithBaseURL(defaultBaseURL) }
+func New(keepAlive string) *Channel { return NewWithBaseURL(defaultBaseURL, keepAlive) }
 
 // NewWithBaseURL is used in tests / non-default deployments.
-func NewWithBaseURL(base string) *Channel {
+func NewWithBaseURL(base, keepAlive string) *Channel {
 	return &Channel{
-		baseURL: strings.TrimRight(base, "/"),
-		client:  &http.Client{Timeout: 15 * time.Minute},
+		baseURL:   strings.TrimRight(base, "/"),
+		keepAlive: keepAlive,
+		client:    &http.Client{Timeout: DefaultTimeout},
 	}
 }
 
@@ -88,7 +95,7 @@ func (c *Channel) Send(ctx context.Context, req channel.Request) (channel.Respon
 	}
 	msgs = append(msgs, chatMessage{Role: "user", Content: prompt})
 
-	creq := chatRequest{Model: req.Model, Stream: false, KeepAlive: "30m", Messages: msgs}
+	creq := chatRequest{Model: req.Model, Stream: false, KeepAlive: c.keepAlive, Messages: msgs}
 	if est := estimateTokens(prompt + req.System); est+1024 > 4096 {
 		// Ollama defaults num_ctx to 4096 and silently truncates beyond it.
 		creq.Options = map[string]any{"num_ctx": est + 2048}

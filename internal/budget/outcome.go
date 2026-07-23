@@ -24,7 +24,7 @@ type Outcome struct {
 	DurationS  float64
 	TokensIn   int
 	TokensOut  int
-	ErrorKind  string // "" on success, else classified: timeout|429|5xx|other
+	ErrorKind  string // "" on success, else classified: timeout|killed|429|5xx|other
 	Background bool
 	Rating     string // "" (unrated) | "good" | "bad"
 	Note       string

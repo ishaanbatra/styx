@@ -16,9 +16,23 @@ type Routing struct {
 	Rules     []Rule            `toml:"rule"`
 	Models    ModelsConfig      `toml:"models"`
 	Brain     BrainConfig       `toml:"brain"`
+	Ollama    OllamaConfig      `toml:"ollama"`
+	Memory    MemoryConfig      `toml:"memory"`
 	Conductor Conductor         `toml:"conductor"`
 	Watch     WatchCap          `toml:"watch"`
 	Tiers     map[string]string `toml:"tiers"`
+}
+
+// OllamaConfig controls local model residency and startup warming.
+type OllamaConfig struct {
+	KeepAlive     string `toml:"keep_alive"`
+	PreloadModels bool   `toml:"preload_models"`
+}
+
+// MemoryConfig controls whether channel Sends are gated on the host
+// memory-pressure probe. The conductor task queue is always guarded.
+type MemoryConfig struct {
+	Guard bool `toml:"guard"`
 }
 
 // WatchCap configures live dispatch observability (styx watch / heartbeat).
@@ -85,6 +99,12 @@ type ModelsConfig struct {
 func applyModelsDefaults(r *Routing) {
 	if r.Models.RefreshIntervalHours == 0 {
 		r.Models.RefreshIntervalHours = 24
+	}
+}
+
+func applyOllamaDefaults(r *Routing) {
+	if r.Ollama.KeepAlive == "" {
+		r.Ollama.KeepAlive = "5m"
 	}
 }
 
@@ -166,12 +186,15 @@ func LoadRoutingFile(path string) (Routing, error) {
 	if err != nil {
 		return Routing{}, fmt.Errorf("read routing config %s: %w", path, err)
 	}
-	var r Routing
+	// Seed true before decoding so an absent [memory] section keeps the guard
+	// enabled while an explicit guard=false remains distinguishable.
+	r := Routing{Memory: MemoryConfig{Guard: true}}
 	if err := toml.Unmarshal(b, &r); err != nil {
 		return Routing{}, fmt.Errorf("parse routing config %s: %w", path, err)
 	}
 	applyModelsDefaults(&r)
 	applyBrainDefaults(&r)
+	applyOllamaDefaults(&r)
 	applyConductorDefaults(&r)
 	return r, nil
 }

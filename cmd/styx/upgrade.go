@@ -17,11 +17,17 @@ func cmdUpgrade() error {
 		return err
 	}
 	if !result.Changed() {
-		fmt.Println("routing.toml already up to date (agy model pin + implement/debug/dead-code/map-impact/cross-repo/PR-drafting verbs + fable tier + conductor host/task cap + watch config present).")
+		fmt.Println("routing.toml already up to date (MLX-primary local rules + agy model pin + implement/debug/dead-code/map-impact/cross-repo/PR-drafting verbs + fable tier + conductor host/task cap + watch config present).")
 		return nil
 	}
 	if result.GeminiRewrites > 0 {
 		fmt.Printf("Migrated %d rule reference(s) from gemini-cli to agy.\n", result.GeminiRewrites)
+	}
+	if result.OllamaRewrites > 0 {
+		fmt.Printf("Migrated %d seeded Ollama target(s) from qwen2.5-coder:14b to qwen2.5-coder:7b.\n", result.OllamaRewrites)
+	}
+	if result.MLXRewrites > 0 {
+		fmt.Printf("Migrated %d seeded PR/grunt rule(s) to MLX primary with Ollama fallback.\n", result.MLXRewrites)
 	}
 	if result.ImplementInjected {
 		fmt.Println("Added the implement verb (codex implements from a plan, claude fallback).")

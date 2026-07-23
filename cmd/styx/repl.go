@@ -21,6 +21,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/brain"
 	"github.com/ishaanbatra/styx/internal/budget"
 	"github.com/ishaanbatra/styx/internal/channel"
+	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
 	"github.com/ishaanbatra/styx/internal/paths"
@@ -61,6 +62,7 @@ type replSession struct {
 	tracker      *budget.Tracker
 	pipelines    map[string]func(ctx context.Context, arg string) error
 	ollamaSend   func(ctx context.Context, model, prompt string) (string, error)
+	mlxSend      func(ctx context.Context, model, prompt string) (string, error)
 	assumeYes    bool // --yes / non-interactive: skip ship-risk confirmations
 	in           *bufio.Reader
 	out          io.Writer
@@ -356,14 +358,18 @@ func (s *replSession) runOneDispatch(ctx context.Context, d brain.Dispatch, mode
 	}
 	// 2. audit — tagged with the resolved project, not s.focus (may differ in multi-repo sessions)
 	s.auditf(audit.KindDispatch, d.Thread+"·"+model, bp.proj.ID, map[string]string{"msg": d.Message})
-	// 3. ollama branch (unchanged)
-	if d.Thread == "ollama" {
-		if s.ollamaSend == nil {
-			return "", errors.New("ollama dispatch not wired")
+	// 3. Local one-shot branches.
+	if d.Thread == "ollama" || d.Thread == "mlx" {
+		send := s.ollamaSend
+		if d.Thread == "mlx" {
+			send = s.mlxSend
 		}
-		text, err := s.ollamaSend(ctx, model, d.Message)
+		if send == nil {
+			return "", fmt.Errorf("%s dispatch not wired", d.Thread)
+		}
+		text, err := send(ctx, model, d.Message)
 		if err != nil {
-			return "", fmt.Errorf("ollama: %w", err)
+			return "", fmt.Errorf("%s: %w", d.Thread, err)
 		}
 		if quiet {
 			return text, nil
@@ -485,6 +491,9 @@ func (s *replSession) defaultModel(d brain.Dispatch) string {
 	if d.Thread == "ollama" {
 		return "qwen2.5-coder:14b"
 	}
+	if d.Thread == "mlx" {
+		return channelmlx.DefaultModel
+	}
 	return "sonnet"
 }
 
@@ -514,7 +523,7 @@ func (s *replSession) fableHot() bool {
 // askUserRoute is the never-brick path: ollama is down or the brain emitted
 // garbage twice, so the user routes this turn manually.
 func (s *replSession) askUserRoute(ctx context.Context, utterance string) error {
-	s.print("brain unavailable - which thread? [claude/codex/agy/ollama/skip]: ")
+	s.print("brain unavailable - which thread? [claude/codex/agy/ollama/mlx/skip]: ")
 	line, err := s.in.ReadString('\n')
 	if err != nil {
 		return fmt.Errorf("read routing choice: %w", err)
@@ -524,7 +533,7 @@ func (s *replSession) askUserRoute(ctx context.Context, utterance string) error 
 	case "", "skip":
 		s.println("skipped")
 		return nil
-	case "claude", "codex", "agy", "ollama":
+	case "claude", "codex", "agy", "ollama", "mlx":
 		d := brain.Dispatch{Thread: choice, Message: utterance, Rationale: "manual route"}
 		return s.runDispatches(ctx, utterance, []brain.Dispatch{d})
 	default:
@@ -732,6 +741,7 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 	b := &brain.Ollama{
 		BaseURL:             "http://localhost:11434",
 		Model:               a.routing.Brain.Model,
+		KeepAlive:           a.routing.Ollama.KeepAlive,
 		ConfidenceThreshold: a.routing.Brain.ConfidenceThreshold,
 		Escalator: &brain.ClaudeEscalator{
 			Channel: rawChannel(a.channels["claude"]),
@@ -756,6 +766,10 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 		tracker:      a.tracker,
 		ollamaSend: func(ctx context.Context, model, prompt string) (string, error) {
 			resp, err := a.channels["ollama"].Send(ctx, channel.Request{Model: model, Prompt: prompt})
+			return resp.Text, err
+		},
+		mlxSend: func(ctx context.Context, model, prompt string) (string, error) {
+			resp, err := a.channels["mlx"].Send(ctx, channel.Request{Model: model, Prompt: prompt})
 			return resp.Text, err
 		},
 		in:               bufio.NewReader(os.Stdin),
@@ -793,11 +807,12 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 	// best-effort — a down ollama leaves the note stale, never blocks the REPL.
 	if a.routing.Watch.OllamaEnabled {
 		w := &activity.Watcher{
-			BaseURL:  "http://localhost:11434",
-			Model:    s.watchModel(),
-			Board:    s.board,
-			Interval: s.watchInterval(),
-			Stall:    s.watchStall(),
+			BaseURL:   "http://localhost:11434",
+			Model:     s.watchModel(),
+			KeepAlive: a.routing.Ollama.KeepAlive,
+			Board:     s.board,
+			Interval:  s.watchInterval(),
+			Stall:     s.watchStall(),
 		}
 		go w.Run(s.ctx)
 	}

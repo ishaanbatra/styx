@@ -15,18 +15,30 @@ agy.messages_per_5h      = 100
 agy.messages_per_week    = 500
 ollama.cap_pct           = 0    # local, unlimited
 
+# ── Ollama model residency ──
+# Short chat residency leaves memory available for cloud CLI subprocesses.
+# Enable preloading only when faster first responses matter more than idle RAM.
+[ollama]
+keep_alive = "5m"
+preload_models = false
+
+# ── Host memory pressure ──
+# Refuse new non-interactive launches at critical pressure to avoid jetsam kills.
+[memory]
+guard = true
+
 # ── research ──
 [[rule]]
 verb = "research"
 use  = "agy:Gemini 3.1 Pro (High)"
-fallback = ["ollama:qwen2.5-coder:14b"]
+fallback = ["ollama:qwen2.5-coder:7b"]
 
 [[rule]]
 verb = "research.critic"
 use  = "codex"
 # effort: low|medium|high|xhigh|max (claude); codex maps to model_reasoning_effort
 effort = "high"
-fallback = ["ollama:qwen2.5-coder:14b"]
+fallback = ["ollama:qwen2.5-coder:7b"]
 
 # ── plan ──
 [[rule]]
@@ -38,7 +50,7 @@ fallback = ["claude:sonnet", "codex"]
 [[rule]]
 verb = "plan"
 use  = "claude:sonnet"
-fallback = ["codex", "ollama:qwen2.5-coder:14b"]
+fallback = ["codex", "ollama:qwen2.5-coder:7b"]
 
 # ── implement (autonomous code application from a plan) ──
 # A detailed plan already exists by this point, so the work is well-scoped:
@@ -110,8 +122,8 @@ fallback = ["codex"]
 
 [[rule]]
 verb = "pr.title"
-use  = "ollama:qwen2.5-coder:7b"
-fallback = ["claude:haiku"]
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b", "claude:haiku"]
 
 [[rule]]
 verb = "pr.body"
@@ -121,18 +133,20 @@ fallback = ["codex"]
 
 [[rule]]
 verb = "pr.body"
-use  = "ollama:qwen2.5-coder:7b"
-fallback = ["claude:haiku"]
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b", "claude:haiku"]
 
 # ── grunt / think ──
 [[rule]]
 verb = "grunt"
 signals = ["trivial"]
-use  = "ollama:qwen2.5-coder:7b"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]
 
 [[rule]]
 verb = "grunt"
-use  = "ollama:qwen2.5-coder:14b"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]
 
 [[rule]]
 verb = "think"
@@ -141,7 +155,7 @@ use  = "claude:sonnet"
 
 [[rule]]
 verb = "think"
-use  = "ollama:qwen2.5-coder:14b"
+use  = "ollama:qwen2.5-coder:7b"
 
 # ── explain / summarize / critique ──
 [[rule]]
@@ -152,17 +166,17 @@ fallback = ["claude:sonnet"]
 
 [[rule]]
 verb = "explain"
-use  = "ollama:qwen2.5-coder:14b"
+use  = "ollama:qwen2.5-coder:7b"
 
 [[rule]]
 verb = "summarize"
 use  = "agy:Gemini 3.1 Pro (High)"
-fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]
+fallback = ["claude:sonnet", "ollama:qwen2.5-coder:7b"]
 
 [[rule]]
 verb = "critique"
 use  = "codex"
-fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]
+fallback = ["claude:sonnet", "ollama:qwen2.5-coder:7b"]
 
 # ── model discovery ──
 [models]

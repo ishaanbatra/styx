@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -274,8 +275,8 @@ fallback = ["codex"]
 
 [[rule]]
 verb = "pr.title"
-use  = "ollama:qwen2.5-coder:7b"
-fallback = ["claude:haiku"]
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b", "claude:haiku"]
 
 [[rule]]
 verb = "pr.body"
@@ -285,8 +286,8 @@ fallback = ["codex"]
 
 [[rule]]
 verb = "pr.body"
-use  = "ollama:qwen2.5-coder:7b"
-fallback = ["claude:haiku"]
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b", "claude:haiku"]
 `
 
 // EnsurePRDraftRules appends either missing PR drafting rule while preserving
@@ -341,6 +342,178 @@ func EnsureAgyModelPin(content string) (string, bool) {
 }
 
 var routingTargetLineRE = regexp.MustCompile(`^\s*(?:use|fallback|parallel|synthesize_with)\s*=`)
+
+const (
+	oldSeededOllamaModel = "ollama:qwen2.5-coder:14b"
+	newSeededOllamaModel = "ollama:qwen2.5-coder:7b"
+)
+
+var oldSeededOllamaTargetLines = map[string]struct{}{
+	`fallback = ["ollama:qwen2.5-coder:14b"]`:                  {},
+	`fallback = ["codex", "ollama:qwen2.5-coder:14b"]`:         {},
+	`use  = "ollama:qwen2.5-coder:14b"`:                        {},
+	`fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]`: {},
+}
+
+// RewriteSeededOllamaModel replaces the 14b model only in target lines that
+// exactly match the old seeded routing table. Any visible customization,
+// including spacing or fallback-chain changes, is preserved.
+func RewriteSeededOllamaModel(content string) (string, int) {
+	lines := strings.Split(content, "\n")
+	rewrites := 0
+	for i, line := range lines {
+		if _, ok := oldSeededOllamaTargetLines[line]; !ok {
+			continue
+		}
+		lines[i] = strings.Replace(line, oldSeededOllamaModel, newSeededOllamaModel, 1)
+		rewrites++
+	}
+	if rewrites == 0 {
+		return content, 0
+	}
+	return strings.Join(lines, "\n"), rewrites
+}
+
+const (
+	seededMLXTarget    = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+	seededOllamaTarget = "ollama:qwen2.5-coder:7b"
+)
+
+var seededMLXRuleShapes = []struct {
+	oldLines []string
+	newLines []string
+}{
+	{
+		oldLines: []string{
+			`[[rule]]`,
+			`verb = "pr.title"`,
+			`use  = "` + seededOllamaTarget + `"`,
+			`fallback = ["claude:haiku"]`,
+		},
+		newLines: []string{
+			`[[rule]]`,
+			`verb = "pr.title"`,
+			`use  = "` + seededMLXTarget + `"`,
+			`fallback = ["` + seededOllamaTarget + `", "claude:haiku"]`,
+		},
+	},
+	{
+		oldLines: []string{
+			`[[rule]]`,
+			`verb = "pr.body"`,
+			`use  = "` + seededOllamaTarget + `"`,
+			`fallback = ["claude:haiku"]`,
+		},
+		newLines: []string{
+			`[[rule]]`,
+			`verb = "pr.body"`,
+			`use  = "` + seededMLXTarget + `"`,
+			`fallback = ["` + seededOllamaTarget + `", "claude:haiku"]`,
+		},
+	},
+	{
+		oldLines: []string{
+			`[[rule]]`,
+			`verb = "grunt"`,
+			`signals = ["trivial"]`,
+			`use  = "` + seededOllamaTarget + `"`,
+		},
+		newLines: []string{
+			`[[rule]]`,
+			`verb = "grunt"`,
+			`signals = ["trivial"]`,
+			`use  = "` + seededMLXTarget + `"`,
+			`fallback = ["` + seededOllamaTarget + `"]`,
+		},
+	},
+	{
+		oldLines: []string{
+			`[[rule]]`,
+			`verb = "grunt"`,
+			`use  = "` + seededOllamaTarget + `"`,
+		},
+		newLines: []string{
+			`[[rule]]`,
+			`verb = "grunt"`,
+			`use  = "` + seededMLXTarget + `"`,
+			`fallback = ["` + seededOllamaTarget + `"]`,
+		},
+	},
+}
+
+var seededMLXBurnInComments = map[string]bool{
+	"# MLX burn-in alternative (leave disabled until host smoke-testing):": true,
+	`# use  = "` + seededMLXTarget + `"`:                                   true,
+}
+
+// RewriteSeededMLXPrimaries promotes MLX only for the four untouched seeded
+// PR/grunt rule shapes. Matching is exact for every non-comment config line,
+// so custom targets, fallbacks, signals, or spacing are preserved. The old
+// burn-in comments are removed from rules that are promoted.
+func RewriteSeededMLXPrimaries(content string) (string, int) {
+	lines := strings.Split(content, "\n")
+	rewrites := 0
+	for start := 0; start < len(lines); {
+		if lines[start] != "[[rule]]" {
+			start++
+			continue
+		}
+		end := len(lines)
+		for i := start + 1; i < len(lines); i++ {
+			trimmed := strings.TrimSpace(lines[i])
+			if trimmed == "[[rule]]" || (strings.HasPrefix(trimmed, "[") && trimmed != "") {
+				end = i
+				break
+			}
+		}
+		configLines := make([]string, 0, end-start)
+		for _, line := range lines[start:end] {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			configLines = append(configLines, line)
+		}
+		var replacement []string
+		for _, shape := range seededMLXRuleShapes {
+			if slices.Equal(configLines, shape.oldLines) {
+				replacement = shape.newLines
+				break
+			}
+		}
+		if replacement == nil {
+			start = end
+			continue
+		}
+		block := make([]string, 0, end-start+1)
+		configIdx := 0
+		for _, line := range lines[start:end] {
+			trimmed := strings.TrimSpace(line)
+			if seededMLXBurnInComments[line] {
+				continue
+			}
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				block = append(block, line)
+				continue
+			}
+			if configIdx < len(replacement) {
+				block = append(block, replacement[configIdx])
+			}
+			configIdx++
+		}
+		if configIdx < len(replacement) {
+			block = append(block, replacement[configIdx:]...)
+		}
+		lines = append(append(append([]string{}, lines[:start]...), block...), lines[end:]...)
+		end = start + len(block)
+		rewrites++
+		start = end
+	}
+	if rewrites == 0 {
+		return content, 0
+	}
+	return strings.Join(lines, "\n"), rewrites
+}
 
 // EnsureFableTier upgrades the exact seeded suspension-era mapping
 // `fable  = "opus"` to `fable  = "fable"`. Only the seeded spelling is
@@ -545,6 +718,8 @@ func RewriteRoutingGeminiToAgy(content string) (string, int) {
 // added.
 type UpgradeResult struct {
 	GeminiRewrites    int
+	OllamaRewrites    int
+	MLXRewrites       int
 	ImplementInjected bool
 	FableRestored     bool
 	TaskCapInjected   bool
@@ -560,13 +735,16 @@ type UpgradeResult struct {
 
 // Changed reports whether the routing file was rewritten by any migration.
 func (r UpgradeResult) Changed() bool {
-	return r.GeminiRewrites > 0 || r.ImplementInjected || r.FableRestored ||
+	return r.GeminiRewrites > 0 || r.OllamaRewrites > 0 || r.MLXRewrites > 0 ||
+		r.ImplementInjected || r.FableRestored ||
 		r.TaskCapInjected || r.HostInjected || r.WatchInjected ||
 		r.DebugInjected || r.DeadCodeInjected || r.MapImpactInjected ||
 		r.CrossRepoInjected || r.PRDraftInjected || r.AgyPinned
 }
 
 // UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
+// replaces exact seeded qwen2.5-coder:14b target lines with 7b,
+// promotes the four exact seeded local PR/grunt rules from Ollama to MLX,
 // injects the `implement` verb rules if missing (v0.3), restores the seeded fable
 // tier mapping (v0.4), seeds the [conductor] max_background_tasks cap (B1) and
 // interactive host, seeds the [watch] section (C5), injects ultraFerdDebug and
@@ -574,11 +752,11 @@ func (r UpgradeResult) Changed() bool {
 // keys, dedupes fallback arrays,
 // backs up the original to routing.v0.1.toml.bak, and atomically writes the new
 // content.
-// Returns the gemini-rule substitution count, whether implement rules were
-// injected, whether the fable tier was restored, whether the conductor task
-// cap and host were injected, whether the [watch] section was injected, and
-// whether any debug/read-pathway/PR drafting rules were injected, and whether
-// unpinned agy targets were pinned.
+// Returns the gemini, seeded-Ollama, and seeded-MLX rewrite counts, whether
+// implement rules were injected, whether the fable tier was restored, whether the
+// conductor task cap and host were injected, whether the [watch] section was
+// injected, whether any debug/read-pathway/PR drafting rules were injected,
+// and whether unpinned agy targets were pinned.
 // Missing-file is not an error.
 func UpgradeRoutingFile(routingPath string) (UpgradeResult, error) {
 	b, err := os.ReadFile(routingPath)
@@ -589,6 +767,8 @@ func UpgradeRoutingFile(routingPath string) (UpgradeResult, error) {
 		return UpgradeResult{}, fmt.Errorf("read routing: %w", err)
 	}
 	newContent, n := RewriteRoutingGeminiToAgy(string(b))
+	newContent, ollamaRewrites := RewriteSeededOllamaModel(newContent)
+	newContent, mlxRewrites := RewriteSeededMLXPrimaries(newContent)
 	newContent, injected := EnsureImplementRules(newContent)
 	newContent, fable := EnsureFableTier(newContent)
 	newContent, taskCap := EnsureConductorTaskCap(newContent)
@@ -616,7 +796,8 @@ func UpgradeRoutingFile(routingPath string) (UpgradeResult, error) {
 		return UpgradeResult{}, fmt.Errorf("atomic rename: %w", err)
 	}
 	return UpgradeResult{
-		GeminiRewrites: n, ImplementInjected: injected, FableRestored: fable,
+		GeminiRewrites: n, OllamaRewrites: ollamaRewrites, MLXRewrites: mlxRewrites,
+		ImplementInjected: injected, FableRestored: fable,
 		TaskCapInjected: taskCap, HostInjected: host, WatchInjected: watch,
 		DebugInjected: debug, DeadCodeInjected: deadCode,
 		MapImpactInjected: mapImpact, CrossRepoInjected: crossRepo,

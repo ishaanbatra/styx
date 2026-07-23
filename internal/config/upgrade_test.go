@@ -237,6 +237,229 @@ func TestEnsureAgyModelPin(t *testing.T) {
 	}
 }
 
+func TestRewriteSeededOllamaModel(t *testing.T) {
+	tests := []struct {
+		name         string
+		content      string
+		want         string
+		wantRewrites int
+	}{
+		{
+			name:         "seeded single fallback",
+			content:      `fallback = ["ollama:qwen2.5-coder:14b"]`,
+			want:         `fallback = ["ollama:qwen2.5-coder:7b"]`,
+			wantRewrites: 1,
+		},
+		{
+			name:         "seeded codex fallback tail",
+			content:      `fallback = ["codex", "ollama:qwen2.5-coder:14b"]`,
+			want:         `fallback = ["codex", "ollama:qwen2.5-coder:7b"]`,
+			wantRewrites: 1,
+		},
+		{
+			name:         "seeded primary",
+			content:      `use  = "ollama:qwen2.5-coder:14b"`,
+			want:         `use  = "ollama:qwen2.5-coder:7b"`,
+			wantRewrites: 1,
+		},
+		{
+			name:         "seeded claude fallback tail",
+			content:      `fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]`,
+			want:         `fallback = ["claude:sonnet", "ollama:qwen2.5-coder:7b"]`,
+			wantRewrites: 1,
+		},
+		{
+			name:    "customized fallback chain",
+			content: `fallback = ["claude:haiku", "ollama:qwen2.5-coder:14b"]`,
+			want:    `fallback = ["claude:haiku", "ollama:qwen2.5-coder:14b"]`,
+		},
+		{
+			name:    "customized spacing",
+			content: `use = "ollama:qwen2.5-coder:14b"`,
+			want:    `use = "ollama:qwen2.5-coder:14b"`,
+		},
+		{
+			name:    "already upgraded",
+			content: `use  = "ollama:qwen2.5-coder:7b"`,
+			want:    `use  = "ollama:qwen2.5-coder:7b"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, rewrites := RewriteSeededOllamaModel(tt.content)
+			if got != tt.want {
+				t.Errorf("content = %q, want %q", got, tt.want)
+			}
+			if rewrites != tt.wantRewrites {
+				t.Errorf("rewrites = %d, want %d", rewrites, tt.wantRewrites)
+			}
+		})
+	}
+}
+
+func TestRewriteSeededMLXPrimaries(t *testing.T) {
+	tests := []struct {
+		name         string
+		content      string
+		want         string
+		wantRewrites int
+	}{
+		{
+			name: "PR title",
+			content: `[[rule]]
+verb = "pr.title"
+# MLX burn-in alternative (leave disabled until host smoke-testing):
+# use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]`,
+			want: `[[rule]]
+verb = "pr.title"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b", "claude:haiku"]`,
+			wantRewrites: 1,
+		},
+		{
+			name: "PR body",
+			content: `[[rule]]
+verb = "pr.body"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]`,
+			want: `[[rule]]
+verb = "pr.body"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b", "claude:haiku"]`,
+			wantRewrites: 1,
+		},
+		{
+			name: "trivial grunt",
+			content: `[[rule]]
+verb = "grunt"
+signals = ["trivial"]
+use  = "ollama:qwen2.5-coder:7b"`,
+			want: `[[rule]]
+verb = "grunt"
+signals = ["trivial"]
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]`,
+			wantRewrites: 1,
+		},
+		{
+			name: "ordinary grunt",
+			content: `[[rule]]
+verb = "grunt"
+use  = "ollama:qwen2.5-coder:7b"`,
+			want: `[[rule]]
+verb = "grunt"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]`,
+			wantRewrites: 1,
+		},
+		{
+			name: "customized fallback preserved",
+			content: `[[rule]]
+verb = "pr.title"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["codex"]`,
+			want: `[[rule]]
+verb = "pr.title"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["codex"]`,
+		},
+		{
+			name: "customized spacing preserved",
+			content: `[[rule]]
+verb = "grunt"
+use = "ollama:qwen2.5-coder:7b"`,
+			want: `[[rule]]
+verb = "grunt"
+use = "ollama:qwen2.5-coder:7b"`,
+		},
+		{
+			name: "already migrated",
+			content: `[[rule]]
+verb = "grunt"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]`,
+			want: `[[rule]]
+verb = "grunt"
+use  = "mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit"
+fallback = ["ollama:qwen2.5-coder:7b"]`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, rewrites := RewriteSeededMLXPrimaries(tt.content)
+			if got != tt.want {
+				t.Errorf("content:\n%s\nwant:\n%s", got, tt.want)
+			}
+			if rewrites != tt.wantRewrites {
+				t.Errorf("rewrites = %d, want %d", rewrites, tt.wantRewrites)
+			}
+			again, secondRewrites := RewriteSeededMLXPrimaries(got)
+			if again != got || secondRewrites != 0 {
+				t.Errorf("second rewrite changed content: rewrites=%d\n%s", secondRewrites, again)
+			}
+		})
+	}
+}
+
+func TestUpgradeSeededMLXPrimariesBacksUpOnce(t *testing.T) {
+	dir := t.TempDir()
+	routingPath := filepath.Join(dir, "routing.toml")
+	original := `[[rule]]
+verb = "pr.title"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]
+
+[[rule]]
+verb = "pr.body"
+use  = "ollama:qwen2.5-coder:7b"
+fallback = ["claude:haiku"]
+
+[[rule]]
+verb = "grunt"
+signals = ["trivial"]
+use  = "ollama:qwen2.5-coder:7b"
+
+[[rule]]
+verb = "grunt"
+use  = "ollama:qwen2.5-coder:7b"
+`
+	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := UpgradeRoutingFile(routingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.MLXRewrites != 4 {
+		t.Fatalf("MLXRewrites = %d, want 4", result.MLXRewrites)
+	}
+	backupPath := filepath.Join(dir, "routing.v0.1.toml.bak")
+	backup, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatalf("backup = %q, want original", backup)
+	}
+	result, err = UpgradeRoutingFile(routingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed() {
+		t.Fatalf("second upgrade changed routing: %+v", result)
+	}
+	backup, err = os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatal("second upgrade overwrote the original backup")
+	}
+}
+
 func TestRewriteRoutingGeminiToAgy(t *testing.T) {
 	src := `[budget]
 claude.cap_pct = 80
@@ -280,6 +503,57 @@ use  = "claude:sonnet-4-6"
 	}
 	if got != src {
 		t.Error("no-op rewrite should return original")
+	}
+}
+
+func TestUpgrade_SeededOllamaModelBackupWrittenOnce(t *testing.T) {
+	dir := t.TempDir()
+	routingPath := filepath.Join(dir, "routing.toml")
+	original := `[[rule]]
+verb = "grunt"
+use  = "ollama:qwen2.5-coder:14b"
+`
+	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := UpgradeRoutingFile(routingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OllamaRewrites != 1 {
+		t.Fatalf("OllamaRewrites = %d, want 1", result.OllamaRewrites)
+	}
+	upgraded, err := os.ReadFile(routingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(upgraded), oldSeededOllamaModel) ||
+		!strings.Contains(string(upgraded), newSeededOllamaModel) {
+		t.Fatalf("seeded Ollama target was not upgraded:\n%s", upgraded)
+	}
+	backupPath := filepath.Join(dir, "routing.v0.1.toml.bak")
+	backup, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatalf("backup = %q, want original %q", backup, original)
+	}
+
+	result, err = UpgradeRoutingFile(routingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed() {
+		t.Fatalf("second upgrade changed routing: %+v", result)
+	}
+	backup, err = os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != original {
+		t.Fatalf("second upgrade overwrote backup: %q", backup)
 	}
 }
 

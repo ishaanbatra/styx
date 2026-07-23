@@ -79,6 +79,9 @@ func TestWatcherPromptOnlySuspicious(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
+		if req.KeepAlive != "17m" {
+			t.Errorf("keep_alive = %q, want configured 17m", req.KeepAlive)
+		}
 		prompt := req.Messages[1].Content
 		for _, want := range []string{"agent codex/impl", "4 identical in a row", "ev/min", "-", "Bash: go test ./..."} {
 			if !strings.Contains(prompt, want) {
@@ -94,7 +97,7 @@ func TestWatcherPromptOnlySuspicious(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	w := &Watcher{BaseURL: srv.URL, Model: "test", Board: b}
+	w := &Watcher{BaseURL: srv.URL, Model: "test", KeepAlive: "17m", Board: b}
 	if err := w.pollOnce(context.Background()); err != nil {
 		t.Fatalf("pollOnce: %v", err)
 	}

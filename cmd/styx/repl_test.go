@@ -16,6 +16,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/audit"
 	"github.com/ishaanbatra/styx/internal/brain"
 	"github.com/ishaanbatra/styx/internal/budget"
+	channelmlx "github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
 )
@@ -152,6 +153,29 @@ func TestTurnDispatchPrintsRoutingLineAndResult(t *testing.T) {
 	}
 }
 
+func TestTurnMLXDispatchUsesOneShotChannel(t *testing.T) {
+	b := &scriptedBrain{actions: []brain.Action{{
+		Action:     brain.ActionDispatch,
+		Dispatches: []brain.Dispatch{{Thread: "mlx", Message: "draft it", Rationale: "local clerical work"}},
+		Confidence: 0.9,
+	}}}
+	s, out := newTestSession(t, b, "")
+	var gotModel, gotPrompt string
+	s.mlxSend = func(_ context.Context, model, prompt string) (string, error) {
+		gotModel, gotPrompt = model, prompt
+		return "mlx result", nil
+	}
+	if err := s.turn(context.Background(), "draft it locally"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	if gotModel != channelmlx.DefaultModel || gotPrompt != "draft it" {
+		t.Errorf("mlx request model=%q prompt=%q", gotModel, gotPrompt)
+	}
+	if got := out.String(); !strings.Contains(got, "◆ mlx·"+channelmlx.DefaultModel) || !strings.Contains(got, "mlx result") {
+		t.Errorf("output = %q", got)
+	}
+}
+
 func TestTurnRememberStoresRoutingPreference(t *testing.T) {
 	b := &scriptedBrain{actions: []brain.Action{{
 		Action: brain.ActionRemember, Remember: "routing-preference: codex handles reviews", Confidence: 1,
@@ -196,6 +220,24 @@ func TestTurnBrainDownAsksUser(t *testing.T) {
 	}
 	if !strings.Contains(got, "manual route ok") {
 		t.Errorf("manual dispatch did not run:\n%s", got)
+	}
+}
+
+func TestTurnBrainDownCanRouteMLXManually(t *testing.T) {
+	b := &scriptedBrain{err: brain.ErrNeedUser}
+	s, out := newTestSession(t, b, "mlx\n")
+	s.mlxSend = func(_ context.Context, model, prompt string) (string, error) {
+		if model != channelmlx.DefaultModel || prompt != "do the thing" {
+			t.Errorf("mlx request model=%q prompt=%q", model, prompt)
+		}
+		return "manual mlx route ok", nil
+	}
+	if err := s.turn(context.Background(), "do the thing"); err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "claude/codex/agy/ollama/mlx/skip") || !strings.Contains(got, "manual mlx route ok") {
+		t.Errorf("manual MLX route output:\n%s", got)
 	}
 }
 

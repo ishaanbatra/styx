@@ -46,6 +46,7 @@ type Escalator interface {
 type Ollama struct {
 	BaseURL             string  // e.g. http://localhost:11434
 	Model               string  // e.g. qwen2.5-coder:7b (a fast non-reasoning instruct model)
+	KeepAlive           string  // ollama model residency policy from routing config
 	ConfidenceThreshold float64 // escalate below this (0 disables)
 	Escalator           Escalator
 
@@ -128,7 +129,7 @@ func (b *Ollama) chat(ctx context.Context, system, user string) (string, error) 
 		// timeout) and bleeds into the structured output, mis-slotting fields.
 		Think:     false,
 		Format:    ActionSchema,
-		KeepAlive: "30m",
+		KeepAlive: b.KeepAlive,
 		Options:   opts,
 		Messages: []brainChatMessage{
 			{Role: "system", Content: system},

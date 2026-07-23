@@ -65,8 +65,9 @@ Propose nothing when the data is thin; fewer, stronger memories beat many weak o
 
 // Digester proposes candidate memories via the local ollama brain model.
 type Digester struct {
-	BaseURL string // e.g. http://localhost:11434
-	Model   string // e.g. qwen2.5-coder:7b
+	BaseURL   string // e.g. http://localhost:11434
+	Model     string // e.g. qwen2.5-coder:7b
+	KeepAlive string // ollama model residency policy from routing config
 
 	client *http.Client
 }
@@ -131,7 +132,7 @@ func (d *Digester) Propose(ctx context.Context, scorecard string, retros []Retro
 		Stream:    false,
 		Think:     false, // classification-shaped task; reasoning bleed breaks structured output
 		Format:    candidateSchema,
-		KeepAlive: "30m",
+		KeepAlive: d.KeepAlive,
 		Options:   opts,
 		Messages: []digestChatMessage{
 			{Role: "system", Content: digestSystem},

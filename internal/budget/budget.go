@@ -41,12 +41,14 @@ type ChannelHealth struct {
 	CooldownRemainingSeconds float64
 }
 
-// healthKind maps a raw stored error_kind ("timeout"/"429"/"5xx"/"") to the
+// healthKind maps a raw stored error_kind ("timeout"/"killed"/"429"/"5xx"/"") to the
 // channel_health bucket label the tool contract exposes.
 func healthKind(raw string) string {
 	switch raw {
 	case "timeout":
 		return "timeout"
+	case "killed":
+		return "killed"
 	case "429":
 		return "rate_limit"
 	case "5xx":
@@ -79,7 +81,7 @@ type Event struct {
 	TokensIn  int
 	TokensOut int
 	Success   bool
-	ErrorKind string // "", "timeout", "429", "5xx", "other"
+	ErrorKind string // "", "timeout", "killed", "429", "5xx", "other"
 	Project   string // resolved project ID ("" = none)
 	RunID     string // per-session / per-verb run correlation id ("" = none)
 }
@@ -378,13 +380,14 @@ func (t *Tracker) ShouldCircuitBreak(ctx context.Context, channel string, thresh
 // ChannelHealth reports whether channel's circuit is open, how many failures it
 // had in the window, per-kind failure buckets, and remaining cooldown. Pure read
 // over usage + cooldown; adds no state. Buckets are zero-filled with the friendly
-// labels timeout/rate_limit/server/other so a consumer can index them directly.
+// labels timeout/killed/rate_limit/server/other so a consumer can index them
+// directly.
 func (t *Tracker) ChannelHealth(ctx context.Context, channel string, threshold int, window time.Duration) (ChannelHealth, error) {
 	cutoff := time.Now().Add(-window).Unix()
 	h := ChannelHealth{
 		Channel:       channel,
 		WindowSeconds: int(window / time.Second),
-		ErrorKinds:    map[string]int{"timeout": 0, "rate_limit": 0, "server": 0, "other": 0},
+		ErrorKinds:    map[string]int{"timeout": 0, "killed": 0, "rate_limit": 0, "server": 0, "other": 0},
 	}
 
 	var fails int

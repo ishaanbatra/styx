@@ -13,6 +13,7 @@ import (
 	"github.com/ishaanbatra/styx/internal/channel/agy"
 	"github.com/ishaanbatra/styx/internal/channel/claude"
 	"github.com/ishaanbatra/styx/internal/channel/codex"
+	"github.com/ishaanbatra/styx/internal/channel/mlx"
 	"github.com/ishaanbatra/styx/internal/channel/ollama"
 	"github.com/ishaanbatra/styx/internal/config"
 	"github.com/ishaanbatra/styx/internal/memory"
@@ -224,13 +225,15 @@ func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channe
 		"codex":  codex.New(),
 		"agy":    a,
 		"gemini": a, // alias for backward-compatible routing rules
-		"ollama": ollama.New(),
+		"mlx":    mlx.New(),
+		"ollama": ollama.New(r.Ollama.KeepAlive),
 	}
 	timeouts := map[string]int{
 		"claude": r.Budget.Claude.TimeoutMinutes,
 		"codex":  r.Budget.Codex.TimeoutMinutes,
 		"agy":    r.Budget.Agy.TimeoutMinutes,
 		"gemini": r.Budget.Agy.TimeoutMinutes,
+		"mlx":    int(ollama.DefaultTimeout / time.Minute),
 	}
 	wrapped := make(map[string]channel.Channel, len(raw))
 	for name, ch := range raw {
@@ -240,6 +243,9 @@ func defaultChannels(prog *progress.Tracker, r config.Routing) map[string]channe
 				mins = 10 // claude/codex previously had no timeout at all
 			}
 			inner = &channel.WithTimeout{Inner: inner, D: time.Duration(mins) * time.Minute}
+		}
+		if r.Memory.Guard {
+			inner = &channel.WithMemoryGuard{Inner: inner}
 		}
 		wrapped[name] = &channel.WithProgress{Inner: inner, Tracker: prog, Label: name}
 	}
@@ -417,13 +423,20 @@ func ensureFirstRun() error {
 		logStatus("wrote default routing.toml to %s", routingPath)
 	}
 	// Auto-upgrade: v0.2 rewrites gemini:* -> agy, later migrations inject the
-	// implement/debug/dead-code/map-impact/cross-repo/PR-drafting rules and pin
-	// agy models. Changes back up routing.toml.
+	// implement/debug/dead-code/map-impact/cross-repo/PR-drafting rules, pin agy
+	// models, and replace exact seeded 14b Ollama targets with 7b. Changes back
+	// up routing.toml.
 	if result, err := config.UpgradeRoutingFile(routingPath); err != nil {
 		logStatus("upgrade check failed: %v", err)
 	} else {
 		if result.GeminiRewrites > 0 {
 			logStatus("auto-upgraded %d gemini reference(s) to agy (backup at routing.v0.1.toml.bak)", result.GeminiRewrites)
+		}
+		if result.OllamaRewrites > 0 {
+			logStatus("auto-upgraded %d seeded Ollama target(s) from qwen2.5-coder:14b to qwen2.5-coder:7b (backup at routing.v0.1.toml.bak)", result.OllamaRewrites)
+		}
+		if result.MLXRewrites > 0 {
+			logStatus("auto-upgraded %d seeded PR/grunt rule(s) to MLX primary with Ollama fallback (backup at routing.v0.1.toml.bak)", result.MLXRewrites)
 		}
 		if result.ImplementInjected {
 			logStatus("auto-upgraded routing.toml with the implement verb (codex implements, claude fallback)")
