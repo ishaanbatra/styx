@@ -193,6 +193,43 @@ func TestSeedV4UpgradesToCurrent(t *testing.T) {
 	}
 }
 
+func TestSeedV7UpgradesToCurrent(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	p, err := guidanceFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(seedV7), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != Seed {
+		t.Fatal("an unmodified v7 seed must upgrade to the current Seed")
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != Seed {
+		t.Fatal("v7 guidance file on disk must be rewritten to current Seed")
+	}
+	// seedV7 predates pipeline_run ship; the current Seed must teach it.
+	if seedV7 == Seed {
+		t.Fatal("seedV7 must differ from the current Seed (it predates the Shipping commits / PRs section)")
+	}
+	for _, want := range []string{"Shipping commits / PRs", "pipeline_run ship", "gh pr create"} {
+		if !strings.Contains(Seed, want) {
+			t.Fatalf("current Seed must teach %q", want)
+		}
+	}
+}
+
 func TestSeedV5UpgradesToCurrent(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	p, err := guidanceFile()
