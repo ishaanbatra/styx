@@ -13,6 +13,7 @@ import (
 type ShipOptions struct {
 	ProjectPath string
 	Branch      string
+	BaseBranch  string
 	NoPR        bool
 	NoPush      bool
 	PRTitle     string
@@ -51,10 +52,7 @@ func Ship(ctx context.Context, o ShipOptions) (ShipResult, error) {
 	if title == "" {
 		title = "Update project"
 	}
-	args := []string{"pr", "create", "--title", title, "--body", prBody(o)}
-	if o.Draft {
-		args = append(args, "--draft")
-	}
+	args := prCreateArgs(o, title)
 	prCmd := exec.CommandContext(ctx, "gh", args...)
 	prCmd.Dir = o.ProjectPath
 	out, err := prCmd.CombinedOutput()
@@ -90,6 +88,17 @@ func Ship(ctx context.Context, o ShipOptions) (ShipResult, error) {
 			fmt.Sprintf("apply PR labels: %v (%s)", labelErr, strings.TrimSpace(string(labelOut))))
 	}
 	return res, nil
+}
+
+func prCreateArgs(o ShipOptions, title string) []string {
+	args := []string{"pr", "create", "--title", title, "--body", prBody(o)}
+	if base := strings.TrimSpace(o.BaseBranch); base != "" {
+		args = append(args, "--base", base)
+	}
+	if o.Draft {
+		args = append(args, "--draft")
+	}
+	return args
 }
 
 // prBody builds the PR body: the caller's PRBody (or a goal-line default)

@@ -48,7 +48,7 @@ func TestBuildContextFromPipelineAndGit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ctx.Branch != state.Branch || len(ctx.Commits) != 1 || ctx.Commits[0].Subject != "fix auth token #17" {
+	if ctx.Branch != state.Branch || ctx.BaseBranch != "main" || len(ctx.Commits) != 1 || ctx.Commits[0].Subject != "fix auth token #17" {
 		t.Errorf("commit context = %+v", ctx)
 	}
 	if !reflect.DeepEqual(ctx.TouchedPaths, []string{"internal/auth/token.go"}) {
@@ -62,6 +62,47 @@ func TestBuildContextFromPipelineAndGit(t *testing.T) {
 	}
 	if !ctx.Tests.Successful || ctx.Tests.Attempts != 2 || !ctx.Review.Successful || !ctx.DraftRequired {
 		t.Errorf("pipeline evidence = %+v", ctx)
+	}
+}
+
+func TestBuildContextWithBaseUsesExplicitBranch(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "base")
+	git(t, repo, "checkout", "-b", "feature/parent")
+	if err := os.WriteFile(filepath.Join(repo, "parent.txt"), []byte("parent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "add parent")
+	git(t, repo, "checkout", "-b", "feature/stack")
+	if err := os.WriteFile(filepath.Join(repo, "stack.txt"), []byte("stack\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-m", "add stack")
+
+	state := pipeline.NewState("run", "publish stacked change")
+	state.Branch = "feature/stack"
+	ctx, err := BuildContextWithBase(context.Background(), repo, state, "feature/parent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ctx.BaseBranch != "feature/parent" {
+		t.Fatalf("base branch = %q, want feature/parent", ctx.BaseBranch)
+	}
+	if len(ctx.Commits) != 1 || ctx.Commits[0].Subject != "add stack" {
+		t.Fatalf("commits = %+v, want stacked commit only", ctx.Commits)
+	}
+	if !reflect.DeepEqual(ctx.TouchedPaths, []string{"stack.txt"}) {
+		t.Fatalf("paths = %v, want stack.txt only", ctx.TouchedPaths)
+	}
+	if ctx.DiffStats != (DiffStats{Files: 1, Insertions: 1}) {
+		t.Fatalf("stats = %+v", ctx.DiffStats)
 	}
 }
 
