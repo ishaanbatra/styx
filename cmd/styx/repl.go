@@ -489,7 +489,7 @@ func (s *replSession) defaultModel(d brain.Dispatch) string {
 		return d.Model
 	}
 	if d.Thread == "ollama" {
-		return "qwen2.5-coder:14b"
+		return "qwen2.5-coder:7b"
 	}
 	if d.Thread == "mlx" {
 		return channelmlx.DefaultModel
@@ -872,15 +872,17 @@ func newREPLSession(a *app, repos ...string) (*replSession, func(), error) {
 	_ = bp
 	s.focus = seed.ID
 
-	for _, name := range repos[1:] {
-		p, err := target.Resolve(target.Spec{Alias: name})
-		if err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("bind launch repo %q: %w", name, err)
-		}
-		if _, err := s.bind(p); err != nil {
-			cleanup()
-			return nil, nil, fmt.Errorf("bind launch repo %q: %w", name, err)
+	if len(repos) > 1 {
+		for _, name := range repos[1:] {
+			p, err := target.Resolve(target.Spec{Alias: name})
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("bind launch repo %q: %w", name, err)
+			}
+			if _, err := s.bind(p); err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("bind launch repo %q: %w", name, err)
+			}
 		}
 	}
 

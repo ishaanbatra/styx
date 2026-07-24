@@ -349,24 +349,44 @@ const (
 )
 
 var oldSeededOllamaTargetLines = map[string]struct{}{
-	`fallback = ["ollama:qwen2.5-coder:14b"]`:                  {},
-	`fallback = ["codex", "ollama:qwen2.5-coder:14b"]`:         {},
-	`use  = "ollama:qwen2.5-coder:14b"`:                        {},
-	`fallback = ["claude:sonnet", "ollama:qwen2.5-coder:14b"]`: {},
+	`use  = "ollama:qwen2.5-coder:14b"`: {},
 }
 
-// RewriteSeededOllamaModel replaces the 14b model only in target lines that
-// exactly match the old seeded routing table. Any visible customization,
-// including spacing or fallback-chain changes, is preserved.
+// RewriteSeededOllamaModel replaces the exact seeded 14b primary and any
+// fallback array elements whose complete value is the seeded 14b target.
+// Other elements, comments, and formatting are preserved.
 func RewriteSeededOllamaModel(content string) (string, int) {
 	lines := strings.Split(content, "\n")
 	rewrites := 0
 	for i, line := range lines {
-		if _, ok := oldSeededOllamaTargetLines[line]; !ok {
+		if _, ok := oldSeededOllamaTargetLines[line]; ok {
+			lines[i] = strings.Replace(line, oldSeededOllamaModel, newSeededOllamaModel, 1)
+			rewrites++
 			continue
 		}
-		lines[i] = strings.Replace(line, oldSeededOllamaModel, newSeededOllamaModel, 1)
-		rewrites++
+
+		match := fallbackRE.FindStringSubmatchIndex(line)
+		if match == nil {
+			continue
+		}
+		inner := line[match[4]:match[5]]
+		elements := strings.Split(inner, ",")
+		lineRewrites := 0
+		for j, element := range elements {
+			switch strings.TrimSpace(element) {
+			case `"` + oldSeededOllamaModel + `"`:
+				elements[j] = strings.Replace(element, oldSeededOllamaModel, newSeededOllamaModel, 1)
+				lineRewrites++
+			case `'` + oldSeededOllamaModel + `'`:
+				elements[j] = strings.Replace(element, oldSeededOllamaModel, newSeededOllamaModel, 1)
+				lineRewrites++
+			}
+		}
+		if lineRewrites == 0 {
+			continue
+		}
+		lines[i] = line[:match[4]] + strings.Join(elements, ",") + line[match[5]:]
+		rewrites += lineRewrites
 	}
 	if rewrites == 0 {
 		return content, 0
@@ -743,7 +763,7 @@ func (r UpgradeResult) Changed() bool {
 }
 
 // UpgradeRoutingFile reads routingPath, rewrites gemini:* to agy:default (v0.2),
-// replaces exact seeded qwen2.5-coder:14b target lines with 7b,
+// replaces the exact seeded qwen2.5-coder:14b primary and fallback elements with 7b,
 // promotes the four exact seeded local PR/grunt rules from Ollama to MLX,
 // injects the `implement` verb rules if missing (v0.3), restores the seeded fable
 // tier mapping (v0.4), seeds the [conductor] max_background_tasks cap (B1) and

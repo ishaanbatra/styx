@@ -132,8 +132,11 @@ func runReviewSynthesized(a *app, ctx context.Context, prog *progress.Tracker, r
 	rawSynth := rawChannel(synth)
 	st2 := prog.Stage("Synthesizing reviews")
 	synthResp, err := rawSynth.Send(ctx, channel.Request{
-		Model:      dec.SynthesizeWith.Model,
-		Prompt:     "Merge the following independent reviews into a single deduplicated report grouped by severity (BLOCKING / IMPORTANT / NIT). Keep specific file:line citations.\n\n" + b.String(),
+		Model: dec.SynthesizeWith.Model,
+		Prompt: "Merge the following independent reviews into a single deduplicated report. " +
+			"Output exactly three sections with these bare headings, each on its own line: BLOCKING:, IMPORTANT:, and NIT:. " +
+			"Do not add Markdown heading markers or bold decoration to those headings. Write None beneath a section when it has no findings. " +
+			"Keep specific file:line citations.\n\n" + b.String(),
 		WorkingDir: projectPath,
 	})
 	if err != nil {

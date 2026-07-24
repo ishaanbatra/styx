@@ -251,9 +251,9 @@ func TestRewriteSeededOllamaModel(t *testing.T) {
 			wantRewrites: 1,
 		},
 		{
-			name:         "seeded codex fallback tail",
-			content:      `fallback = ["codex", "ollama:qwen2.5-coder:14b"]`,
-			want:         `fallback = ["codex", "ollama:qwen2.5-coder:7b"]`,
+			name:         "agy-pinned fallback element",
+			content:      `fallback = ["agy:Gemini 3.1 Pro (High)", "ollama:qwen2.5-coder:14b"]`,
+			want:         `fallback = ["agy:Gemini 3.1 Pro (High)", "ollama:qwen2.5-coder:7b"]`,
 			wantRewrites: 1,
 		},
 		{
@@ -269,9 +269,26 @@ func TestRewriteSeededOllamaModel(t *testing.T) {
 			wantRewrites: 1,
 		},
 		{
-			name:    "customized fallback chain",
-			content: `fallback = ["claude:haiku", "ollama:qwen2.5-coder:14b"]`,
-			want:    `fallback = ["claude:haiku", "ollama:qwen2.5-coder:14b"]`,
+			name:         "customized fallback chain exact element",
+			content:      `fallback = ["claude:haiku", "ollama:qwen2.5-coder:14b"]`,
+			want:         `fallback = ["claude:haiku", "ollama:qwen2.5-coder:7b"]`,
+			wantRewrites: 1,
+		},
+		{
+			name:         "exact element preserves trailing comment",
+			content:      `fallback = [ "agy:Gemini 3.1 Pro (High)" , "ollama:qwen2.5-coder:14b" ] # user-pinned order`,
+			want:         `fallback = [ "agy:Gemini 3.1 Pro (High)" , "ollama:qwen2.5-coder:7b" ] # user-pinned order`,
+			wantRewrites: 1,
+		},
+		{
+			name:    "near-match element and trailing comment untouched",
+			content: `fallback = ["ollama:qwen2.5-coder:14b-custom"] # ollama:qwen2.5-coder:14b`,
+			want:    `fallback = ["ollama:qwen2.5-coder:14b-custom"] # ollama:qwen2.5-coder:14b`,
+		},
+		{
+			name:    "user note inside element untouched",
+			content: `fallback = ["ollama:qwen2.5-coder:14b # user-pinned"]`,
+			want:    `fallback = ["ollama:qwen2.5-coder:14b # user-pinned"]`,
 		},
 		{
 			name:    "customized spacing",
@@ -293,6 +310,10 @@ func TestRewriteSeededOllamaModel(t *testing.T) {
 			}
 			if rewrites != tt.wantRewrites {
 				t.Errorf("rewrites = %d, want %d", rewrites, tt.wantRewrites)
+			}
+			second, secondRewrites := RewriteSeededOllamaModel(got)
+			if second != got || secondRewrites != 0 {
+				t.Errorf("second rewrite = (%q, %d), want unchanged content and zero rewrites", second, secondRewrites)
 			}
 		})
 	}
@@ -510,8 +531,9 @@ func TestUpgrade_SeededOllamaModelBackupWrittenOnce(t *testing.T) {
 	dir := t.TempDir()
 	routingPath := filepath.Join(dir, "routing.toml")
 	original := `[[rule]]
-verb = "grunt"
-use  = "ollama:qwen2.5-coder:14b"
+verb = "research"
+use  = "agy:Gemini 3.1 Pro (High)"
+fallback = ["agy:Gemini 3.1 Pro (High)", "ollama:qwen2.5-coder:14b"]
 `
 	if err := os.WriteFile(routingPath, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
